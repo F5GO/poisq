@@ -1,0 +1,44 @@
+# Конфигурация Docker Compose для совместного развертывания Navidrome и poisq
+# с общим доступом к базе данных SQLite (/data/navidrome.db).
+services:
+  # Официальный музыкальный сервер Navidrome
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    # user: 1000:1000 # Опционально: укажите UID:GID владельца папки с музыкой при необходимости
+    restart: unless-stopped
+    environment:
+      ND_SCANSCHEDULE: "1h"
+      ND_LOGLEVEL: "info"
+      ND_SESSIONTIMEOUT: "24h"
+      ND_BASEURL: ""
+    volumes:
+      - /path/to/your/music:/music:ro # Укажите путь к вашей папке с музыкой на сервере
+      - navidrome_data:/data
+    # Порт 4533 можно оставить для прямого доступа к Navidrome или закрыть,
+    # чтобы все клиентские приложения подключались через poisq (порт 4534)
+    ports:
+      - "4533:4533"
+
+  # Умный реверс-прокси и обогатитель поиска для Navidrome
+  poisq:
+    image: ghcr.io/f5go/poisq:latest
+    container_name: poisq
+    restart: unless-stopped
+    depends_on:
+      - navidrome
+    ports:
+      - "4534:4534"
+    environment:
+      LISTEN_ADDR: ":4534"
+      NAVIDROME_URL: "http://navidrome:4533"
+      NAVIDROME_DB_PATH: "/data/navidrome.db"
+      SYNC_INTERVAL: "2m"
+      ENRICH_SQLITE_FULLTEXT: "true"
+      LOG_LEVEL: "info"
+    volumes:
+      # Общий том данных с Navidrome для прямого безопасного доступа к navidrome.db в WAL-режиме
+      - navidrome_data:/data
+
+volumes:
+  navidrome_data:

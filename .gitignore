@@ -1,0 +1,18 @@
+# Скомпилированные бинарные файлы
+poisq
+nd-smart-search
+*.exe
+*.test
+*.out
+
+# Локальные данные и папки с музыкой
+music/
+test_data/
+*.db
+*.db-wal
+*.db-shm
+
+# Системные и IDE файлы
+.DS_Store
+.idea/
+.vscode/
