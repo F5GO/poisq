@@ -37,7 +37,8 @@ func TestYandexProvider_SearchRequiresPage0(t *testing.T) {
 								{
 									"id": 12345,
 									"title": "Отпускаю",
-									"lyricsAvailable": true
+									"lyricsAvailable": true,
+									"artists": [{"name": "МакСим"}]
 								}
 							]
 						}
@@ -88,5 +89,71 @@ func TestYandexProvider_SearchRequiresPage0(t *testing.T) {
 
 	if !strings.Contains(res.PlainLyrics, "Я не могу дышать") {
 		t.Errorf("PlainLyrics не содержит ожидаемый текст: %s", res.PlainLyrics)
+	}
+}
+
+func TestYandexProvider_LargeIDScientificNotationPrevention(t *testing.T) {
+	provider := NewYandexProvider(2*time.Second, 4*time.Second, "")
+
+	var interceptedSupplementPath string
+	provider.client.Transport = yandexRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/search") {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{
+					"result": {
+						"tracks": {
+							"results": [
+								{
+									"id": 17198794,
+									"title": "Отпускаю",
+									"lyricsAvailable": true,
+									"artists": [{"name": "МакSим"}]
+								}
+							]
+						}
+					}
+				}`)),
+			}, nil
+		}
+
+		if strings.Contains(r.URL.Path, "/supplement") {
+			interceptedSupplementPath = r.URL.Path
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{
+					"result": {
+						"lyrics": {
+							"fullLyrics": "Я не могу дышать...",
+							"syncLyrics": [
+								{"timestamp": 12000, "line": "Я не могу дышать...", "durationMs": 3000}
+							]
+						}
+					}
+				}`)),
+			}, nil
+		}
+
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body:       io.NopCloser(strings.NewReader("")),
+		}, nil
+	})
+
+	_, err := provider.Fetch(context.Background(), SearchQuery{
+		Artist: "МакСим",
+		Title:  "Отпускаю",
+	})
+
+	if err != nil {
+		t.Fatalf("Ошибка Fetch: %v", err)
+	}
+
+	expectedPath := "/tracks/17198794/supplement"
+	if interceptedSupplementPath != expectedPath {
+		t.Errorf("Неверный путь запроса supplement (возможно научная нотация float64): got %q, want %q",
+			interceptedSupplementPath, expectedPath)
 	}
 }

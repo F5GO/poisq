@@ -29,16 +29,22 @@ type yandexSearchResponse struct {
 	Result struct {
 		Tracks struct {
 			Results []struct {
-				ID              any    `json:"id"`
-				Title           string `json:"title"`
-				DurationMs      int64  `json:"durationMs"`
-				LyricsAvailable bool   `json:"lyricsAvailable"`
+				ID              json.RawMessage `json:"id"`
+				Title           string          `json:"title"`
+				DurationMs      int64           `json:"durationMs"`
+				LyricsAvailable bool            `json:"lyricsAvailable"`
 				Artists         []struct {
 					Name string `json:"name"`
 				} `json:"artists"`
 			} `json:"results"`
 		} `json:"tracks"`
 	} `json:"result"`
+}
+
+// cleanTrackID преобразует сырое значение ID трека в строку без научных нотаций (float) и кавычек.
+func cleanTrackID(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	return strings.Trim(s, "\"")
 }
 
 type yandexSupplementResponse struct {
@@ -145,8 +151,18 @@ func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string
 		return "", ErrNotFound
 	}
 
+	// 1. Поиск трека с валидацией названия/артиста и длительности (если задана)
 	for _, track := range tracks {
 		if !track.LyricsAvailable {
+			continue
+		}
+
+		trackArtist := ""
+		if len(track.Artists) > 0 {
+			trackArtist = track.Artists[0].Name
+		}
+
+		if !MatchTrack(q, trackArtist, track.Title) {
 			continue
 		}
 
@@ -157,13 +173,22 @@ func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string
 			}
 		}
 
-		return fmt.Sprintf("%v", track.ID), nil
+		return cleanTrackID(track.ID), nil
 	}
 
-	// Если не нашли с совпадением длительности, берем первый с lyricsAvailable
+	// 2. Если с учетом погрешности длительности не совпало — берем подходящий по названию/артисту
 	for _, track := range tracks {
-		if track.LyricsAvailable {
-			return fmt.Sprintf("%v", track.ID), nil
+		if !track.LyricsAvailable {
+			continue
+		}
+
+		trackArtist := ""
+		if len(track.Artists) > 0 {
+			trackArtist = track.Artists[0].Name
+		}
+
+		if MatchTrack(q, trackArtist, track.Title) {
+			return cleanTrackID(track.ID), nil
 		}
 	}
 

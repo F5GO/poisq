@@ -108,7 +108,11 @@ func (p *GeniusProvider) searchSongURL(ctx context.Context, q SearchQuery) (stri
 	for _, sec := range data.Response.Sections {
 		if sec.Type == "song" || sec.Type == "top_hit" {
 			for _, hit := range sec.Hits {
-				if hit.Result.URL != "" {
+				if hit.Result.URL == "" {
+					continue
+				}
+				// Валидируем, что найденный трек действительно совпадает с искомым исполнителем и песней
+				if MatchTrack(q, hit.Result.PrimaryArtist.Name, hit.Result.Title) {
 					return hit.Result.URL, nil
 				}
 			}
