@@ -36,6 +36,14 @@ services:
       SYNC_INTERVAL: "2m"
       ENRICH_SQLITE_FULLTEXT: "true"
       LOG_LEVEL: "info"
+      # Подсистема текстов песен (Lyrics с акцентом на русский язык)
+      LYRICS_ENABLED: "true"
+      LYRICS_SAVE_TO_DISK: "false" # По умолчанию false (кэширование в SQLite без изменения файлов на диске)
+      LYRICS_CACHE_TTL: "720h" # Время жизни кэша (720h = 30 дней)
+      LYRICS_CACHE_MAX_ENTRIES: "5000" # Лимит записей в оперативной памяти (защита от утечек RAM)
+      LYRICS_PROVIDERS: "yandex,genius,musixmatch,lrclib,amalgama"
+      # LYRICS_CUSTOM_SOURCES: "https://my-custom-lrclib.local" # Добавление внешних LRCLIB/lrcmux URL вручную
+      # LYRICS_API_TOKEN: "" # Опциональный секретный токен для доступа к /lyrics/api/* из внешней сети
     volumes:
       # Общий том данных с Navidrome для прямого безопасного доступа к navidrome.db в WAL-режиме
       - navidrome_data:/data

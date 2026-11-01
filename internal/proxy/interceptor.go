@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/F5GO/poisq/internal/lyrics"
 	"github.com/F5GO/poisq/internal/search"
 )
 
@@ -26,14 +27,16 @@ type Interceptor struct {
 	engine       *search.Engine
 	fanoutMgr    *FanoutManager
 	reverseProxy *httputil.ReverseProxy
+	lyricsEngine *lyrics.Engine
 }
 
 // NewInterceptor создает новый перехватчик запросов.
-func NewInterceptor(engine *search.Engine, fanoutMgr *FanoutManager, reverseProxy *httputil.ReverseProxy) *Interceptor {
+func NewInterceptor(engine *search.Engine, fanoutMgr *FanoutManager, reverseProxy *httputil.ReverseProxy, lyricsEngine *lyrics.Engine) *Interceptor {
 	return &Interceptor{
 		engine:       engine,
 		fanoutMgr:    fanoutMgr,
 		reverseProxy: reverseProxy,
+		lyricsEngine: lyricsEngine,
 	}
 }
 
@@ -60,7 +63,13 @@ func (it *Interceptor) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 2. Проверка Native UI / Feishin поиска (/api/search, /api/song, /api/album, /api/artist)
+	// 2. Проверка Subsonic / OpenSubsonic текстов песен (getLyrics, getLyricsBySongId)
+	if isSubsonicLyricsPath(path) {
+		it.handleSubsonicLyrics(w, req)
+		return
+	}
+
+	// 3. Проверка Native UI / Feishin поиска (/api/search, /api/song, /api/album, /api/artist)
 	if isNativeAPIPath(path) {
 		it.handleNativeSearch(w, req)
 		return
