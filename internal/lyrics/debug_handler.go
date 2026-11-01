@@ -134,3 +134,30 @@ func HandleLyricsSourcesList(engine *Engine) http.HandlerFunc {
 		})
 	}
 }
+
+// HandleLyricsCacheClear очищает кэш текстов песен (целиком или для конкретного трека).
+func HandleLyricsCacheClear(engine *Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		q := r.URL.Query()
+		artist := q.Get("artist")
+		title := q.Get("title")
+
+		if artist != "" && title != "" {
+			_ = engine.cache.Delete(artist, title)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":  "ok",
+				"message": "Кэш для трека успешно удален",
+				"artist":  artist,
+				"title":   title,
+			})
+			return
+		}
+
+		_ = engine.cache.Clear()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":  "ok",
+			"message": "Весь кэш текстов песен успешно очищен",
+		})
+	}
+}

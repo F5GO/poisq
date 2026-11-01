@@ -8,6 +8,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -52,13 +53,23 @@ func (it *Interceptor) handleGetLyrics(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
+	forceRefresh := q.Get("nocache") == "1" || q.Get("refresh") == "1"
+	if forceRefresh {
+		_ = it.lyricsEngine.GetCache().Delete(artist, title)
+		log.Printf("[INFO] [LYRICS] Принудительное обновление кэша для %q - %q", artist, title)
+	}
+
 	log.Printf("[LYRICS] Запрос getLyrics: artist=%q, title=%q (IP: %s, Agent: %s)",
 		artist, title, clientIP, req.UserAgent())
 
 	// 1. Безопасность: проверяем аутентификацию и наличие встроенных слов через Navidrome
 	upstreamRes, err := it.queryNavidromeUpstream(req)
 	if err != nil {
-		log.Printf("[WARN] [LYRICS] Ошибка обращения к Navidrome: %v", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("[DEBUG] [LYRICS] Navidrome не вернул быстрый ответ за 1с (переходим к источникам poisq)")
+		} else {
+			log.Printf("[DEBUG] [LYRICS] Статус обращения к Navidrome: %v", err)
+		}
 	}
 
 	if upstreamRes != nil {
@@ -84,11 +95,13 @@ func (it *Interceptor) handleGetLyrics(w http.ResponseWriter, req *http.Request)
 	}
 
 	// 3. Теперь, когда пользователь гарантированно авторизован, проверяем оперативный кэш poisq
-	if cached, hit := it.lyricsEngine.GetCache().Get(artist, title); hit && cached != nil {
-		log.Printf("[INFO] [LYRICS] Cache HIT для %q - %q (%s, %.2fms)",
-			artist, title, cached.Kind, float64(time.Since(start).Microseconds())/1000.0)
-		lyrics.FormatSubsonicGetLyrics(w, req, artist, title, cached)
-		return
+	if !forceRefresh {
+		if cached, hit := it.lyricsEngine.GetCache().Get(artist, title); hit && cached != nil {
+			log.Printf("[INFO] [LYRICS] Cache HIT для %q - %q (%s, %.2fms)",
+				artist, title, cached.Kind, float64(time.Since(start).Microseconds())/1000.0)
+			lyrics.FormatSubsonicGetLyrics(w, req, artist, title, cached)
+			return
+		}
 	}
 
 	// 4. У Navidrome слов нет — подключаем параллельный поиск в источниках poisq.
@@ -126,8 +139,8 @@ func (it *Interceptor) handleGetLyrics(w http.ResponseWriter, req *http.Request)
 		log.Printf("[DEBUG] [LYRICS] Клиент отключился до завершения поиска %q - %q (поиск продолжается в фоне)", artist, title)
 		return
 
-	case <-time.After(4 * time.Second):
-		log.Printf("[WARN] [LYRICS] Превышен таймаут ответа клиенту (4с) для %q - %q (поиск продолжается в фоне)", artist, title)
+	case <-time.After(7 * time.Second):
+		log.Printf("[WARN] [LYRICS] Превышен таймаут ответа клиенту (7с) для %q - %q (поиск продолжается в фоне)", artist, title)
 	}
 
 	// Если наши провайдеры ничего не нашли или таймаут — возвращаем исходный ответ Navidrome
@@ -145,6 +158,7 @@ func (it *Interceptor) handleGetLyricsBySongId(w http.ResponseWriter, req *http.
 	start := time.Now()
 	songID := strings.TrimSpace(req.URL.Query().Get("id"))
 	clientIP := ExtractClientIP(req)
+	forceRefresh := req.URL.Query().Get("nocache") == "1" || req.URL.Query().Get("refresh") == "1"
 
 	if songID == "" {
 		it.reverseProxy.ServeHTTP(w, req)
@@ -156,7 +170,11 @@ func (it *Interceptor) handleGetLyricsBySongId(w http.ResponseWriter, req *http.
 	// 1. Безопасность: проверяем аутентификацию через Navidrome
 	upstreamRes, err := it.queryNavidromeUpstream(req)
 	if err != nil {
-		log.Printf("[WARN] [LYRICS] Ошибка обращения к Navidrome: %v", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("[DEBUG] [LYRICS] Navidrome не вернул быстрый ответ за 1с (переходим к источникам poisq)")
+		} else {
+			log.Printf("[DEBUG] [LYRICS] Статус обращения к Navidrome: %v", err)
+		}
 	}
 
 	if upstreamRes != nil {
@@ -190,12 +208,17 @@ func (it *Interceptor) handleGetLyricsBySongId(w http.ResponseWriter, req *http.
 	}
 
 	if artist != "" && title != "" {
-		// Проверяем оперативный кэш
-		if cached, hit := it.lyricsEngine.GetCache().Get(artist, title); hit && cached != nil {
-			log.Printf("[INFO] [LYRICS] Cache HIT для id=%q (%q - %q, %s, %.2fms)",
-				songID, artist, title, cached.Kind, float64(time.Since(start).Microseconds())/1000.0)
-			lyrics.FormatOpenSubsonicLyrics(w, req, cached)
-			return
+		if forceRefresh {
+			_ = it.lyricsEngine.GetCache().Delete(artist, title)
+			log.Printf("[INFO] [LYRICS] Принудительное обновление кэша для id=%q (%q - %q)", songID, artist, title)
+		} else {
+			// Проверяем оперативный кэш
+			if cached, hit := it.lyricsEngine.GetCache().Get(artist, title); hit && cached != nil {
+				log.Printf("[INFO] [LYRICS] Cache HIT для id=%q (%q - %q, %s, %.2fms)",
+					songID, artist, title, cached.Kind, float64(time.Since(start).Microseconds())/1000.0)
+				lyrics.FormatOpenSubsonicLyrics(w, req, cached)
+				return
+			}
 		}
 
 		// Запускаем поиск в фоне с защитой от обрыва соединения клиента
@@ -235,8 +258,8 @@ func (it *Interceptor) handleGetLyricsBySongId(w http.ResponseWriter, req *http.
 			log.Printf("[DEBUG] [LYRICS] Клиент отключился до завершения поиска id=%q (%q - %q)", songID, artist, title)
 			return
 
-		case <-time.After(4 * time.Second):
-			log.Printf("[WARN] [LYRICS] Превышен таймаут ответа клиенту (4с) для id=%q", songID)
+		case <-time.After(7 * time.Second):
+			log.Printf("[WARN] [LYRICS] Превышен таймаут ответа клиенту (7с) для id=%q", songID)
 		}
 	}
 
@@ -266,7 +289,7 @@ func (it *Interceptor) queryNavidromeUpstream(req *http.Request) (*navidromeChec
 		targetURL.Path = singleJoiningSlash(it.targetURL.Path, req.URL.Path)
 		targetURL.RawQuery = req.URL.RawQuery
 
-		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(req.Context(), 1*time.Second)
 		defer cancel()
 
 		upReq, err := http.NewRequestWithContext(ctx, req.Method, targetURL.String(), nil)
