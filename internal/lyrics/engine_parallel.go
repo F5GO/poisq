@@ -2,7 +2,7 @@
 // с акцентом на русскоязычные источники, поддержкой LRCLIB/lrcmux протоколов и Subsonic API.
 //
 // Данный файл engine_parallel.go реализует высокопроизводительный параллельный опрос
-// провайдеров текстов песен с ранним возвратом синхронизированного LRC и выбором лучшего plain-кандидата.
+// провайдеров текстов песен с ранним возвратом синхронизированного LRC и выбором лучшего кандидата по шкале качества.
 package lyrics
 
 import (
@@ -21,8 +21,8 @@ type providerResult struct {
 }
 
 // queryProvidersParallel выполняет конкурентный опрос всех настроенных источников текстов.
-// При получении синхронизированного текста (LRC) или инструментального трека возвращает результат мгновенно,
-// отменяя остальные параллельные запросы для экономии ресурсов.
+// При получении чистого синхронизированного текста (LRC) высокого качества или инструментального трека
+// возвращает результат мгновенно, отменяя остальные параллельные запросы для экономии ресурсов.
 func (e *Engine) queryProvidersParallel(ctx context.Context, q SearchQuery) (*Lyrics, error) {
 	// Ограничиваем количество одновременных поисков треков через глобальный семафор
 	select {
@@ -87,12 +87,14 @@ func (e *Engine) queryProvidersParallel(ctx context.Context, q SearchQuery) (*Ly
 		close(resCh)
 	}()
 
-	var bestPlain *Lyrics
-	var bestPlainIndex = 999999
+	var bestCandidate *Lyrics
+	var bestScore CandidateScore
+	var bestIndex = 999999
 	var plainTimer *time.Timer
 	var plainTimeoutCh <-chan time.Time
 
-	// Grace-период: если найден обычный текст (plain), даем еще немного времени другим источникам найти синхронизированный (LRC)
+	// Grace-период: если найден обычный или цензурированный текст, даем еще немного времени
+	// другим источникам найти чистый синхронизированный (LRC)
 	plainGracePeriod := 700 * time.Millisecond
 
 	for {
@@ -101,38 +103,61 @@ func (e *Engine) queryProvidersParallel(ctx context.Context, q SearchQuery) (*Ly
 			return nil, ctx.Err()
 
 		case <-plainTimeoutCh:
-			// Истек grace-период ожидания LRC — отдаем лучший найденный обычный текст
-			if bestPlain != nil {
-				log.Printf("[INFO] [LYRICS] Использован plain текст из %s (LRC не найден в grace-период)", bestPlain.Source)
-				return bestPlain, nil
+			// Истек grace-период ожидания лучшего кандидата — отдаем наилучший найденный
+			if bestCandidate != nil {
+				log.Printf("[INFO] [LYRICS] Использован текст из %s (балл: %.1f, grace-период завершен)",
+					bestCandidate.Source, bestScore.Total)
+				return bestCandidate, nil
 			}
 
 		case r, ok := <-resCh:
 			if !ok {
 				// Все провайдеры завершили работу
-				if bestPlain != nil {
-					log.Printf("[INFO] [LYRICS] Найден plain текст в %s для %q - %q", bestPlain.Source, q.Artist, q.Title)
-					return bestPlain, nil
+				if bestCandidate != nil {
+					log.Printf("[INFO] [LYRICS] Найден текст в %s для %q - %q (балл: %.1f)",
+						bestCandidate.Source, q.Artist, q.Title, bestScore.Total)
+					return bestCandidate, nil
 				}
 				return nil, ErrNotFound
 			}
 
 			if r.err == nil && r.lyrics != nil {
-				// 1. Синхронизированный LRC или инструментальный трек побеждает немедленно!
-				if r.lyrics.Instrumental || r.lyrics.Kind == KindLRC {
-					log.Printf("[INFO] [LYRICS] Найден синхронизированный текст в %s за %v для %q - %q",
-						r.prov.Name(), r.dur.Round(time.Millisecond), q.Artist, q.Title)
+				score := ScoreCandidate(
+					q,
+					q.Artist,
+					q.Title,
+					q.Album,
+					q.Duration,
+					r.lyrics.Kind,
+					r.lyrics.PlainLyrics,
+					e.cfg.DurationTolerance,
+				)
+
+				// Если кандидат отсеян валидатором (конфликт версий, несоответствие длительности) — пропускаем
+				if !score.Accepted {
+					log.Printf("[DEBUG] [LYRICS] Кандидат от %s отклонен валидатором качества (балл: %.1f)",
+						r.prov.Name(), score.Total)
+					continue
+				}
+
+				// 1. Инструментальный трек или чистый синхронизированный LRC высокого качества побеждает мгновенно!
+				if r.lyrics.Instrumental || (r.lyrics.Kind == KindLRC && !score.IsCensored && score.Total >= 85.0) {
+					log.Printf("[INFO] [LYRICS] Найден синхронизированный текст в %s за %v (балл: %.1f) для %q - %q",
+						r.prov.Name(), r.dur.Round(time.Millisecond), score.Total, q.Artist, q.Title)
 					cancelAll() // Останавливаем оставшиеся медленные источники
 					return r.lyrics, nil
 				}
 
-				// 2. Обычный текст (plain): сохраняем по приоритету (меньший индекс в списке провайдеров)
-				if r.lyrics.Kind == KindPlain && r.index < bestPlainIndex {
-					bestPlain = r.lyrics
-					bestPlainIndex = r.index
-					log.Printf("[DEBUG] [LYRICS] Получен plain кандидат из %s за %v", r.prov.Name(), r.dur.Round(time.Millisecond))
+				// 2. Обычный текст (plain) или цензурированный LRC: сохраняем по баллу и приоритету
+				if bestCandidate == nil || score.Total > bestScore.Total || (score.Total == bestScore.Total && r.index < bestIndex) {
+					bestCandidate = r.lyrics
+					bestScore = score
+					bestIndex = r.index
 
-					// Запускаем таймер grace-периода для поиска LRC, если еще не запущен
+					log.Printf("[DEBUG] [LYRICS] Получен кандидат (%s) из %s за %v (балл: %.1f)",
+						r.lyrics.Kind, r.prov.Name(), r.dur.Round(time.Millisecond), score.Total)
+
+					// Запускаем таймер grace-периода для поиска лучшего LRC, если еще не запущен
 					if plainTimer == nil {
 						plainTimer = time.NewTimer(plainGracePeriod)
 						plainTimeoutCh = plainTimer.C
