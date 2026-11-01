@@ -62,7 +62,7 @@ func (e *Engine) initProviders() {
 	for _, pID := range e.cfg.Providers {
 		switch strings.ToLower(pID) {
 		case "yandex":
-			list = append(list, NewYandexProvider(e.cfg.RequestTimeout, e.cfg.DurationTolerance))
+			list = append(list, NewYandexProvider(e.cfg.RequestTimeout, e.cfg.DurationTolerance, e.cfg.YandexToken))
 		case "genius":
 			list = append(list, NewGeniusProvider(e.cfg.RequestTimeout))
 		case "musixmatch":
