@@ -49,6 +49,9 @@ type Config struct {
 
 	// EnablePublicAPI — разрешен ли публичный доступ к /lyrics/api/* без токена из внешнего интернета (по умолчанию false).
 	EnablePublicAPI bool
+
+	// YandexToken — опциональный OAuth-токен Яндекс Музыки для загрузки синхронизированных LRC текстов через официальный API.
+	YandexToken string
 }
 
 // LoadConfig считывает параметры подсистемы lyrics из переменных окружения.
@@ -65,6 +68,10 @@ func LoadConfig() *Config {
 	maxConcurrent := getEnvInt("LYRICS_MAX_CONCURRENT_REQUESTS", 8)
 	apiToken := getEnvString("LYRICS_API_TOKEN", "")
 	enablePublicAPI := getEnvBool("LYRICS_ENABLE_PUBLIC_API", false)
+	yandexToken := getEnvString("LYRICS_YANDEX_TOKEN", "")
+	if yandexToken == "" {
+		yandexToken = getEnvString("YANDEX_MUSIC_TOKEN", "")
+	}
 
 	var providers []string
 	for _, p := range strings.Split(providersStr, ",") {
@@ -112,6 +119,7 @@ func LoadConfig() *Config {
 		MaxConcurrentRequests: maxConcurrent,
 		APIToken:              apiToken,
 		EnablePublicAPI:       enablePublicAPI,
+		YandexToken:           yandexToken,
 	}
 }
 

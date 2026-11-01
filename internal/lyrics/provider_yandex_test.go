@@ -21,7 +21,7 @@ func (f yandexRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) 
 }
 
 func TestYandexProvider_SearchRequiresPage0(t *testing.T) {
-	provider := NewYandexProvider(2*time.Second, 4*time.Second)
+	provider := NewYandexProvider(2*time.Second, 4*time.Second, "")
 
 	var interceptedSearchQuery string
 	provider.client.Transport = yandexRoundTripFunc(func(r *http.Request) (*http.Response, error) {
