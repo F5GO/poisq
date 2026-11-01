@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	textPesniResultLinkRegex = regexp.MustCompile(`(?i)<a[^>]+href="(/pesnya/[^"]+)"`)
+	textPesniResultLinkRegex = regexp.MustCompile(`(?i)<a[^>]+href="(/pesnya/[^"]+)"[^>]*>([\s\S]*?)</a>`)
 	textPesniContentRegex    = regexp.MustCompile(`(?s)<div[^>]*class="(?:text_song|song_text)"[^>]*>(.*?)</div>`)
 )
 
@@ -74,15 +74,46 @@ func (p *AmalgamaProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyric
 		return nil, err
 	}
 
-	matches := textPesniResultLinkRegex.FindStringSubmatch(string(bodyBytes))
-	if len(matches) < 2 {
+	matches := textPesniResultLinkRegex.FindAllStringSubmatch(string(bodyBytes), -1)
+	if len(matches) == 0 {
 		return nil, ErrNotFound
 	}
 
-	songRelURL := matches[1]
-	songFullURL := fmt.Sprintf("https://text-pesni.com%s", songRelURL)
+	var bestURL string
+	for _, m := range matches {
+		if len(m) < 3 {
+			continue
+		}
+		linkURL := m[1]
+		linkText := html.UnescapeString(m[2])
+		linkText = strings.ReplaceAll(linkText, "Текст песни", "")
+		linkText = strings.ReplaceAll(linkText, "слова песни", "")
 
-	return p.scrapeSong(ctx, songFullURL)
+		// Проверяем совпадение исполнителя и названия в анкоре ссылки
+		if MatchArtist(query.Artist, linkText) && MatchTitle(query.Title, linkText) {
+			bestURL = fmt.Sprintf("https://text-pesni.com%s", linkURL)
+			break
+		}
+	}
+
+	if bestURL == "" {
+		// Запасная проверка: вхождение названия трека в URL ссылки
+		normTitle := NormalizeTrackString(query.Title)
+		for _, m := range matches {
+			linkURL := m[1]
+			normURL := NormalizeTrackString(linkURL)
+			if strings.Contains(normURL, normTitle) {
+				bestURL = fmt.Sprintf("https://text-pesni.com%s", linkURL)
+				break
+			}
+		}
+	}
+
+	if bestURL == "" {
+		return nil, ErrNotFound
+	}
+
+	return p.scrapeSong(ctx, bestURL)
 }
 
 func (p *AmalgamaProvider) scrapeSong(ctx context.Context, songURL string) (*Lyrics, error) {
