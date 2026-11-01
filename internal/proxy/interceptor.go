@@ -24,20 +24,36 @@ import (
 
 // Interceptor обрабатывает входящие HTTP-запросы, определяя необходимость модификации поисковых параметров.
 type Interceptor struct {
-	engine       *search.Engine
-	fanoutMgr    *FanoutManager
-	reverseProxy *httputil.ReverseProxy
-	lyricsEngine *lyrics.Engine
+	engine         *search.Engine
+	fanoutMgr      *FanoutManager
+	reverseProxy   *httputil.ReverseProxy
+	lyricsEngine   *lyrics.Engine
+	targetURL      *url.URL
+	upstreamClient *http.Client
 }
 
 // NewInterceptor создает новый перехватчик запросов.
 func NewInterceptor(engine *search.Engine, fanoutMgr *FanoutManager, reverseProxy *httputil.ReverseProxy, lyricsEngine *lyrics.Engine) *Interceptor {
-	return &Interceptor{
-		engine:       engine,
-		fanoutMgr:    fanoutMgr,
-		reverseProxy: reverseProxy,
-		lyricsEngine: lyricsEngine,
+	var targetURL *url.URL
+	var upstreamClient *http.Client
+	if fanoutMgr != nil {
+		targetURL = fanoutMgr.targetURL
+		upstreamClient = fanoutMgr.httpClient
 	}
+	return &Interceptor{
+		engine:         engine,
+		fanoutMgr:      fanoutMgr,
+		reverseProxy:   reverseProxy,
+		lyricsEngine:   lyricsEngine,
+		targetURL:      targetURL,
+		upstreamClient: upstreamClient,
+	}
+}
+
+// SetUpstream конфигурирует целевой адрес и HTTP-клиент для прямого опроса Navidrome без reverseProxy.
+func (it *Interceptor) SetUpstream(targetURL *url.URL, client *http.Client) {
+	it.targetURL = targetURL
+	it.upstreamClient = client
 }
 
 // ServeHTTP анализирует путь запроса и при необходимости выполняет умную обработку.

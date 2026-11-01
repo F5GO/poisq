@@ -8,6 +8,8 @@ package proxy
 
 import (
 	"context"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,93 +41,144 @@ func (it *Interceptor) handleSubsonicLyrics(w http.ResponseWriter, req *http.Req
 }
 
 func (it *Interceptor) handleGetLyrics(w http.ResponseWriter, req *http.Request) {
+	start := time.Now()
 	q := req.URL.Query()
 	artist := strings.TrimSpace(q.Get("artist"))
 	title := strings.TrimSpace(q.Get("title"))
+	clientIP := ExtractClientIP(req)
 
 	if artist == "" || title == "" {
 		it.reverseProxy.ServeHTTP(w, req)
 		return
 	}
 
-	// 1. Безопасность: проверяем аутентификацию через Navidrome
-	rec := httptest.NewRecorder()
-	it.reverseProxy.ServeHTTP(rec, req)
+	log.Printf("[LYRICS] Запрос getLyrics: artist=%q, title=%q (IP: %s, Agent: %s)",
+		artist, title, clientIP, req.UserAgent())
 
-	body := rec.Body.Bytes()
-
-	// Если Navidrome отклонил аутентификацию (401, 403 или Subsonic status="failed") — немедленно прерываем
-	if isSubsonicAuthFailed(rec.Code, body) {
-		copyHeaders(w.Header(), rec.Header())
-		w.WriteHeader(rec.Code)
-		_, _ = w.Write(body)
-		return
+	// 1. Безопасность: проверяем аутентификацию и наличие встроенных слов через Navidrome
+	upstreamRes, err := it.queryNavidromeUpstream(req)
+	if err != nil {
+		log.Printf("[WARN] [LYRICS] Ошибка обращения к Navidrome: %v", err)
 	}
 
-	// 2. Если у Navidrome уже есть готовые слова (теги или nd-lyrics) — отдаем клиенту
-	if rec.Code == http.StatusOK && hasMeaningfulLyrics(body) {
-		copyHeaders(w.Header(), rec.Header())
-		w.WriteHeader(rec.Code)
-		_, _ = w.Write(body)
-		return
+	if upstreamRes != nil {
+		// Если Navidrome отклонил аутентификацию (401, 403 или Subsonic status="failed") — немедленно прерываем
+		if upstreamRes.authFailed {
+			log.Printf("[WARN] [LYRICS] Отказ аутентификации от Navidrome для artist=%q, title=%q (status=%d)",
+				artist, title, upstreamRes.statusCode)
+			copyHeaders(w.Header(), upstreamRes.header)
+			w.WriteHeader(upstreamRes.statusCode)
+			_, _ = w.Write(upstreamRes.body)
+			return
+		}
+
+		// 2. Если у Navidrome уже есть готовые слова (теги или nd-lyrics) — отдаем клиенту
+		if upstreamRes.hasLyrics {
+			log.Printf("[INFO] [LYRICS] Navidrome уже имеет текст для %q - %q (отдаем клиенту за %.1fms)",
+				artist, title, float64(time.Since(start).Microseconds())/1000.0)
+			copyHeaders(w.Header(), upstreamRes.header)
+			w.WriteHeader(upstreamRes.statusCode)
+			_, _ = w.Write(upstreamRes.body)
+			return
+		}
 	}
 
-	// 3. Теперь, когда пользователь гарантированно авторизован, проверяем кэш poisq
+	// 3. Теперь, когда пользователь гарантированно авторизован, проверяем оперативный кэш poisq
 	if cached, hit := it.lyricsEngine.GetCache().Get(artist, title); hit && cached != nil {
+		log.Printf("[INFO] [LYRICS] Cache HIT для %q - %q (%s, %.2fms)",
+			artist, title, cached.Kind, float64(time.Since(start).Microseconds())/1000.0)
 		lyrics.FormatSubsonicGetLyrics(w, req, artist, title, cached)
 		return
 	}
 
-	// 4. У Navidrome слов нет — подключаем каскад провайдеров poisq
-	searchCtx, cancel := context.WithTimeout(req.Context(), 6*time.Second)
-	defer cancel()
+	// 4. У Navidrome слов нет — подключаем параллельный поиск в источниках poisq.
+	// Фоновый поиск запускается в detached-контексте (10с), чтобы при кратковременном разрыве сокета клиентом
+	// слова все равно были найдены, сохранены в SQLite-кэш и мгновенно отданы при повторе запроса.
+	type searchRes struct {
+		lyr *lyrics.Lyrics
+		err error
+	}
+	resCh := make(chan searchRes, 1)
 
-	lyr, err := it.lyricsEngine.FindLyrics(searchCtx, lyrics.SearchQuery{
-		Artist: artist,
-		Title:  title,
-	})
+	go func() {
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer bgCancel()
 
-	if err == nil && lyr != nil {
-		lyrics.FormatSubsonicGetLyrics(w, req, artist, title, lyr)
+		lyr, err := it.lyricsEngine.FindLyrics(bgCtx, lyrics.SearchQuery{
+			Artist: artist,
+			Title:  title,
+		})
+		resCh <- searchRes{lyr: lyr, err: err}
+	}()
+
+	select {
+	case res := <-resCh:
+		elapsedMs := float64(time.Since(start).Microseconds()) / 1000.0
+		if res.err == nil && res.lyr != nil {
+			log.Printf("[INFO] [LYRICS] Успешно найден %s текст для %q - %q из %s [%.1fms]",
+				res.lyr.Kind, artist, title, res.lyr.Source, elapsedMs)
+			lyrics.FormatSubsonicGetLyrics(w, req, artist, title, res.lyr)
+			return
+		}
+		log.Printf("[INFO] [LYRICS] Текст для %q - %q не найден ни в одном источнике [%.1fms]", artist, title, elapsedMs)
+
+	case <-req.Context().Done():
+		log.Printf("[DEBUG] [LYRICS] Клиент отключился до завершения поиска %q - %q (поиск продолжается в фоне)", artist, title)
+		return
+
+	case <-time.After(4 * time.Second):
+		log.Printf("[WARN] [LYRICS] Превышен таймаут ответа клиенту (4с) для %q - %q (поиск продолжается в фоне)", artist, title)
+	}
+
+	// Если наши провайдеры ничего не нашли или таймаут — возвращаем исходный ответ Navidrome
+	if upstreamRes != nil {
+		copyHeaders(w.Header(), upstreamRes.header)
+		w.WriteHeader(upstreamRes.statusCode)
+		_, _ = w.Write(upstreamRes.body)
 		return
 	}
 
-	// Если и наши провайдеры ничего не нашли — возвращаем исходный ответ Navidrome
-	copyHeaders(w.Header(), rec.Header())
-	w.WriteHeader(rec.Code)
-	_, _ = w.Write(body)
+	it.reverseProxy.ServeHTTP(w, req)
 }
 
 func (it *Interceptor) handleGetLyricsBySongId(w http.ResponseWriter, req *http.Request) {
+	start := time.Now()
 	songID := strings.TrimSpace(req.URL.Query().Get("id"))
+	clientIP := ExtractClientIP(req)
+
 	if songID == "" {
 		it.reverseProxy.ServeHTTP(w, req)
 		return
 	}
 
+	log.Printf("[LYRICS] Запрос getLyricsBySongId: id=%q (IP: %s, Agent: %s)", songID, clientIP, req.UserAgent())
+
 	// 1. Безопасность: проверяем аутентификацию через Navidrome
-	rec := httptest.NewRecorder()
-	it.reverseProxy.ServeHTTP(rec, req)
-
-	body := rec.Body.Bytes()
-
-	// Если Navidrome отклонил аутентификацию — немедленно возвращаем отказ
-	if isSubsonicAuthFailed(rec.Code, body) {
-		copyHeaders(w.Header(), rec.Header())
-		w.WriteHeader(rec.Code)
-		_, _ = w.Write(body)
-		return
+	upstreamRes, err := it.queryNavidromeUpstream(req)
+	if err != nil {
+		log.Printf("[WARN] [LYRICS] Ошибка обращения к Navidrome: %v", err)
 	}
 
-	// 2. Если у Navidrome уже есть слова — отдаем
-	if rec.Code == http.StatusOK && hasMeaningfulLyrics(body) {
-		copyHeaders(w.Header(), rec.Header())
-		w.WriteHeader(rec.Code)
-		_, _ = w.Write(body)
-		return
+	if upstreamRes != nil {
+		if upstreamRes.authFailed {
+			log.Printf("[WARN] [LYRICS] Отказ аутентификации от Navidrome для id=%q", songID)
+			copyHeaders(w.Header(), upstreamRes.header)
+			w.WriteHeader(upstreamRes.statusCode)
+			_, _ = w.Write(upstreamRes.body)
+			return
+		}
+
+		if upstreamRes.hasLyrics {
+			log.Printf("[INFO] [LYRICS] Navidrome уже имеет текст для id=%q (отдаем клиенту за %.1fms)",
+				songID, float64(time.Since(start).Microseconds())/1000.0)
+			copyHeaders(w.Header(), upstreamRes.header)
+			w.WriteHeader(upstreamRes.statusCode)
+			_, _ = w.Write(upstreamRes.body)
+			return
+		}
 	}
 
-	// 3. Извлекаем метаданные трека из базы данных Navidrome (если доступна)
+	// 2. Извлекаем метаданные трека из базы данных Navidrome (если доступна)
 	var artist, title, album string
 	var durationSec int64
 	db := it.lyricsEngine.GetDB()
@@ -136,34 +189,133 @@ func (it *Interceptor) handleGetLyricsBySongId(w http.ResponseWriter, req *http.
 		).Scan(&artist, &title, &album, &durationSec)
 	}
 
-	// Если нашли в базе и в кэше есть текст — отдаем сразу
 	if artist != "" && title != "" {
+		// Проверяем оперативный кэш
 		if cached, hit := it.lyricsEngine.GetCache().Get(artist, title); hit && cached != nil {
+			log.Printf("[INFO] [LYRICS] Cache HIT для id=%q (%q - %q, %s, %.2fms)",
+				songID, artist, title, cached.Kind, float64(time.Since(start).Microseconds())/1000.0)
 			lyrics.FormatOpenSubsonicLyrics(w, req, cached)
 			return
 		}
 
-		searchCtx, cancel := context.WithTimeout(req.Context(), 6*time.Second)
-		defer cancel()
+		// Запускаем поиск в фоне с защитой от обрыва соединения клиента
+		type searchRes struct {
+			lyr *lyrics.Lyrics
+			err error
+		}
+		resCh := make(chan searchRes, 1)
 
-		lyr, err := it.lyricsEngine.FindLyrics(searchCtx, lyrics.SearchQuery{
-			Artist:   artist,
-			Title:    title,
-			Album:    album,
-			Duration: time.Duration(durationSec) * time.Second,
-			TrackID:  songID,
-		})
+		go func() {
+			bgCtx, bgCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer bgCancel()
 
-		if err == nil && lyr != nil {
-			lyrics.FormatOpenSubsonicLyrics(w, req, lyr)
+			lyr, err := it.lyricsEngine.FindLyrics(bgCtx, lyrics.SearchQuery{
+				Artist:   artist,
+				Title:    title,
+				Album:    album,
+				Duration: time.Duration(durationSec) * time.Second,
+				TrackID:  songID,
+			})
+			resCh <- searchRes{lyr: lyr, err: err}
+		}()
+
+		select {
+		case res := <-resCh:
+			elapsedMs := float64(time.Since(start).Microseconds()) / 1000.0
+			if res.err == nil && res.lyr != nil {
+				log.Printf("[INFO] [LYRICS] Успешно найден %s текст для id=%q (%q - %q) из %s [%.1fms]",
+					res.lyr.Kind, songID, artist, title, res.lyr.Source, elapsedMs)
+				lyrics.FormatOpenSubsonicLyrics(w, req, res.lyr)
+				return
+			}
+			log.Printf("[INFO] [LYRICS] Текст для id=%q (%q - %q) не найден ни в одном источнике [%.1fms]",
+				songID, artist, title, elapsedMs)
+
+		case <-req.Context().Done():
+			log.Printf("[DEBUG] [LYRICS] Клиент отключился до завершения поиска id=%q (%q - %q)", songID, artist, title)
 			return
+
+		case <-time.After(4 * time.Second):
+			log.Printf("[WARN] [LYRICS] Превышен таймаут ответа клиенту (4с) для id=%q", songID)
 		}
 	}
 
 	// Возвращаем исходный ответ Navidrome
-	copyHeaders(w.Header(), rec.Header())
-	w.WriteHeader(rec.Code)
-	_, _ = w.Write(body)
+	if upstreamRes != nil {
+		copyHeaders(w.Header(), upstreamRes.header)
+		w.WriteHeader(upstreamRes.statusCode)
+		_, _ = w.Write(upstreamRes.body)
+		return
+	}
+
+	it.reverseProxy.ServeHTTP(w, req)
+}
+
+type navidromeCheckResult struct {
+	statusCode int
+	header     http.Header
+	body       []byte
+	authFailed bool
+	hasLyrics  bool
+}
+
+// queryNavidromeUpstream отправляет чистый запрос к вышестоящему Navidrome без модификации входящего req.
+func (it *Interceptor) queryNavidromeUpstream(req *http.Request) (*navidromeCheckResult, error) {
+	if it.upstreamClient != nil && it.targetURL != nil {
+		targetURL := *it.targetURL
+		targetURL.Path = singleJoiningSlash(it.targetURL.Path, req.URL.Path)
+		targetURL.RawQuery = req.URL.RawQuery
+
+		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
+		defer cancel()
+
+		upReq, err := http.NewRequestWithContext(ctx, req.Method, targetURL.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+
+		for k, vv := range req.Header {
+			if strings.EqualFold(k, "Host") || strings.EqualFold(k, "Content-Length") {
+				continue
+			}
+			for _, v := range vv {
+				upReq.Header.Add(k, v)
+			}
+		}
+		upReq.Host = ExtractClientHost(req)
+
+		resp, err := it.upstreamClient.Do(upReq)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+		if err != nil {
+			return nil, err
+		}
+
+		return &navidromeCheckResult{
+			statusCode: resp.StatusCode,
+			header:     resp.Header,
+			body:       body,
+			authFailed: isSubsonicAuthFailed(resp.StatusCode, body),
+			hasLyrics:  resp.StatusCode == http.StatusOK && hasMeaningfulLyrics(body),
+		}, nil
+	}
+
+	// Запасной fallback через httptest.ResponseRecorder (для изолированных тестов без upstreamClient)
+	rec := httptest.NewRecorder()
+	it.reverseProxy.ServeHTTP(rec, req)
+	body := rec.Body.Bytes()
+
+	return &navidromeCheckResult{
+		statusCode: rec.Code,
+		header:     rec.Header(),
+		body:       body,
+		authFailed: isSubsonicAuthFailed(rec.Code, body),
+		hasLyrics:  rec.Code == http.StatusOK && hasMeaningfulLyrics(body),
+	}, nil
 }
 
 // isSubsonicAuthFailed определяет, отклонил ли Navidrome аутентификацию клиента.
@@ -199,9 +351,8 @@ func hasMeaningfulLyrics(body []byte) bool {
 		return false
 	}
 
-	// Наличие признаков текста
+	// Наличие признаков текста в XML
 	if strings.Contains(s, "<lyrics") && !strings.Contains(s, "<lyrics></lyrics>") {
-		// Проверим, что внутри тега есть буквы
 		idx := strings.Index(s, "<lyrics")
 		end := strings.Index(s, "</lyrics>")
 		if idx != -1 && end != -1 && end > idx {
@@ -214,6 +365,7 @@ func hasMeaningfulLyrics(body []byte) bool {
 		}
 	}
 
+	// Наличие структурированных строк в OpenSubsonic JSON
 	if strings.Contains(s, "\"structuredLyrics\"") && strings.Contains(s, "\"line\"") {
 		return true
 	}
