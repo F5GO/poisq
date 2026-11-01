@@ -17,7 +17,7 @@ import (
 
 // CurrentCacheSchemaVersion определяет текущую версию схемы кэша текстов.
 // При обновлении версии все устаревшие или невалидные записи автоматически вычищаются из SQLite.
-const CurrentCacheSchemaVersion = 4
+const CurrentCacheSchemaVersion = 5
 
 // CacheEntry представляет запись в оперативной памяти.
 type CacheEntry struct {
@@ -158,8 +158,7 @@ func (c *Cache) isLyricsValidForTrack(artist, title string, lyr *Lyrics) bool {
 	if strings.TrimSpace(text) == "" {
 		return false
 	}
-	q := SearchQuery{Artist: artist, Title: title}
-	if !MatchTrack(q, artist, title) {
+	if IsDefectiveLyrics(text) {
 		return false
 	}
 	return true
