@@ -2,10 +2,13 @@
 // с акцентом на русскоязычные источники, поддержкой LRCLIB/lrcmux протоколов и Subsonic API.
 //
 // Данный файл matcher_test.go проверяет точность сопоставления исполнителей и названий треков,
-// включая латиницу/кириллицу ("МакSим" vs "МакСим"), пометки версий и фильтрацию ложных треков.
+// очистку изданий, предотвращение конфликтов версий (Live/Acoustic), сопоставление альбомов и оценку качества.
 package lyrics
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestMatcher_RussianNamesAndHomoglyphs(t *testing.T) {
 	tests := []struct {
@@ -33,50 +36,161 @@ func TestMatcher_RussianNamesAndHomoglyphs(t *testing.T) {
 	}
 }
 
-func TestMatcher_Titles(t *testing.T) {
+func TestMatcher_CleanTitleAndEditions(t *testing.T) {
 	tests := []struct {
-		name       string
-		queryTitle string
-		candTitle  string
-		expected   bool
+		input    string
+		expected string
 	}{
-		{"Точное совпадение", "Отпускаю", "Отпускаю", true},
-		{"С пометкой версии в скобках", "Отпускаю", "Отпускаю (Radio Edit)", true},
-		{"С пометкой feat", "Отпускаю", "Отпускаю ft. Лигалайз", true},
-		{"Другой трек со схожим словом", "Отпускаю", "Я тебя не отпускаю никогда", false},
-		{"Несвязанный трек", "Отпускаю", "Дым в потолок", false},
-		{"Кукла колдуна", "Кукла колдуна", "Кукла Колдуна (Remastered 2020)", true},
+		{"Hotel California (2013 Remaster)", "Hotel California"},
+		{"Smells Like Teen Spirit [Deluxe Edition]", "Smells Like Teen Spirit"},
+		{"Отпускаю (Юбилейное переиздание 2021)", "Отпускаю"},
+		{"Кукла колдуна [Remastered]", "Кукла колдуна"},
+		{"In the End (Album Version)", "In the End"},
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := MatchTitle(tc.queryTitle, tc.candTitle)
-			if got != tc.expected {
-				t.Errorf("MatchTitle(%q, %q) = %v; want %v", tc.queryTitle, tc.candTitle, got, tc.expected)
-			}
-		})
+		got := CleanTitle(tc.input)
+		if got != tc.expected {
+			t.Errorf("CleanTitle(%q) = %q; want %q", tc.input, got, tc.expected)
+		}
 	}
 }
 
-func TestMatcher_MatchTrack(t *testing.T) {
-	q := SearchQuery{
-		Artist: "МакСим",
-		Title:  "Отпускаю",
+func TestMatcher_VersionConflict(t *testing.T) {
+	// 1. Студийный запрос против концертной/ремикс версии — конфликт!
+	if !HasVersionConflict("Hotel California", "Hotel California (Live)") {
+		t.Errorf("Ожидался конфликт между студийной версией и Live")
+	}
+	if !HasVersionConflict("Отпускаю", "Отпускаю (Remix)") {
+		t.Errorf("Ожидался конфликт между оригиналом и Remix")
+	}
+	if !HasVersionConflict("Кукла колдуна", "Кукла колдуна (Акустика)") {
+		t.Errorf("Ожидался конфликт между оригиналом и Акустикой")
 	}
 
-	// Позитивные кейсы
-	if !MatchTrack(q, "МакSим", "Отпускаю") {
-		t.Errorf("Ожидалось совпадение для 'МакSим' - 'Отпускаю'")
-	}
-	if !MatchTrack(q, "МакСим", "Отпускаю (Radio Edit)") {
-		t.Errorf("Ожидалось совпадение для 'МакСим' - 'Отпускаю (Radio Edit)'")
+	// 2. Концертный запрос против концертного кандидата — совпадение (нет конфликта)!
+	if HasVersionConflict("Hotel California (Live)", "Hotel California (Live in Paris)") {
+		t.Errorf("Не должно быть конфликта, когда оба Live")
 	}
 
-	// Негативные кейсы (ложные хиты из полнотекстового поиска Genius)
-	if MatchTrack(q, "Big Baby Tape", "Отпускаю") {
-		t.Errorf("Не должно совпадать для другого артиста 'Big Baby Tape'")
+	// 3. Студийный запрос против ремастера — нет конфликта (ремастер не меняет исполнение)!
+	if HasVersionConflict("Hotel California", "Hotel California (Remastered)") {
+		t.Errorf("Ремастер не должен вызывать конфликт версий")
 	}
-	if MatchTrack(q, "МакСим", "Знаешь ли ты") {
-		t.Errorf("Не должно совпадать для другой песни того же артиста")
+}
+
+func TestMatcher_AlbumsMatch(t *testing.T) {
+	// Совпадение альбомов без учета регистра и стоп-слов
+	match, ratio := AlbumsMatch("The Dark Side of the Moon", "Dark Side of the Moon")
+	if !match || ratio < 0.75 {
+		t.Errorf("Ожидалось совпадение альбомов, got match=%v ratio=%v", match, ratio)
+	}
+
+	// Русскоязычные альбомы с пометкой переиздания
+	match, _ = AlbumsMatch("Группа крови", "Группа Крови (Переиздание 1996)")
+	if !match {
+		t.Errorf("Ожидалось совпадение альбомов Кино с переизданием")
+	}
+
+	// Несовпадение номеров томов (Greatest Hits 1 vs Greatest Hits 2)
+	match, _ = AlbumsMatch("Greatest Hits Vol. 1", "Greatest Hits Vol. 2")
+	if match {
+		t.Errorf("Не должны совпадать разные части сборника (Vol 1 vs Vol 2)")
+	}
+}
+
+func TestMatcher_CensorshipDetection(t *testing.T) {
+	if !IsCensored("I don't give a f**k about it") {
+		t.Errorf("Ожидалось обнаружение цензуры в f**k")
+	}
+	if !IsCensored("Какого х*я ты тут делаешь") {
+		t.Errorf("Ожидалось обнаружение цензуры в х*я")
+	}
+	if IsCensored("Я не могу дышать без тебя, отпускаю") {
+		t.Errorf("В чистом тексте не должно быть обнаружено цензуры")
+	}
+}
+
+func TestMatcher_ScoreCandidate(t *testing.T) {
+	query := SearchQuery{
+		Artist:   "МакСим",
+		Title:    "Отпускаю",
+		Album:    "Трудный возраст",
+		Duration: 260 * time.Second,
+	}
+
+	// 1. Идеальный кандидат (Яндекс Музыка, синхронизированный LRC, точная длительность)
+	score1 := ScoreCandidate(
+		query,
+		"МакSим",
+		"Отпускаю",
+		"Трудный возраст",
+		261*time.Second,
+		KindLRC,
+		"[00:10.00]Я не могу дышать...",
+		4*time.Second,
+	)
+
+	if !score1.Accepted || score1.Total < 90.0 {
+		t.Errorf("Ожидался высший балл для идеального кандидата, got score=%+v", score1)
+	}
+
+	// 2. Чужой трек (ложный хит Genius из рэпа)
+	score2 := ScoreCandidate(
+		query,
+		"Big Baby Tape",
+		"Отпускаю дым",
+		"Dragonborn",
+		180*time.Second,
+		KindPlain,
+		"Биг бой как максим отпускаю дым",
+		4*time.Second,
+	)
+
+	if score2.Accepted {
+		t.Errorf("Ложный трек чужого артиста должен быть отклонен, got score=%+v", score2)
+	}
+
+	// 3. Конфликт версий (Live вместо студийного)
+	score3 := ScoreCandidate(
+		query,
+		"МакСим",
+		"Отпускаю (Live в Олимпийском)",
+		"Трудный возраст",
+		260*time.Second,
+		KindLRC,
+		"Текст песни...",
+		4*time.Second,
+	)
+
+	if score3.Accepted {
+		t.Errorf("Кандидат с конфликтом версий (Live) должен быть отклонен")
+	}
+
+	// 4. Цензурированный кандидат против нецензурированного
+	scoreClean := ScoreCandidate(
+		query,
+		"МакСим",
+		"Отпускаю",
+		"Трудный возраст",
+		260*time.Second,
+		KindPlain,
+		"Чистый оригинальный текст",
+		4*time.Second,
+	)
+	scoreCensored := ScoreCandidate(
+		query,
+		"МакСим",
+		"Отпускаю",
+		"Трудный возраст",
+		260*time.Second,
+		KindPlain,
+		"Текст со зв***чками f**k",
+		4*time.Second,
+	)
+
+	if scoreCensored.Total >= scoreClean.Total {
+		t.Errorf("Цензурированный кандидат должен иметь более низкий балл, got clean=%v, censored=%v",
+			scoreClean.Total, scoreCensored.Total)
 	}
 }
