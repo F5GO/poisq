@@ -15,6 +15,10 @@ import (
 	"time"
 )
 
+// CurrentCacheSchemaVersion определяет текущую версию схемы кэша текстов.
+// При обновлении версии все устаревшие или невалидные записи автоматически вычищаются из SQLite.
+const CurrentCacheSchemaVersion = 4
+
 // CacheEntry представляет запись в оперативной памяти.
 type CacheEntry struct {
 	Lyrics    *Lyrics
@@ -76,12 +80,16 @@ func (c *Cache) Get(artist, title string) (*Lyrics, bool) {
 
 	if found {
 		if now.Before(entry.ExpiresAt) {
-			return entry.Lyrics, true
+			if c.isLyricsValidForTrack(artist, title, entry.Lyrics) {
+				return entry.Lyrics, true
+			}
+			// Запись в памяти не прошла валидацию качества — удаляем
+			_ = c.Delete(artist, title)
+		} else {
+			c.mu.Lock()
+			delete(c.mem, key)
+			c.mu.Unlock()
 		}
-		// Протухшую запись удаляем из памяти
-		c.mu.Lock()
-		delete(c.mem, key)
-		c.mu.Unlock()
 	}
 
 	// 2. Проверка в SQLite персистентном кэше
@@ -91,6 +99,11 @@ func (c *Cache) Get(artist, title string) (*Lyrics, bool) {
 
 	lyr, err := c.loadFromDB(key, now)
 	if err == nil && lyr != nil {
+		if !c.isLyricsValidForTrack(artist, title, lyr) {
+			_ = c.Delete(artist, title)
+			return nil, false
+		}
+
 		// Подтягиваем в оперативную память для будущих быстрых хитов
 		c.mu.Lock()
 		c.mem[key] = &CacheEntry{
@@ -102,6 +115,54 @@ func (c *Cache) Get(artist, title string) (*Lyrics, bool) {
 	}
 
 	return nil, false
+}
+
+// Delete удаляет запись для трека из оперативной памяти и персистентного кэша SQLite.
+func (c *Cache) Delete(artist, title string) error {
+	key := MakeKey(artist, title)
+	c.mu.Lock()
+	delete(c.mem, key)
+	c.mu.Unlock()
+
+	if c.db != nil {
+		_, err := c.db.Exec("DELETE FROM _poisq_lyrics_cache WHERE cache_key = ?", key)
+		return err
+	}
+	return nil
+}
+
+// Clear полностью очищает кэш в оперативной памяти и в SQLite.
+func (c *Cache) Clear() error {
+	c.mu.Lock()
+	c.mem = make(map[string]*CacheEntry)
+	c.mu.Unlock()
+
+	if c.db != nil {
+		_, err := c.db.Exec("DELETE FROM _poisq_lyrics_cache")
+		return err
+	}
+	return nil
+}
+
+func (c *Cache) isLyricsValidForTrack(artist, title string, lyr *Lyrics) bool {
+	if lyr == nil {
+		return false
+	}
+	if lyr.Instrumental {
+		return true
+	}
+	text := lyr.PlainLyrics
+	if text == "" && lyr.SyncedLyrics != "" {
+		text = lyr.SyncedLyrics
+	}
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+	q := SearchQuery{Artist: artist, Title: title}
+	if !MatchTrack(q, artist, title) {
+		return false
+	}
+	return true
 }
 
 // Set сохраняет текст песни в памяти и персистентно в SQLite.
@@ -171,19 +232,34 @@ func (c *Cache) initDBSchema() error {
 		source TEXT NOT NULL,
 		instrumental INTEGER NOT NULL DEFAULT 0,
 		expires_at INTEGER NOT NULL,
-		cached_at INTEGER NOT NULL
+		cached_at INTEGER NOT NULL,
+		schema_version INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX IF NOT EXISTS idx_poisq_lyrics_expires ON _poisq_lyrics_cache(expires_at);
 	`
-	_, err := c.db.Exec(query)
-	return err
+	if _, err := c.db.Exec(query); err != nil {
+		return err
+	}
+
+	// Миграция: добавляем schema_version, если таблица была создана ранее без нее
+	_, _ = c.db.Exec("ALTER TABLE _poisq_lyrics_cache ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 0;")
+
+	// Автоматически очищаем невалидный кэш, созданный предыдущими версиями (v0.0.1 - v0.0.3)
+	res, err := c.db.Exec("DELETE FROM _poisq_lyrics_cache WHERE schema_version < ?;", CurrentCacheSchemaVersion)
+	if err == nil {
+		if rows, _ := res.RowsAffected(); rows > 0 {
+			log.Printf("[INFO] [LYRICS] Очищено %d устаревших записей кэша текстов (схема обновлена до v%d)", rows, CurrentCacheSchemaVersion)
+		}
+	}
+
+	return nil
 }
 
 func (c *Cache) loadFromDB(key string, now time.Time) (*Lyrics, error) {
 	query := `
 	SELECT kind, plain_lyrics, synced_lyrics, lines_json, source, instrumental, cached_at
 	FROM _poisq_lyrics_cache
-	WHERE cache_key = ? AND expires_at > ?
+	WHERE cache_key = ? AND expires_at > ? AND schema_version >= ?
 	`
 	var (
 		kind         string
@@ -195,7 +271,7 @@ func (c *Cache) loadFromDB(key string, now time.Time) (*Lyrics, error) {
 		cachedAtSec  int64
 	)
 
-	err := c.db.QueryRow(query, key, now.Unix()).Scan(
+	err := c.db.QueryRow(query, key, now.Unix(), CurrentCacheSchemaVersion).Scan(
 		&kind, &plainLyrics, &syncedLyrics, &linesJSON, &source, &instrumental, &cachedAtSec,
 	)
 	if err != nil {
@@ -233,8 +309,8 @@ func (c *Cache) saveToDB(key, artist, title string, lyr *Lyrics, expiresAt time.
 
 	query := `
 	INSERT INTO _poisq_lyrics_cache (
-		cache_key, artist, title, kind, plain_lyrics, synced_lyrics, lines_json, source, instrumental, expires_at, cached_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		cache_key, artist, title, kind, plain_lyrics, synced_lyrics, lines_json, source, instrumental, expires_at, cached_at, schema_version
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(cache_key) DO UPDATE SET
 		kind = excluded.kind,
 		plain_lyrics = excluded.plain_lyrics,
@@ -243,7 +319,8 @@ func (c *Cache) saveToDB(key, artist, title string, lyr *Lyrics, expiresAt time.
 		source = excluded.source,
 		instrumental = excluded.instrumental,
 		expires_at = excluded.expires_at,
-		cached_at = excluded.cached_at;
+		cached_at = excluded.cached_at,
+		schema_version = excluded.schema_version;
 	`
 
 	_, err := c.db.Exec(query,
@@ -258,6 +335,7 @@ func (c *Cache) saveToDB(key, artist, title string, lyr *Lyrics, expiresAt time.
 		instrumentalInt,
 		expiresAt.Unix(),
 		lyr.CachedAt.Unix(),
+		CurrentCacheSchemaVersion,
 	)
 	return err
 }

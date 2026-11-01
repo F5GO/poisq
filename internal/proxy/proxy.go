@@ -6,6 +6,9 @@
 package proxy
 
 import (
+	"context"
+	"errors"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -42,6 +45,15 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 	reverseProxy := httputil.NewSingleHostReverseProxy(targetURL)
 	reverseProxy.Transport = transport
 
+	// Подавление шумных логов разрыва соединения клиентом (смена трека в мобильном плеере)
+	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
+			return
+		}
+		log.Printf("[WARN] [PROXY] Ошибка проксирования к Navidrome (%s): %v", r.URL.Path, err)
+		w.WriteHeader(http.StatusBadGateway)
+	}
+
 	// Настройка Director с безопасной нормализацией заголовков X-Forwarded-* для работы за CDN/Reverse Proxy
 	originalDirector := reverseProxy.Director
 	reverseProxy.Director = SetupDirector(targetURL, originalDirector)
@@ -67,10 +79,12 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 	var lyricsDebugHandler http.HandlerFunc
 	var lyricsSourcesHandler http.HandlerFunc
 	var lyricsAPIHandler http.HandlerFunc
+	var lyricsCacheClearHandler http.HandlerFunc
 	if lyricsEngine != nil {
 		lyricsDebugHandler = lyrics.HandleLyricsDebugTest(lyricsEngine)
 		lyricsSourcesHandler = lyrics.HandleLyricsSourcesList(lyricsEngine)
 		lyricsAPIHandler = lyrics.HandleLRCLIBAPI(lyricsEngine)
+		lyricsCacheClearHandler = lyrics.HandleLyricsCacheClear(lyricsEngine)
 	}
 
 	mux := http.NewServeMux()
@@ -113,6 +127,14 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 			if strings.HasPrefix(r.URL.Path, "/_smart/lyrics/sources") {
 				if lyricsSourcesHandler != nil {
 					lyricsSourcesHandler(w, r)
+				} else {
+					http.NotFound(w, r)
+				}
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/_smart/lyrics/cache/clear") {
+				if lyricsCacheClearHandler != nil {
+					lyricsCacheClearHandler(w, r)
 				} else {
 					http.NotFound(w, r)
 				}
