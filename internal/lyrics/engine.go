@@ -63,6 +63,11 @@ func (e *Engine) initProviders() {
 		switch strings.ToLower(pID) {
 		case "yandex":
 			list = append(list, NewYandexProvider(e.cfg.RequestTimeout, e.cfg.DurationTolerance, e.cfg.YandexToken))
+			if e.cfg.YandexToken != "" {
+				log.Printf("[INFO] [LYRICS] Провайдер Яндекс Музыка настроен с OAuth-токеном (LRC караоке активно)")
+			} else {
+				log.Printf("[INFO] [LYRICS] Провайдер Яндекс Музыка работает в публичном режиме (без токена, только plain text)")
+			}
 		case "genius":
 			list = append(list, NewGeniusProvider(e.cfg.RequestTimeout))
 		case "musixmatch":
