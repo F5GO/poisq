@@ -135,7 +135,7 @@ func (e *Engine) FindLyrics(ctx context.Context, q SearchQuery) (*Lyrics, error)
 			return cached, nil
 		}
 
-		return e.queryProviders(ctx, q)
+		return e.queryProvidersParallel(ctx, q)
 	})
 
 	if err != nil {
@@ -149,48 +149,9 @@ func (e *Engine) FindLyrics(ctx context.Context, q SearchQuery) (*Lyrics, error)
 	return result, nil
 }
 
+// queryProviders делегирует параллельному диспетчеру e.queryProvidersParallel.
 func (e *Engine) queryProviders(ctx context.Context, q SearchQuery) (*Lyrics, error) {
-	// Ограничиваем количество одновременных исходящих сетевых запросов
-	select {
-	case e.sem <- struct{}{}:
-		defer func() { <-e.sem }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	var plainFallback *Lyrics
-
-	for _, p := range e.providers {
-		// Создаем контекст с таймаутом на каждого провайдера
-		reqCtx, cancel := context.WithTimeout(ctx, e.cfg.RequestTimeout)
-		res, err := p.Fetch(reqCtx, q)
-		cancel()
-
-		if err != nil || res == nil {
-			if err != nil && err != ErrNotFound {
-				log.Printf("[DEBUG] [LYRICS] Ошибка провайдера %s: %v", p.Name(), err)
-			}
-			continue
-		}
-
-		// Если провайдер вернул инструментальный трек или синхронизированный LRC — он побеждает сразу!
-		if res.Instrumental || res.Kind == KindLRC {
-			log.Printf("[INFO] [LYRICS] Найден синхронизированный текст для %q - %q в %s", q.Artist, q.Title, p.Name())
-			return res, nil
-		}
-
-		// Если получили plain текст, сохраняем как запасной и продолжаем опрос в поисках синхронизированного LRC
-		if res.Kind == KindPlain && plainFallback == nil {
-			plainFallback = res
-		}
-	}
-
-	if plainFallback != nil {
-		log.Printf("[INFO] [LYRICS] Найден plain текст для %q - %q в %s", q.Artist, q.Title, plainFallback.Source)
-		return plainFallback, nil
-	}
-
-	return nil, ErrNotFound
+	return e.queryProvidersParallel(ctx, q)
 }
 
 func sanitizeInput(s string) string {

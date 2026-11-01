@@ -43,6 +43,7 @@ type yandexLyricsResponse struct {
 type yandexSupplementResponse struct {
 	Result struct {
 		Lyrics struct {
+			Lyrics     string `json:"lyrics"`
 			FullLyrics string `json:"fullLyrics"`
 			SyncLyrics []struct {
 				Timestamp  int64  `json:"timestamp"`
@@ -83,25 +84,20 @@ func (p *YandexProvider) Name() string {
 }
 
 func (p *YandexProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyrics, error) {
-	// 1. Поиск трека в Яндекс Музыке
+	// 1. Поиск трека в каталоге Яндекс Музыки
 	trackID, err := p.searchTrack(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Попытка получить LRC через эндпоинт /tracks/{id}/lyrics
-	lyr, err := p.fetchLyricsEndpoint(ctx, trackID)
-	if err == nil && lyr != nil {
-		return lyr, nil
-	}
-
-	// 3. Запасной вариант через /tracks/{id}/supplement
+	// 2. Получение текста через эндпоинт /tracks/{id}/supplement (работает без обязательной HMAC-подписи)
 	return p.fetchSupplementEndpoint(ctx, trackID)
 }
 
 func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string, error) {
 	searchQuery := fmt.Sprintf("%s %s", q.Artist, q.Title)
-	endpoint := fmt.Sprintf("https://api.music.yandex.net/search?text=%s&type=track", url.QueryEscape(searchQuery))
+	// Параметр page=0 обязателен для API Яндекс Музыки (без него возвращается HTTP 400 validation error)
+	endpoint := fmt.Sprintf("https://api.music.yandex.net/search?text=%s&type=track&page=0", url.QueryEscape(searchQuery))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -229,6 +225,9 @@ func (p *YandexProvider) fetchSupplementEndpoint(ctx context.Context, trackID st
 
 	syncLines := data.Result.Lyrics.SyncLyrics
 	plain := strings.TrimSpace(data.Result.Lyrics.FullLyrics)
+	if plain == "" {
+		plain = strings.TrimSpace(data.Result.Lyrics.Lyrics)
+	}
 
 	if len(syncLines) == 0 && plain == "" {
 		return nil, ErrNotFound

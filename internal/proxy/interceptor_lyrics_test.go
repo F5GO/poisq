@@ -5,6 +5,7 @@
 package proxy_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -169,5 +170,33 @@ func TestProxy_DiagnosticsLyricsAPI(t *testing.T) {
 
 	if !strings.Contains(rr.Body.String(), "sources") {
 		t.Errorf("В ответе sources не найден ключ: %s", rr.Body.String())
+	}
+}
+
+func TestProxy_SubsonicLyrics_DetachedSearch_ClientDisconnect(t *testing.T) {
+	lyricsCfg := &lyrics.Config{
+		Enabled:        true,
+		CacheTTL:       1 * time.Hour,
+		RequestTimeout: 1 * time.Second,
+	}
+	engine := lyrics.NewEngine(lyricsCfg, nil)
+
+	targetURL, _ := url.Parse("http://navidrome.mock:4533")
+	revProxy := httputil.NewSingleHostReverseProxy(targetURL)
+	revProxy.Transport = &mockNavidromeRoundTripper{authSuccess: true}
+	interceptor := proxy.NewInterceptor(nil, nil, revProxy, engine)
+
+	// Создаем запрос с контекстом, который отменяется немедленно
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/rest/getLyrics?u=admin&p=admin&artist=%D0%9A%D0%B8%D0%BD%D0%BE&title=%D0%9F%D0%B5%D1%87%D0%B0%D0%BB%D1%8C", nil).WithContext(ctx)
+	rr := httptest.NewRecorder()
+
+	cancel() // Имитация обрыва соединения клиентом
+
+	interceptor.ServeHTTP(rr, req)
+
+	// Сервер не должен паниковать при отключении клиента
+	if rr.Code != http.StatusOK && rr.Code != 0 {
+		t.Logf("Код ответа при отключенном клиенте: %d", rr.Code)
 	}
 }
