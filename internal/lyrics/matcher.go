@@ -677,3 +677,97 @@ func IsRussianText(s string) bool {
 	}
 	return false
 }
+
+// IsDefectiveLyrics проверяет, не является ли найденный текст обрубком, пустышкой или служебной заглушкой.
+func IsDefectiveLyrics(lyricsText string) bool {
+	trimmed := strings.TrimSpace(lyricsText)
+	if trimmed == "" {
+		return true
+	}
+
+	lower := strings.ToLower(trimmed)
+
+	// Заглушки отсутствия текста
+	if strings.Contains(lower, "текст песни еще не добавлен") ||
+		strings.Contains(lower, "we do not have the lyrics") ||
+		strings.Contains(lower, "lyrics not available") {
+		return true
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	var validLines []string
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			validLines = append(validLines, l)
+		}
+	}
+
+	// Проверка на обрубок: текст начинается сразу со 2-го или 3-го куплета/части без первого
+	for _, line := range validLines {
+		if strings.HasPrefix(line, "[") {
+			l := strings.ToLower(line)
+			if (strings.Contains(l, "куплет 2") || strings.Contains(l, "куплет 3") ||
+				strings.Contains(l, "verse 2") || strings.Contains(l, "verse 3") ||
+				strings.Contains(l, "часть 2") || strings.Contains(l, "part 2")) &&
+				!strings.Contains(lower, "куплет 1") && !strings.Contains(lower, "verse 1") && !strings.Contains(lower, "часть 1") {
+				return true
+			}
+			break
+		}
+	}
+
+	return false
+}
+
+// GenerateArtistVariants генерирует альтернативные варианты написания имени исполнителя
+// (например, "Максим" <-> "МакSим", "tatu" <-> "t.A.T.u.").
+func GenerateArtistVariants(artist string) []string {
+	norm := NormalizeTrackString(artist)
+	seen := make(map[string]struct{})
+	var variants []string
+
+	add := func(v string) {
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return
+		}
+		key := strings.ToLower(trimmed)
+		if _, exists := seen[key]; !exists {
+			seen[key] = struct{}{}
+			variants = append(variants, trimmed)
+		}
+	}
+
+	// Исходный вариант всегда первый
+	add(artist)
+
+	// Специальные канонические псевдонимы российской и мировой сцены
+	switch norm {
+	case "максим":
+		add("МакSим")
+		add("MakSim")
+	case "тату", "tatu":
+		add("t.A.T.u.")
+		add("Тату")
+	case "глюкоза", "glukoza":
+		add("Глюк’oZa")
+		add("Глюкоза")
+	case "кино":
+		add("Виктор Цой")
+	case "найк борзов":
+		add("Найк Борзов")
+	}
+
+	// Если в имени есть кириллическая 'с', пробуем латинскую 's' (и наоборот)
+	if strings.Contains(artist, "с") || strings.Contains(artist, "С") {
+		r := strings.NewReplacer("с", "s", "С", "S")
+		add(r.Replace(artist))
+	}
+	if strings.Contains(artist, "s") || strings.Contains(artist, "S") {
+		r := strings.NewReplacer("s", "с", "S", "С")
+		add(r.Replace(artist))
+	}
+
+	return variants
+}

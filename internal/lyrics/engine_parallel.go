@@ -122,12 +122,35 @@ func (e *Engine) queryProvidersParallel(ctx context.Context, q SearchQuery) (*Ly
 			}
 
 			if r.err == nil && r.lyrics != nil {
+				// Проверяем на дефектный текст (обрубок со 2-го куплета или заглушка)
+				if !r.lyrics.Instrumental && IsDefectiveLyrics(r.lyrics.PlainLyrics) {
+					log.Printf("[DEBUG] [LYRICS] Текст от %s отклонен как дефектный (неполный или заглушка)", r.prov.Name())
+					continue
+				}
+
+				candArtist := r.lyrics.Artist
+				if candArtist == "" {
+					candArtist = q.Artist
+				}
+				candTitle := r.lyrics.Title
+				if candTitle == "" {
+					candTitle = q.Title
+				}
+				candAlbum := r.lyrics.Album
+				if candAlbum == "" {
+					candAlbum = q.Album
+				}
+				candDuration := r.lyrics.Duration
+				if candDuration <= 0 {
+					candDuration = q.Duration
+				}
+
 				score := ScoreCandidate(
 					q,
-					q.Artist,
-					q.Title,
-					q.Album,
-					q.Duration,
+					candArtist,
+					candTitle,
+					candAlbum,
+					candDuration,
 					r.lyrics.Kind,
 					r.lyrics.PlainLyrics,
 					e.cfg.DurationTolerance,

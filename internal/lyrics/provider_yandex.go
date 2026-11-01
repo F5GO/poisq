@@ -100,102 +100,109 @@ func (p *YandexProvider) Name() string {
 }
 
 func (p *YandexProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyrics, error) {
-	// 1. Поиск трека в каталоге Яндекс Музыки (с обязательным page=0)
-	trackID, err := p.searchTrack(ctx, query)
+	// 1. Поиск трека в каталоге Яндекс Музыки (с обязательным page=0 и перебором вариантов написания артиста)
+	trackID, candArtist, candTitle, candDuration, err := p.searchTrack(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
 	// 2. Если передан OAuth-токен — пытаемся получить синхронизированный LRC через подписанный /tracks/{id}/lyrics
 	if p.token != "" {
-		if lyr, err := p.fetchLyricsEndpointWithAuth(ctx, trackID); err == nil && lyr != nil {
+		if lyr, err := p.fetchLyricsEndpointWithAuth(ctx, trackID, candArtist, candTitle, candDuration); err == nil && lyr != nil {
 			return lyr, nil
 		}
 	}
 
 	// 3. Публичный эндпоинт /tracks/{id}/supplement (работает без токена и подписей, отдает fullLyrics за 10мс)
-	return p.fetchSupplementEndpoint(ctx, trackID)
+	return p.fetchSupplementEndpoint(ctx, trackID, candArtist, candTitle, candDuration)
 }
 
-func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string, error) {
-	searchQuery := fmt.Sprintf("%s %s", q.Artist, q.Title)
-	// Согласно спецификации Яндекс Музыки, page=0 обязателен для предотвращения ошибки 400 validation error
-	endpoint := fmt.Sprintf("https://api.music.yandex.net/search?text=%s&type=track&page=0&nocorrect=false", url.QueryEscape(searchQuery))
+func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string, string, string, time.Duration, error) {
+	artistVariants := GenerateArtistVariants(q.Artist)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "YandexMusic/2024.01.1 (Android; Google Pixel)")
-	if p.token != "" {
-		req.Header.Set("Authorization", "OAuth "+p.token)
-	}
+	for _, artVar := range artistVariants {
+		searchQuery := fmt.Sprintf("%s %s", artVar, q.Title)
+		endpoint := fmt.Sprintf("https://api.music.yandex.net/search?text=%s&type=track&page=0&nocorrect=false", url.QueryEscape(searchQuery))
 
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "YandexMusic/2024.01.1 (Android; Google Pixel)")
+		if p.token != "" {
+			req.Header.Set("Authorization", "OAuth "+p.token)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", ErrNotFound
-	}
-
-	var data yandexSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", err
-	}
-
-	tracks := data.Result.Tracks.Results
-	if len(tracks) == 0 {
-		return "", ErrNotFound
-	}
-
-	// 1. Поиск трека с валидацией названия/артиста и длительности (если задана)
-	for _, track := range tracks {
-		if !track.LyricsAvailable {
+		resp, err := p.client.Do(req)
+		if err != nil {
 			continue
 		}
 
-		trackArtist := ""
-		if len(track.Artists) > 0 {
-			trackArtist = track.Artists[0].Name
-		}
-
-		if !MatchTrack(q, trackArtist, track.Title) {
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			continue
 		}
 
-		if q.Duration > 0 && track.DurationMs > 0 {
-			diff := math.Abs(float64(track.DurationMs)/1000.0 - q.Duration.Seconds())
-			if diff > p.tolerance.Seconds() {
+		var data yandexSearchResponse
+		err = json.NewDecoder(resp.Body).Decode(&data)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+
+		tracks := data.Result.Tracks.Results
+		if len(tracks) == 0 {
+			continue
+		}
+
+		// 1. Поиск трека с валидацией названия/артиста и длительности (если задана)
+		for _, track := range tracks {
+			if !track.LyricsAvailable {
 				continue
 			}
+
+			trackArtist := ""
+			if len(track.Artists) > 0 {
+				trackArtist = track.Artists[0].Name
+			}
+
+			if !MatchTrack(q, trackArtist, track.Title) {
+				continue
+			}
+
+			dur := time.Duration(track.DurationMs) * time.Millisecond
+			if q.Duration > 0 && track.DurationMs > 0 {
+				diff := math.Abs(float64(track.DurationMs)/1000.0 - q.Duration.Seconds())
+				if diff > p.tolerance.Seconds() {
+					continue
+				}
+			}
+
+			return cleanTrackID(track.ID), trackArtist, track.Title, dur, nil
 		}
 
-		return cleanTrackID(track.ID), nil
+		// 2. Если с учетом погрешности длительности не совпало — берем подходящий по названию/артисту
+		for _, track := range tracks {
+			if !track.LyricsAvailable {
+				continue
+			}
+
+			trackArtist := ""
+			if len(track.Artists) > 0 {
+				trackArtist = track.Artists[0].Name
+			}
+
+			if MatchTrack(q, trackArtist, track.Title) {
+				dur := time.Duration(track.DurationMs) * time.Millisecond
+				return cleanTrackID(track.ID), trackArtist, track.Title, dur, nil
+			}
+		}
 	}
 
-	// 2. Если с учетом погрешности длительности не совпало — берем подходящий по названию/артисту
-	for _, track := range tracks {
-		if !track.LyricsAvailable {
-			continue
-		}
-
-		trackArtist := ""
-		if len(track.Artists) > 0 {
-			trackArtist = track.Artists[0].Name
-		}
-
-		if MatchTrack(q, trackArtist, track.Title) {
-			return cleanTrackID(track.ID), nil
-		}
-	}
-
-	return "", ErrNotFound
+	return "", "", "", 0, ErrNotFound
 }
 
-func (p *YandexProvider) fetchLyricsEndpointWithAuth(ctx context.Context, trackID string) (*Lyrics, error) {
+func (p *YandexProvider) fetchLyricsEndpointWithAuth(ctx context.Context, trackID, candArtist, candTitle string, candDuration time.Duration) (*Lyrics, error) {
 	ts := time.Now().UTC().Unix()
 	msg := fmt.Sprintf("%s%d", trackID, ts)
 	mac := hmac.New(sha256.New, []byte(yandexAndroidSignKey))
@@ -260,12 +267,15 @@ func (p *YandexProvider) fetchLyricsEndpointWithAuth(ctx context.Context, trackI
 		PlainLyrics:  plain,
 		SyncedLyrics: rawLRC,
 		Lines:        lines,
+		Artist:       candArtist,
+		Title:        candTitle,
+		Duration:     candDuration,
 		Source:       "yandex",
 		CachedAt:     time.Now(),
 	}, nil
 }
 
-func (p *YandexProvider) fetchSupplementEndpoint(ctx context.Context, trackID string) (*Lyrics, error) {
+func (p *YandexProvider) fetchSupplementEndpoint(ctx context.Context, trackID, candArtist, candTitle string, candDuration time.Duration) (*Lyrics, error) {
 	endpoint := fmt.Sprintf("https://api.music.yandex.net/tracks/%s/supplement", trackID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -298,6 +308,10 @@ func (p *YandexProvider) fetchSupplementEndpoint(ctx context.Context, trackID st
 		return nil, ErrNotFound
 	}
 
+	if IsDefectiveLyrics(plain) {
+		return nil, ErrNotFound
+	}
+
 	var lines []Line
 	for _, sl := range syncLines {
 		lines = append(lines, Line{
@@ -323,6 +337,9 @@ func (p *YandexProvider) fetchSupplementEndpoint(ctx context.Context, trackID st
 		PlainLyrics:  plain,
 		SyncedLyrics: synced,
 		Lines:        lines,
+		Artist:       candArtist,
+		Title:        candTitle,
+		Duration:     candDuration,
 		Source:       "yandex",
 		CachedAt:     time.Now(),
 	}, nil

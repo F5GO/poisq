@@ -22,6 +22,10 @@ var (
 	geniusLyricsContainerRegex = regexp.MustCompile(`(?s)<div[^>]*data-lyrics-container="true"[^>]*>(.*?)</div>`)
 	htmlBrRegex                = regexp.MustCompile(`(?i)<br\s*/?>`)
 	htmlTagRegex               = regexp.MustCompile(`<[^>]+>`)
+	geniusContributorsRegex    = regexp.MustCompile(`(?i)^\d+\s*contributors?.*$`)
+	geniusEmbedRegex           = regexp.MustCompile(`(?i)\d*\s*embed$`)
+	geniusLyricsHeaderRegex    = regexp.MustCompile(`(?i)^.*lyrics$`)
+	geniusLikeRegex            = regexp.MustCompile(`(?i)^you might also like.*$`)
 )
 
 type geniusMultiSearchResponse struct {
@@ -71,39 +75,42 @@ func (p *GeniusProvider) Name() string {
 
 func (p *GeniusProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyrics, error) {
 	// 1. Поиск страницы песни через публичный эндпоинт Genius Multi Search
-	pageURL, err := p.searchSongURL(ctx, query)
+	pageURL, candArtist, candTitle, err := p.searchSongURL(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
 	// 2. Скачивание HTML страницы и извлечение текста песни
-	return p.scrapeLyrics(ctx, pageURL)
+	return p.scrapeLyrics(ctx, pageURL, candArtist, candTitle)
 }
 
-func (p *GeniusProvider) searchSongURL(ctx context.Context, q SearchQuery) (string, error) {
+func (p *GeniusProvider) searchSongURL(ctx context.Context, q SearchQuery) (string, string, string, error) {
 	searchQuery := fmt.Sprintf("%s %s", q.Artist, q.Title)
 	endpoint := fmt.Sprintf("https://genius.com/api/search/multi?q=%s", url.QueryEscape(searchQuery))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", ErrNotFound
+		return "", "", "", ErrNotFound
 	}
 
 	var data geniusMultiSearchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return "", err
+		return "", "", "", err
 	}
+
+	normQueryArtist := NormalizeTrackString(q.Artist)
+	var fallbackURL, fallbackArtist, fallbackTitle string
 
 	for _, sec := range data.Response.Sections {
 		if sec.Type == "song" || sec.Type == "top_hit" {
@@ -111,18 +118,34 @@ func (p *GeniusProvider) searchSongURL(ctx context.Context, q SearchQuery) (stri
 				if hit.Result.URL == "" {
 					continue
 				}
-				// Валидируем, что найденный трек действительно совпадает с искомым исполнителем и песней
-				if MatchTrack(q, hit.Result.PrimaryArtist.Name, hit.Result.Title) {
-					return hit.Result.URL, nil
+				candArtist := hit.Result.PrimaryArtist.Name
+				candTitle := hit.Result.Title
+
+				// Валидируем, что найденный трек совпадает с искомым исполнителем и песней
+				if MatchTrack(q, candArtist, candTitle) {
+					// Если исполнитель совпадает точно (без посторонних фитов и коллабораций) — сразу отдаем его
+					if NormalizeTrackString(candArtist) == normQueryArtist {
+						return hit.Result.URL, candArtist, candTitle, nil
+					}
+					// Иначе запоминаем как запасной вариант (если точного сольного трека не найдется)
+					if fallbackURL == "" {
+						fallbackURL = hit.Result.URL
+						fallbackArtist = candArtist
+						fallbackTitle = candTitle
+					}
 				}
 			}
 		}
 	}
 
-	return "", ErrNotFound
+	if fallbackURL != "" {
+		return fallbackURL, fallbackArtist, fallbackTitle, nil
+	}
+
+	return "", "", "", ErrNotFound
 }
 
-func (p *GeniusProvider) scrapeLyrics(ctx context.Context, pageURL string) (*Lyrics, error) {
+func (p *GeniusProvider) scrapeLyrics(ctx context.Context, pageURL, candArtist, candTitle string) (*Lyrics, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		return nil, err
@@ -161,16 +184,49 @@ func (p *GeniusProvider) scrapeLyrics(ctx context.Context, pageURL string) (*Lyr
 		}
 	}
 
-	plain := html.UnescapeString(sb.String())
-	plain = strings.TrimSpace(plain)
-	if plain == "" {
+	plain := cleanGeniusText(html.UnescapeString(sb.String()))
+	if plain == "" || IsDefectiveLyrics(plain) {
 		return nil, ErrNotFound
 	}
 
 	return &Lyrics{
 		Kind:        KindPlain,
 		PlainLyrics: plain,
+		Artist:      candArtist,
+		Title:       candTitle,
 		Source:      "genius",
 		CachedAt:    time.Now(),
 	}, nil
+}
+
+// cleanGeniusText вычищает служебные артефакты разметки Genius (Contributors, Embed, You might also like).
+func cleanGeniusText(raw string) string {
+	lines := strings.Split(raw, "\n")
+	var cleaned []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			cleaned = append(cleaned, "")
+			continue
+		}
+		if geniusContributorsRegex.MatchString(trimmed) {
+			continue
+		}
+		if geniusLyricsHeaderRegex.MatchString(trimmed) && len(trimmed) < 40 {
+			continue
+		}
+		if geniusLikeRegex.MatchString(trimmed) {
+			continue
+		}
+		if geniusEmbedRegex.MatchString(trimmed) {
+			trimmed = geniusEmbedRegex.ReplaceAllString(trimmed, "")
+			trimmed = strings.TrimSpace(trimmed)
+			if trimmed == "" {
+				continue
+			}
+		}
+		cleaned = append(cleaned, trimmed)
+	}
+	res := strings.Join(cleaned, "\n")
+	return strings.TrimSpace(res)
 }

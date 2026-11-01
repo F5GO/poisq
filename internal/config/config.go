@@ -16,7 +16,7 @@ import (
 )
 
 // Version определяет текущую версию микросервиса poisq.
-const Version = "0.0.5"
+const Version = "0.0.6"
 
 // Config содержит все настраиваемые параметры микросервиса poisq.
 type Config struct {

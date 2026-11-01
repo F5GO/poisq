@@ -73,4 +73,10 @@ type Lyrics struct {
 
 	// CachedAt — временная метка сохранения в кэш.
 	CachedAt time.Time `json:"cachedAt"`
+
+	// Метаданные найденного кандидата от провайдера для валидации качества
+	Artist   string        `json:"artist,omitempty"`
+	Title    string        `json:"title,omitempty"`
+	Album    string        `json:"album,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
 }

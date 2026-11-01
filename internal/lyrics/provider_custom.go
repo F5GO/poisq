@@ -71,10 +71,15 @@ func (p *CustomLrclibProvider) Name() string {
 }
 
 func (p *CustomLrclibProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyrics, error) {
-	// 1. Попытка прямого получения через точный эндпоинт /api/get
-	rec, err := p.getExact(ctx, query)
-	if err == nil && rec != nil {
-		return p.convertRecord(rec)
+	// 1. Попытка прямого получения через точный эндпоинт /api/get (с перебором вариантов написания артиста)
+	variants := GenerateArtistVariants(query.Artist)
+	for _, art := range variants {
+		qVar := query
+		qVar.Artist = art
+		rec, err := p.getExact(ctx, qVar)
+		if err == nil && rec != nil {
+			return p.convertRecord(rec)
+		}
 	}
 
 	// 2. Если точный поиск не дал результата — выполняем поиск через /api/search
@@ -124,43 +129,71 @@ func (p *CustomLrclibProvider) getExact(ctx context.Context, q SearchQuery) (*lr
 }
 
 func (p *CustomLrclibProvider) searchFallback(ctx context.Context, q SearchQuery) (*Lyrics, error) {
-	params := url.Values{}
-	params.Set("track_name", q.Title)
-	params.Set("artist_name", q.Artist)
-
-	endpoint := fmt.Sprintf("%s/api/search?%s", p.baseURL, params.Encode())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "poisq-lyrics/1.0")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, ErrNotFound
+	// Пробуем поиск по полям, а также полнотекстовый свободный запрос q
+	queries := []url.Values{
+		{"track_name": []string{q.Title}, "artist_name": []string{q.Artist}},
+		{"q": []string{fmt.Sprintf("%s %s", q.Artist, q.Title)}},
 	}
 
-	var results []lrclibResponse
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
-		return nil, err
+	for _, artVar := range GenerateArtistVariants(q.Artist) {
+		if artVar != q.Artist {
+			queries = append(queries, url.Values{"track_name": []string{q.Title}, "artist_name": []string{artVar}})
+		}
 	}
 
-	for _, rec := range results {
-		// Проверка длительности трека при наличии
-		if q.Duration > 0 && rec.Duration > 0 {
-			diff := math.Abs(rec.Duration - q.Duration.Seconds())
-			if diff > p.tolerance.Seconds() {
-				continue
+	for _, params := range queries {
+		endpoint := fmt.Sprintf("%s/api/search?%s", p.baseURL, params.Encode())
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", "poisq-lyrics/1.0")
+
+		resp, err := p.client.Do(req)
+		if err != nil {
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			continue
+		}
+
+		var results []lrclibResponse
+		err = json.NewDecoder(resp.Body).Decode(&results)
+		resp.Body.Close()
+		if err != nil || len(results) == 0 {
+			continue
+		}
+
+		// Приоритет 1: Ищем запись с синхронизированным LRC
+		for _, rec := range results {
+			if rec.SyncedLyrics != "" {
+				if q.Duration > 0 && rec.Duration > 0 {
+					diff := math.Abs(rec.Duration - q.Duration.Seconds())
+					if diff > p.tolerance.Seconds() {
+						continue
+					}
+				}
+				if MatchTrack(q, rec.ArtistName, rec.TrackName) {
+					return p.convertRecord(&rec)
+				}
 			}
 		}
 
-		if rec.SyncedLyrics != "" || rec.PlainLyrics != "" || rec.Instrumental {
-			return p.convertRecord(&rec)
+		// Приоритет 2: Запись с обычным текстом или инструментальная
+		for _, rec := range results {
+			if rec.PlainLyrics != "" || rec.Instrumental {
+				if q.Duration > 0 && rec.Duration > 0 {
+					diff := math.Abs(rec.Duration - q.Duration.Seconds())
+					if diff > p.tolerance.Seconds() {
+						continue
+					}
+				}
+				if MatchTrack(q, rec.ArtistName, rec.TrackName) {
+					return p.convertRecord(&rec)
+				}
+			}
 		}
 	}
 
@@ -168,10 +201,15 @@ func (p *CustomLrclibProvider) searchFallback(ctx context.Context, q SearchQuery
 }
 
 func (p *CustomLrclibProvider) convertRecord(rec *lrclibResponse) (*Lyrics, error) {
+	dur := time.Duration(rec.Duration * float64(time.Second))
 	if rec.Instrumental {
 		return &Lyrics{
 			Kind:         KindInstrumental,
 			Instrumental: true,
+			Artist:       rec.ArtistName,
+			Title:        rec.TrackName,
+			Album:        rec.AlbumName,
+			Duration:     dur,
 			Source:       p.id,
 			CachedAt:     time.Now(),
 		}, nil
@@ -199,6 +237,10 @@ func (p *CustomLrclibProvider) convertRecord(rec *lrclibResponse) (*Lyrics, erro
 		PlainLyrics:  plain,
 		SyncedLyrics: rec.SyncedLyrics,
 		Lines:        lines,
+		Artist:       rec.ArtistName,
+		Title:        rec.TrackName,
+		Album:        rec.AlbumName,
+		Duration:     dur,
 		Source:       p.id,
 		CachedAt:     time.Now(),
 	}, nil

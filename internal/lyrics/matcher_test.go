@@ -6,6 +6,7 @@
 package lyrics
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -192,5 +193,69 @@ func TestMatcher_ScoreCandidate(t *testing.T) {
 	if scoreCensored.Total >= scoreClean.Total {
 		t.Errorf("Цензурированный кандидат должен иметь более низкий балл, got clean=%v, censored=%v",
 			scoreClean.Total, scoreCensored.Total)
+	}
+}
+
+func TestMatcher_DefectiveLyricsAndVariants(t *testing.T) {
+	// 1. Дефектный текст из скриншота пользователя: начинается со 2-го куплета
+	defective := `6 Contributors
+[Куплет 2: Найк Брозов, Ruslana & Вместе]
+О, жизнь, ты прекрасна
+О, жизнь, ты прекрасна вполне`
+
+	if !IsDefectiveLyrics(defective) {
+		t.Errorf("Ожидалось, что дефектный текст (начинающийся со 2-го куплета) будет отбракован")
+	}
+
+	// 2. Нормальный текст песни
+	normal := `[Куплет 1]
+Я знаю сам, куда иду
+[Припев]
+О, жизнь, ты прекрасна вполне`
+	if IsDefectiveLyrics(normal) {
+		t.Errorf("Нормальный текст песни не должен считаться дефектным")
+	}
+
+	// 3. Заглушка
+	if !IsDefectiveLyrics("Текст песни еще не добавлен") {
+		t.Errorf("Заглушка отсутствия текста должна быть отбракована")
+	}
+
+	// 4. Генерация вариантов для МакСим
+	vars := GenerateArtistVariants("максим")
+	foundMakSim := false
+	for _, v := range vars {
+		if v == "МакSим" {
+			foundMakSim = true
+			break
+		}
+	}
+	if !foundMakSim {
+		t.Errorf("Для 'максим' должен быть сгенерирован вариант 'МакSим', получено: %v", vars)
+	}
+}
+
+func TestGenius_CleanGeniusText(t *testing.T) {
+	raw := `6 Contributors
+Lyrics for Song
+[Куплет 1]
+Я знаю сам, куда иду
+You might also like
+[Припев]
+О, жизнь, ты прекрасна
+15Embed`
+
+	cleaned := cleanGeniusText(raw)
+	if strings.Contains(cleaned, "6 Contributors") {
+		t.Errorf("В очищенном тексте осталась строка Contributors: %s", cleaned)
+	}
+	if strings.Contains(cleaned, "You might also like") {
+		t.Errorf("В очищенном тексте осталась строка You might also like: %s", cleaned)
+	}
+	if strings.Contains(cleaned, "15Embed") {
+		t.Errorf("В очищенном тексте остался Embed: %s", cleaned)
+	}
+	if !strings.Contains(cleaned, "Я знаю сам, куда иду") {
+		t.Errorf("Потеряны полезные строки песни: %s", cleaned)
 	}
 }
