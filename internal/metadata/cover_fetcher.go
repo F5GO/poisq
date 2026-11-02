@@ -67,26 +67,71 @@ func NewCoverFetcher(guard *security.PathGuard) *CoverFetcher {
 }
 
 // InspectFolderCover проверяет наличие в папке качественной обложки.
-// Если в папке уже есть cover.jpg / folder.jpg размером >= 500x500, сервис его не трогает.
+// Поддерживает регистронезависимый поиск (Cover.JPG, Folder.png, album.jpg и др.).
+// Если в папке уже есть обложка размером >= 500x500, сервис ее не трогает.
 func (cf *CoverFetcher) InspectFolderCover(folderPath string) (hasCover bool, width int, height int, existingFile string) {
 	safeFolder, err := cf.guard.ValidateTarget(folderPath, false)
 	if err != nil {
 		return false, 0, 0, ""
 	}
 
-	for _, name := range standardCoverFilenames {
-		candidatePath := filepath.Join(safeFolder, name)
-		f, err := os.Open(candidatePath)
-		if err != nil {
+	entries, err := os.ReadDir(safeFolder)
+	if err != nil {
+		return false, 0, 0, ""
+	}
+
+	// 1-й проход: ищем файлы с приоритетными именами (cover, folder, front, album, art)
+	for _, entry := range entries {
+		if entry.IsDir() {
 			continue
 		}
-		cfg, _, decErr := image.DecodeConfig(f)
-		_ = f.Close()
-		if decErr == nil && cfg.Width > 0 && cfg.Height > 0 {
-			return true, cfg.Width, cfg.Height, candidatePath
+		nameLower := strings.ToLower(entry.Name())
+		ext := filepath.Ext(nameLower)
+		if ext != ".jpg" && ext != ".jpeg" && ext != ".png" {
+			continue
+		}
+
+		base := strings.TrimSuffix(nameLower, ext)
+		if base == "cover" || base == "folder" || base == "front" || base == "album" || base == "art" {
+			fullPath := filepath.Join(safeFolder, entry.Name())
+			if w, h, ok := readImageDimensions(fullPath); ok {
+				return true, w, h, fullPath
+			}
 		}
 	}
+
+	// 2-й проход: проверяем любые другие графические файлы в папке
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		nameLower := strings.ToLower(entry.Name())
+		ext := filepath.Ext(nameLower)
+		if ext != ".jpg" && ext != ".jpeg" && ext != ".png" {
+			continue
+		}
+
+		fullPath := filepath.Join(safeFolder, entry.Name())
+		if w, h, ok := readImageDimensions(fullPath); ok {
+			return true, w, h, fullPath
+		}
+	}
+
 	return false, 0, 0, ""
+}
+
+func readImageDimensions(path string) (int, int, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer f.Close()
+
+	cfg, _, err := image.DecodeConfig(f)
+	if err == nil && cfg.Width > 0 && cfg.Height > 0 {
+		return cfg.Width, cfg.Height, true
+	}
+	return 0, 0, false
 }
 
 // FindHighResCover ищет обложку сначала в Cover Art Archive (по Release MBID),
@@ -140,21 +185,69 @@ func (cf *CoverFetcher) FindHighResCover(ctx context.Context, releaseMBID, artis
 		return nil, err
 	}
 
+	normTargetArtist := strings.ToLower(strings.TrimSpace(artist))
+	normTargetAlbum := strings.ToLower(strings.TrimSpace(album))
+
+	// Исключаемые слова, если их нет в оригинальном названии альбома
+	disallowedWords := []string{"karaoke", "караоке", "tribute", "трибьют", "cover version", "acoustic version", "instrumental"}
+
+	var bestCandidate *CoverCandidate
+	highestScore := -1
+
 	for _, item := range parsed.Results {
 		if item.ArtworkURL100 == "" {
 			continue
 		}
-		// Заменяем 100x100bb.jpg на максимальное студийное разрешение Apple Music 3000x3000bb.jpg
-		highResURL := strings.ReplaceAll(item.ArtworkURL100, "100x100bb", "3000x3000bb")
-		return &CoverCandidate{
-			URL:    highResURL,
-			Source: "itunes",
-			Width:  3000,
-			Height: 3000,
-		}, nil
+
+		resArtist := strings.ToLower(strings.TrimSpace(item.ArtistName))
+		resAlbum := strings.ToLower(strings.TrimSpace(item.CollectionName))
+
+		// Проверяем на нежелательные релизы (караоке, трибьюты)
+		isDisallowed := false
+		for _, dw := range disallowedWords {
+			if strings.Contains(resAlbum, dw) && !strings.Contains(normTargetAlbum, dw) {
+				isDisallowed = true
+				break
+			}
+			if strings.Contains(resArtist, dw) && !strings.Contains(normTargetArtist, dw) {
+				isDisallowed = true
+				break
+			}
+		}
+		if isDisallowed {
+			continue
+		}
+
+		score := 0
+		// Точное совпадение альбома и артиста
+		if resAlbum == normTargetAlbum && resArtist == normTargetArtist {
+			score = 100
+		} else if strings.Contains(resAlbum, normTargetAlbum) || strings.Contains(normTargetAlbum, resAlbum) {
+			score = 50
+			if strings.Contains(resArtist, normTargetArtist) || strings.Contains(normTargetArtist, resArtist) {
+				score += 30
+			}
+		} else if strings.Contains(resArtist, normTargetArtist) {
+			score = 20
+		}
+
+		if score > highestScore && score >= 50 {
+			highestScore = score
+			highResURL := strings.ReplaceAll(item.ArtworkURL100, "100x100bb", "3000x3000bb")
+			bestCandidate = &CoverCandidate{
+				URL:    highResURL,
+				Source: "itunes",
+				Width:  3000,
+				Height: 3000,
+			}
+		}
 	}
 
-	return nil, fmt.Errorf("обложка для %q - %q не найдена", artist, album)
+	if bestCandidate != nil {
+		return bestCandidate, nil
+	}
+
+	return nil, fmt.Errorf("достоверная обложка для %q - %q не найдена в iTunes", artist, album)
 }
 
 // DownloadAndSaveAtomically скачивает обложку по URL, проверяет через image.DecodeConfig,

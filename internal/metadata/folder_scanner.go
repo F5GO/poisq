@@ -347,16 +347,21 @@ func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (in
 			}
 		}
 
-		// 2. Проверка обложки папки (если нет cover.jpg >= 500x500 — ищем в Cover Art Archive / iTunes 3000x3000)
-		hasCov, w, h, _ := s.coverFetch.InspectFolderCover(folderPath)
+		// 2. Проверка обложки папки (если нет качественной cover.jpg >= 500x500 — ищем в Cover Art Archive / iTunes 3000x3000)
+		hasCov, w, h, existingFile := s.coverFetch.InspectFolderCover(folderPath)
 		if !hasCov || w < 500 || h < 500 {
 			if cand, err := s.coverFetch.FindHighResCover(ctx, releaseMBID, consensus.DominantArtist, consensus.DominantAlbum); err == nil && cand != nil {
+				// Защита: если существующая обложка уже больше или равна по разрешению, не меняем на худшую
+				if hasCov && cand.Width <= w && cand.Height <= h {
+					continue
+				}
 				curCovJSON, _ := json.Marshal(map[string]any{
-					"hasCover": hasCov,
-					"width":    w,
-					"height":   h,
-					"artist":   consensus.DominantArtist,
-					"album":    consensus.DominantAlbum,
+					"hasCover":     hasCov,
+					"width":        w,
+					"height":       h,
+					"existingFile": existingFile,
+					"artist":       consensus.DominantArtist,
+					"album":        consensus.DominantAlbum,
 				})
 				propCovJSON, _ := json.Marshal(map[string]any{
 					"coverUrl": cand.URL,

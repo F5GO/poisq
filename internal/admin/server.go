@@ -35,6 +35,7 @@ type AdminServer struct {
 	stagingSvc  *tagger.StagingService
 	lrcWriter   *lyrics.AtomicLRCWriter
 	worker      *worker.QueueProcessor
+	guard       *security.PathGuard
 	openNavDB   func() (*sql.DB, error)
 	handler     http.Handler
 }
@@ -50,6 +51,7 @@ func NewAdminServer(
 	stagingSvc *tagger.StagingService,
 	lrcWriter *lyrics.AtomicLRCWriter,
 	workerProc *worker.QueueProcessor,
+	guard *security.PathGuard,
 	openNavDB func() (*sql.DB, error),
 ) *AdminServer {
 	s := &AdminServer{
@@ -62,6 +64,7 @@ func NewAdminServer(
 		stagingSvc:  stagingSvc,
 		lrcWriter:   lrcWriter,
 		worker:      workerProc,
+		guard:       guard,
 		openNavDB:   openNavDB,
 	}
 
@@ -78,6 +81,8 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/staging/undo", s.handleStagingUndo)
 
 	mux.HandleFunc("/api/v1/tracks", s.handleTracksList)
+	mux.HandleFunc("/api/v1/tracks/stream", s.handleTrackStream)
+	mux.HandleFunc("/api/v1/covers/local", s.handleLocalCover)
 	mux.HandleFunc("/api/v1/lyrics/cache", s.handleLyricsCache)
 	mux.HandleFunc("/api/v1/lyrics/save", s.handleLyricsSave)
 	mux.HandleFunc("/api/v1/lyrics/enqueue", s.handleLyricsEnqueue)

@@ -32,6 +32,7 @@ type TrackRecord struct {
 	LyricsStatus  string `json:"lyricsStatus"`
 	ActiveSource  string `json:"activeSource"`
 	ActiveLyrics  string `json:"activeLyrics"`
+	LyricsBody    string `json:"lyricsBody"`
 	LrcFileSynced bool   `json:"lrcFileSynced"`
 	UpdatedAt     int64  `json:"updatedAt"`
 }
@@ -82,6 +83,12 @@ func (r *TrackRepository) UpsertTrack(t TrackRecord) error {
 	lrcSyncedInt := 0
 	if t.LrcFileSynced {
 		lrcSyncedInt = 1
+	}
+
+	// Защита от дублей: если Navidrome перегенерировал ID трека при обновлении тегов,
+	// удаляем старую запись с тем же file_path, но другим ID
+	if t.FilePath != "" {
+		_, _ = r.db.Exec(`DELETE FROM tracks WHERE file_path = ? AND id != ?`, t.FilePath, t.ID)
 	}
 
 	_, err := r.db.Exec(`
@@ -276,6 +283,7 @@ func scanTrackRow(row *sql.Row) (*TrackRecord, error) {
 	t.HasCover = hasCover == 1
 	t.IsMojibake = isMojibake == 1
 	t.LrcFileSynced = lrcSynced == 1
+	t.LyricsBody = t.ActiveLyrics
 	return &t, nil
 }
 
@@ -293,5 +301,6 @@ func scanTrackRows(rows *sql.Rows) (*TrackRecord, error) {
 	t.HasCover = hasCover == 1
 	t.IsMojibake = isMojibake == 1
 	t.LrcFileSynced = lrcSynced == 1
+	t.LyricsBody = t.ActiveLyrics
 	return &t, nil
 }
