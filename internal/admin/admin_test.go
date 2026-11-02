@@ -66,7 +66,7 @@ func TestAdminServerEndToEnd(t *testing.T) {
 	stagingSvc := tagger.NewStagingService(tagger.NewAtomicTagWriter(guard), coverFetch, trackRepo, stagingRepo)
 	workerProc := worker.NewQueueProcessor(jobRepo, trackRepo, cacheRepo, kp, tournament, nil, nil, lrcWriter)
 
-	srv := NewAdminServer(trackRepo, stagingRepo, jobRepo, cacheRepo, kp, scanner, stagingSvc, lrcWriter, workerProc, nil)
+	srv := NewAdminServer(trackRepo, stagingRepo, jobRepo, cacheRepo, kp, scanner, stagingSvc, lrcWriter, workerProc, guard, nil)
 
 	// 1. Проверка раздачи встроенного через //go:embed фронтенда (/)
 	reqUI := httptest.NewRequest(http.MethodGet, "/", nil)

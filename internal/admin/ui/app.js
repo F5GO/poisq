@@ -3,46 +3,60 @@
  * 
  * Назначение:
  * Обеспечивает полноценное взаимодействие панели управления (:4535) с REST API бэкенда:
- * 1. Дашборд фонотеки: получение живой статистики здоровья медиатеки, синхронизация с Navidrome (:30043)
- *    и запуск фонового глубокого аудита MusicBrainz / AcoustID.
- * 2. Караоке и LRC Менеджер: загрузка текстов треков, симуляция синхронизированного воспроизведения
- *    с таймкодами (Apple-style teleprompter), ручной редактор .lrc с атомарным сохранением рядом с файлом,
- *    запуск Турнира провайдеров (LRCLIB/Genius/Yandex) и AI-караоке (Groq Whisper Large v3 + Gemini).
- * 3. Staging-буфер рефакторинга: просмотр предложений Picard/Mojibake/Cover, поштучное или массовое
- *    применение изменений в аудиофайлы, отклонение и мгновенный откат (Undo).
- * 4. Пул API-ключей: отображение статусов ротации (LRU, 65s Cooldown, Exhausted Daily), модальное окно
- *    добавления ключей с явным выбором провайдера (Gemini, Groq, AcoustID, Yandex, Genius) и удаление.
- * 5. Всплывающие уведомления (Toasts) для мгновенной обратной связи без блокирующих alert().
+ * 1. Фонотека:
+ *    - Режимы просмотра: "Все треки", "Исполнители", "Альбомы".
+ *    - Быстрые фильтры по текстам (Все, Синхронные, Обычный текст, Без текста, Mojibake, Без обложки).
+ *    - Drawer (боковая шторка) подробной информации о треке по клику на строку.
+ *    - Статусы аудита и очереди (Пройден, В очереди, Обработка...) с мягкой индикацией.
+ *    - Отдельная кнопка «Караоке» для мгновенного перехода к песне.
+ * 2. Караоке и LRC Менеджер:
+ *    - Сайдбар со списком всех песен фонотеки, живым поиском и статусами текстов.
+ *    - Реальное воспроизведение аудиофайлов через HTML5 Audio и бэкенд-стриминг (/api/v1/tracks/stream).
+ *    - Плавный Apple-style суфлер, синхронизированный с аудиодорожкой по таймкодам [mm:ss.xx].
+ *    - Ручной редактор .lrc с атомарным сохранением прямо в папку с аудиофайлом.
+ *    - Запуск онлайн-турнира (LRCLIB/Genius/Yandex) и AI-караоке (Groq Whisper Large v3 + Gemini).
+ * 3. Staging-буфер рефакторинга:
+ *    - Наглядное side-by-side сравнение обложек (Текущая из папки vs Найденая в сети 3000x3000 HD).
+ *    - Защита от ухудшения качества: предложения только действительно лучших обложек.
+ *    - Чистый диф тегов: отображаются только измененные поля без лишних перечеркиваний.
+ * 4. Очередь фоновых задач (Jobs):
+ *    - Мониторинг задач воркера в реальном времени, пауза и возобновление очереди.
+ * 5. Пул API-ключей (AES-256-GCM):
+ *    - Маскированный ввод без спама автозаполнения браузерных менеджеров паролей.
  */
 
-// Состояние приложения
+// Глобальное состояние веб-интерфейса
 const state = {
   activeTab: "library",
+  viewMode: "tracks",     // "tracks" | "artists" | "albums"
+  filterMode: "all",      // "all" | "synced" | "plain" | "none" | "mojibake" | "no_cover"
+  searchQuery: "",
+
   tracks: [],
   selectedTrack: null,
   stagingItems: [],
   keys: [],
+  jobs: [],
+  workerPaused: false,
   lastAppliedStagingId: null,
-  
-  // Плеер караоке
+
+  // Караоке плеер
+  audioEl: null,
   isPlaying: false,
   currentSec: 0,
   totalSec: 0,
   lyrics: [],
   activeLyricIndex: -1,
-  timer: null,
 
-  // Поиск с дебаунсом
-  searchDebounceTimer: null
+  // Дебаунс
+  searchDebounceTimer: null,
+  karaokeSearchTimer: null
 };
 
 // -----------------------------------------------------------------------------
 // Вспомогательные утилиты и Toast-уведомления
 // -----------------------------------------------------------------------------
 
-/**
- * Выполняет сетевой запрос к REST API бэкенда (/api/v1).
- */
 async function fetchApi(endpoint, method = "GET", payload = null) {
   const options = {
     method,
@@ -60,9 +74,6 @@ async function fetchApi(endpoint, method = "GET", payload = null) {
   return data;
 }
 
-/**
- * Отображает немодальное всплывающее уведомление (Toast).
- */
 function showToast(message, type = "info") {
   const container = document.getElementById("toast-container");
   if (!container) return;
@@ -106,16 +117,6 @@ function formatDuration(sec) {
   return `${m < 10 ? "0" : ""}${m}:${s < 10 ? "0" : ""}${s}`;
 }
 
-function formatLrcTimestamp(sec) {
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  const ms = Math.floor((sec % 1) * 100);
-  return `${m < 10 ? "0" : ""}${m}:${s < 10 ? "0" : ""}${s}.${ms < 10 ? "0" : ""}${ms}`;
-}
-
-/**
- * Парсит LRC-строки формата [mm:ss.xx]Текст в массив { sec, text }.
- */
 function parseLRC(lrcText) {
   if (!lrcText) return [];
   const lines = [];
@@ -144,8 +145,12 @@ function parseLRC(lrcText) {
 // Инициализация при загрузке документа
 // -----------------------------------------------------------------------------
 document.addEventListener("DOMContentLoaded", () => {
+  state.audioEl = document.getElementById("audio-stream");
+
   initNavigation();
+  initViewControls();
   initPlayerControls();
+  initDrawer();
   initKeyModal();
   loadLibraryData();
 });
@@ -161,10 +166,10 @@ function initNavigation() {
     });
   });
 
-  // Действия в шапках панелей
+  // Действия в медиатеке
   document.getElementById("btn-sync-navidrome")?.addEventListener("click", syncNavidrome);
   document.getElementById("btn-run-audit")?.addEventListener("click", runMusicBrainzAudit);
-  
+
   // Staging действия
   document.getElementById("btn-apply-all-staging")?.addEventListener("click", applyAllStaging);
   document.getElementById("btn-discard-all-staging")?.addEventListener("click", discardAllStaging);
@@ -176,13 +181,9 @@ function initNavigation() {
   document.getElementById("btn-toggle-editor")?.addEventListener("click", toggleLrcEditor);
   document.getElementById("btn-save-raw-lrc")?.addEventListener("click", saveRawLrc);
 
-  // Поиск по трекам с дебаунсом
-  document.getElementById("track-search-input")?.addEventListener("input", (e) => {
-    clearTimeout(state.searchDebounceTimer);
-    state.searchDebounceTimer = setTimeout(() => {
-      searchTracks(e.target.value);
-    }, 250);
-  });
+  // Фоновые задачи
+  document.getElementById("btn-toggle-worker-pause")?.addEventListener("click", toggleWorkerPause);
+  document.getElementById("btn-refresh-jobs")?.addEventListener("click", loadJobsData);
 }
 
 function switchTab(tabName) {
@@ -196,13 +197,56 @@ function switchTab(tabName) {
   });
 
   if (tabName === "library") loadLibraryData();
+  if (tabName === "karaoke") {
+    renderKaraokeSidebar();
+  }
   if (tabName === "staging") loadStagingData();
+  if (tabName === "jobs") loadJobsData();
   if (tabName === "keys") loadKeysData();
 }
 
 // -----------------------------------------------------------------------------
-// 2. Медиатека и синхронизация
+// 2. Медиатека: режимы просмотра (Все треки, Исполнители, Альбомы), фильтры
 // -----------------------------------------------------------------------------
+function initViewControls() {
+  // Селектор режима (Все треки / Исполнители / Альбомы)
+  document.querySelectorAll("#view-mode-selector .seg-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#view-mode-selector .seg-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.viewMode = btn.dataset.view;
+      renderCurrentLibraryView();
+    });
+  });
+
+  // Фильтры по текстам
+  document.querySelectorAll("#lyrics-filter-pills .filter-pill").forEach(pill => {
+    pill.addEventListener("click", () => {
+      document.querySelectorAll("#lyrics-filter-pills .filter-pill").forEach(p => p.classList.remove("active"));
+      pill.classList.add("active");
+      state.filterMode = pill.dataset.filter;
+      loadTracks();
+    });
+  });
+
+  // Поиск по медиатеке с дебаунсом
+  document.getElementById("track-search-input")?.addEventListener("input", (e) => {
+    clearTimeout(state.searchDebounceTimer);
+    state.searchDebounceTimer = setTimeout(() => {
+      state.searchQuery = e.target.value.trim();
+      loadTracks();
+    }, 250);
+  });
+
+  // Поиск в сайдбаре караоке
+  document.getElementById("karaoke-search-input")?.addEventListener("input", (e) => {
+    clearTimeout(state.karaokeSearchTimer);
+    state.karaokeSearchTimer = setTimeout(() => {
+      renderKaraokeSidebar(e.target.value.trim());
+    }, 200);
+  });
+}
+
 async function loadLibraryData() {
   try {
     const health = await fetchApi("/health");
@@ -211,6 +255,7 @@ async function loadLibraryData() {
     const synced = (stats.lyricsSynced || 0) + (stats.lyricsVerified || 0);
     const pct = total > 0 ? Math.round((synced / total) * 100) : 0;
     const stagingCount = stats.pendingStaging || 0;
+    const jobsCount = stats.pendingJobs || 0;
 
     const summary = document.getElementById("library-summary-desc");
     if (summary) {
@@ -219,57 +264,106 @@ async function loadLibraryData() {
     const badgeStaging = document.getElementById("badge-staging-count");
     if (badgeStaging) badgeStaging.textContent = stagingCount;
 
+    const badgeJobs = document.getElementById("badge-jobs-count");
+    if (badgeJobs) badgeJobs.textContent = jobsCount;
+
     await loadTracks();
   } catch (err) {
-    console.warn("Ошибка получения статистики:", err);
+    console.warn("Ошибка получения статистики фонотеки:", err);
     await loadTracks();
   }
 }
 
-async function loadTracks(query = "") {
-  const tbody = document.getElementById("tracks-tbody");
-  const countLabel = document.getElementById("tracks-count-label");
-  if (!tbody) return;
-
+async function loadTracks() {
   try {
-    const endpoint = query ? `/tracks?q=${encodeURIComponent(query)}` : "/tracks";
+    let endpoint = `/tracks?limit=250`;
+    if (state.filterMode && state.filterMode !== "all") {
+      endpoint += `&status=${encodeURIComponent(state.filterMode)}`;
+    }
+    if (state.searchQuery) {
+      endpoint += `&q=${encodeURIComponent(state.searchQuery)}`;
+    }
+
     const res = await fetchApi(endpoint);
     state.tracks = res.tracks || [];
 
+    const countLabel = document.getElementById("tracks-count-label");
     if (countLabel) countLabel.textContent = `Показано: ${state.tracks.length} треков`;
-    renderTracksTable(state.tracks);
+
+    renderCurrentLibraryView();
+    renderKaraokeSidebar();
   } catch (err) {
     console.error("Ошибка загрузки треков:", err);
-    tbody.innerHTML = `<tr><td colspan="6" class="cell-empty" style="color: var(--color-crimson);">Не удалось загрузить треки: ${escapeHtml(err.message)}</td></tr>`;
+    const content = document.getElementById("library-view-content");
+    if (content) {
+      content.innerHTML = `<div class="cell-empty" style="color: var(--color-crimson);">Не удалось загрузить треки: ${escapeHtml(err.message)}</div>`;
+    }
   }
 }
 
-function searchTracks(query) {
-  loadTracks(query.trim());
-}
+function renderCurrentLibraryView() {
+  const container = document.getElementById("library-view-content");
+  if (!container) return;
 
-function renderTracksTable(tracks) {
-  const tbody = document.getElementById("tracks-tbody");
-  if (!tbody) return;
-
-  if (tracks.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="cell-empty">В медиатеке пока нет треков. Нажмите «Синхронизация Navidrome» для сканирования.</td></tr>`;
+  if (state.tracks.length === 0) {
+    container.innerHTML = `<div class="cell-empty">В медиатеке нет подходящих треков. Нажмите «Синхронизация Navidrome» для сканирования.</div>`;
     return;
   }
 
+  if (state.viewMode === "tracks") {
+    renderTracksTable(container, state.tracks);
+  } else if (state.viewMode === "artists") {
+    renderArtistsGrid(container, state.tracks);
+  } else if (state.viewMode === "albums") {
+    renderAlbumsGrid(container, state.tracks);
+  }
+}
+
+function renderTracksTable(container, tracks) {
+  container.innerHTML = `
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th class="col-num mono">#</th>
+            <th>Трек</th>
+            <th>Альбом</th>
+            <th>Длительность</th>
+            <th>Текст</th>
+            <th>Аудит</th>
+            <th class="col-actions">Действие</th>
+          </tr>
+        </thead>
+        <tbody id="tracks-tbody"></tbody>
+      </table>
+    </div>
+  `;
+
+  const tbody = document.getElementById("tracks-tbody");
   tbody.innerHTML = tracks.map((t, idx) => {
     const num = (idx + 1 < 10 ? "0" : "") + (idx + 1);
+
+    // Статус текста песни
     let statusBadge = `<span class="text-muted">Нет текста</span>`;
     if (t.lyricsStatus === "verified") {
       statusBadge = `<span class="text-emerald">✓ Проверен</span>`;
     } else if (t.lyricsStatus === "synced") {
       statusBadge = `<span class="text-emerald">Синхронный</span>`;
     } else if (t.lyricsStatus === "plain") {
-      statusBadge = `<span class="text-secondary">Обычный текст</span>`;
+      statusBadge = `<span class="text-secondary">Обычный</span>`;
+    }
+
+    // Статус аудита / очереди
+    let auditBadge = `<span class="badge-audit-ok">✓ Готов</span>`;
+    let rowClass = "";
+    if (t.isMojibake) {
+      auditBadge = `<span class="badge-audit-queued">Mojibake</span>`;
+    } else if (!t.hasCover || (t.coverWidth > 0 && t.coverWidth < 500)) {
+      auditBadge = `<span class="badge-audit-queued">Без обложки</span>`;
     }
 
     return `
-      <tr onclick="openTrackInKaraoke('${escapeHtml(t.id)}')" style="cursor: pointer;">
+      <tr class="${rowClass}" onclick="openTrackDrawer('${escapeHtml(t.id)}')" style="cursor: pointer;">
         <td class="col-num mono">${num}</td>
         <td>
           <div style="font-weight: 500; color: #ffffff;">${escapeHtml(t.title || "Без названия")}</div>
@@ -278,6 +372,7 @@ function renderTracksTable(tracks) {
         <td style="color: var(--text-secondary);">${escapeHtml(t.album || "—")}</td>
         <td class="mono" style="color: var(--text-muted);">${formatDuration(t.duration || 0)}</td>
         <td>${statusBadge}</td>
+        <td>${auditBadge}</td>
         <td class="col-actions">
           <button class="btn btn-secondary" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">Караоке</button>
         </td>
@@ -286,66 +381,216 @@ function renderTracksTable(tracks) {
   }).join("");
 }
 
-async function syncNavidrome() {
-  const btn = document.getElementById("btn-sync-navidrome");
-  const oldText = btn ? btn.textContent : "";
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "Синхронизация...";
+function renderArtistsGrid(container, tracks) {
+  const map = new Map();
+  for (const t of tracks) {
+    const artist = t.artist || "Неизвестный исполнитель";
+    map.set(artist, (map.get(artist) || 0) + 1);
   }
 
-  showToast("Запущена синхронизация с базой Navidrome...", "info");
+  const artists = Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  container.innerHTML = `
+    <div class="artist-grid">
+      ${artists.map(([name, count]) => `
+        <div class="artist-card" onclick="filterByArtist('${escapeHtml(name)}')">
+          <div class="group-title">${escapeHtml(name)}</div>
+          <div class="group-desc">${count} треков в медиатеке</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
 
-  try {
-    const res = await fetchApi("/scan/sync", "POST");
-    showToast(`✓ Синхронизация завершена: обновлено ${res.syncedTracks} треков`, "success");
-    await loadLibraryData();
-  } catch (err) {
-    showToast(`Ошибка синхронизации: ${err.message}`, "error");
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = oldText;
+function renderAlbumsGrid(container, tracks) {
+  const map = new Map();
+  for (const t of tracks) {
+    const key = (t.artist || "") + " — " + (t.album || "Без альбома");
+    if (!map.has(key)) {
+      map.set(key, {
+        album: t.album || "Без альбома",
+        artist: t.artist || "Неизвестный исполнитель",
+        count: 0,
+        folderPath: t.folderPath,
+        hasCover: t.hasCover
+      });
     }
+    map.get(key).count++;
+  }
+
+  const albums = Array.from(map.values()).sort((a, b) => a.album.localeCompare(b.album));
+  container.innerHTML = `
+    <div class="album-grid">
+      ${albums.map(alb => {
+        const coverSrc = alb.hasCover && alb.folderPath
+          ? `/api/v1/covers/local?path=${encodeURIComponent(alb.folderPath + "/cover.jpg")}`
+          : "";
+        return `
+          <div class="album-card" onclick="filterByAlbum('${escapeHtml(alb.album)}')">
+            ${coverSrc ? `<img src="${coverSrc}" class="album-cover-img" alt="Обложка" loading="lazy" onerror="this.style.display='none'"/>` : `<div class="album-cover-img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:24px;">♪</div>`}
+            <div class="group-title">${escapeHtml(alb.album)}</div>
+            <div class="group-desc">${escapeHtml(alb.artist)} · ${alb.count} треков</div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function filterByArtist(artist) {
+  document.getElementById("track-search-input").value = artist;
+  state.searchQuery = artist;
+  state.viewMode = "tracks";
+  document.querySelectorAll("#view-mode-selector .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.view === "tracks"));
+  loadTracks();
+}
+
+function filterByAlbum(album) {
+  document.getElementById("track-search-input").value = album;
+  state.searchQuery = album;
+  state.viewMode = "tracks";
+  document.querySelectorAll("#view-mode-selector .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.view === "tracks"));
+  loadTracks();
+}
+
+// -----------------------------------------------------------------------------
+// 3. Drawer подробной информации о треке
+// -----------------------------------------------------------------------------
+function initDrawer() {
+  const drawer = document.getElementById("drawer-track-detail");
+  const closeBtn = document.getElementById("btn-close-drawer");
+
+  closeBtn?.addEventListener("click", () => drawer?.classList.add("hidden"));
+  drawer?.addEventListener("click", (e) => {
+    if (e.target === drawer) drawer.classList.add("hidden");
+  });
+}
+
+async function openTrackDrawer(trackId) {
+  const track = state.tracks.find(t => t.id === trackId);
+  if (!track) return;
+
+  const drawer = document.getElementById("drawer-track-detail");
+  const titleEl = document.getElementById("drawer-track-title");
+  const bodyEl = document.getElementById("drawer-track-body");
+
+  if (titleEl) titleEl.textContent = track.title || "Без названия";
+
+  const coverUrl = track.hasCover && track.folderPath
+    ? `/api/v1/covers/local?path=${encodeURIComponent(track.folderPath + "/cover.jpg")}`
+    : "";
+
+  let lyricsStatusDesc = "Отсутствует";
+  if (t.lyricsStatus === "verified") lyricsStatusDesc = "✓ Проверен";
+  else if (t.lyricsStatus === "synced") lyricsStatusDesc = "Синхронизирован (.lrc)";
+  else if (t.lyricsStatus === "plain") lyricsStatusDesc = "Обычный текст (без таймкодов)";
+
+  const content = track.activeLyrics || track.lyricsBody || "";
+
+  bodyEl.innerHTML = `
+    <div style="display: flex; gap: 16px; align-items: center;">
+      <div class="drawer-cover-wrap">
+        ${coverUrl 
+          ? `<img src="${coverUrl}" class="drawer-cover-img" alt="Обложка" onerror="this.parentElement.innerHTML='<div style=\\'display:flex;height:100%;align-items:center;justify-content:center;color:var(--text-muted);font-size:32px;\\'>♪</div>'"/>` 
+          : `<div style="display:flex;height:100%;align-items:center;justify-content:center;color:var(--text-muted);font-size:32px;">♪</div>`
+        }
+      </div>
+      <div>
+        <div style="font-size: 16px; font-weight: 600; color: #ffffff;">${escapeHtml(track.title || "—")}</div>
+        <div style="font-size: 13px; color: var(--text-secondary); margin-top: 2px;">${escapeHtml(track.artist || "—")}</div>
+        <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${escapeHtml(track.album || "—")}</div>
+      </div>
+    </div>
+
+    <div class="drawer-meta-list">
+      <div class="drawer-meta-row">
+        <span class="drawer-meta-label">Длительность</span>
+        <span class="drawer-meta-val mono">${formatDuration(track.duration || 0)}</span>
+      </div>
+      <div class="drawer-meta-row">
+        <span class="drawer-meta-label">Год / Номер</span>
+        <span class="drawer-meta-val">${track.year || "—"} · #${track.trackNumber || "—"}</span>
+      </div>
+      <div class="drawer-meta-row">
+        <span class="drawer-meta-label">Статус текста</span>
+        <span class="drawer-meta-val">${escapeHtml(lyricsStatusDesc)}</span>
+      </div>
+      <div class="drawer-meta-row">
+        <span class="drawer-meta-label">Источник</span>
+        <span class="drawer-meta-val mono">${escapeHtml(track.activeSource || "—")}</span>
+      </div>
+      <div class="drawer-meta-row">
+        <span class="drawer-meta-label">Файл</span>
+        <span class="drawer-meta-val mono" style="font-size: 11px;">${escapeHtml(track.filePath || "—")}</span>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+      <button class="btn btn-primary" onclick="openTrackInKaraoke('${escapeHtml(track.id)}'); document.getElementById('drawer-track-detail').classList.add('hidden');">
+        🎤 Запустить в Караоке-плеере
+      </button>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+        <button class="btn btn-secondary" onclick="enqueueSingleTournament('${escapeHtml(track.id)}')">
+          LRC Турнир
+        </button>
+        <button class="btn btn-secondary" onclick="enqueueSingleGroq('${escapeHtml(track.id)}')">
+          AI Караоке (Groq)
+        </button>
+      </div>
+    </div>
+
+    ${content ? `
+      <div style="margin-top: 10px;">
+        <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">Предпросмотр текста:</div>
+        <pre class="raw-textarea mono" style="height: 120px; font-size: 11px; padding: 8px;" readonly>${escapeHtml(content.slice(0, 300) + (content.length > 300 ? "..." : ""))}</pre>
+      </div>
+    ` : ""}
+  `;
+
+  drawer?.classList.remove("hidden");
+}
+
+async function enqueueSingleTournament(trackId) {
+  try {
+    await fetchApi("/lyrics/enqueue", "POST", { trackId, jobType: "tournament" });
+    showToast("✓ Задача турнира поставлена в очередь воркера", "success");
+    loadJobsData();
+  } catch (err) {
+    showToast(`Ошибка: ${err.message}`, "error");
   }
 }
 
-async function runMusicBrainzAudit() {
-  const btn = document.getElementById("btn-run-audit");
-  const oldText = btn ? btn.textContent : "";
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "Запуск аудита...";
-  }
-
-  showToast("Запущен аудит MusicBrainz и поиск обложек в фоне...", "info");
-
+async function enqueueSingleGroq(trackId) {
   try {
-    const res = await fetchApi("/scan/audit", "POST", { limitFolders: 50 });
-    showToast(res.message || "Аудит запущен! Результаты появятся в Staging-буфере.", "success");
-    
-    // Переключаемся на Staging или обновляем бейдж через 2 секунды
-    setTimeout(() => {
-      loadLibraryData();
-    }, 2000);
+    await fetchApi("/lyrics/enqueue", "POST", { trackId, jobType: "whisper_karaoke" });
+    showToast("✓ Задача AI Караоке (Groq Whisper) поставлена в очередь", "success");
+    loadJobsData();
   } catch (err) {
-    showToast(`Ошибка запуска аудита: ${err.message}`, "error");
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = oldText;
-    }
+    showToast(`Ошибка: ${err.message}`, "error");
   }
 }
 
 // -----------------------------------------------------------------------------
-// 3. Караоке и LRC Плеер
+// 4. Караоке и LRC Плеер (Реальное аудио + Синхронизация)
 // -----------------------------------------------------------------------------
 function initPlayerControls() {
   document.getElementById("btn-play")?.addEventListener("click", togglePlay);
   document.getElementById("btn-step-back")?.addEventListener("click", () => seekDelta(-10));
   document.getElementById("btn-step-forward")?.addEventListener("click", () => seekDelta(10));
   document.getElementById("scrub-bar")?.addEventListener("click", handleScrub);
+
+  if (state.audioEl) {
+    state.audioEl.addEventListener("timeupdate", () => {
+      state.currentSec = state.audioEl.currentTime;
+      updatePlayerUI();
+    });
+    state.audioEl.addEventListener("ended", () => {
+      state.isPlaying = false;
+      updatePlayIcons();
+    });
+    state.audioEl.addEventListener("error", () => {
+      console.warn("Ошибка аудиопотока браузера (файл может быть недоступен для прямого декодирования)");
+    });
+  }
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space" && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
@@ -355,16 +600,53 @@ function initPlayerControls() {
   });
 }
 
+function renderKaraokeSidebar(filterText = "") {
+  const container = document.getElementById("karaoke-tracks-list");
+  if (!container) return;
+
+  const q = filterText.toLowerCase();
+  const list = state.tracks.filter(t => 
+    !q || 
+    (t.title && t.title.toLowerCase().includes(q)) || 
+    (t.artist && t.artist.toLowerCase().includes(q))
+  );
+
+  if (list.length === 0) {
+    container.innerHTML = `<div class="cell-empty">Песни не найдены</div>`;
+    return;
+  }
+
+  container.innerHTML = list.map(t => {
+    const isSelected = state.selectedTrack && state.selectedTrack.id === t.id;
+    let badge = `<span class="text-muted" style="font-size: 10px;">Нет</span>`;
+    if (t.lyricsStatus === "verified" || t.lyricsStatus === "synced") {
+      badge = `<span class="text-emerald" style="font-size: 10px;">LRC</span>`;
+    } else if (t.lyricsStatus === "plain") {
+      badge = `<span class="text-secondary" style="font-size: 10px;">TXT</span>`;
+    }
+
+    return `
+      <div class="sidebar-track-item ${isSelected ? "active" : ""}" onclick="openTrackInKaraoke('${escapeHtml(t.id)}')">
+        <div class="sidebar-track-meta">
+          <div class="sidebar-track-title">${escapeHtml(t.title || "Без названия")}</div>
+          <div class="sidebar-track-artist">${escapeHtml(t.artist || "—")}</div>
+        </div>
+        <div>${badge}</div>
+      </div>
+    `;
+  }).join("");
+}
+
 async function openTrackInKaraoke(trackId) {
   let track = state.tracks.find(t => t.id === trackId);
-  
+
   try {
     const res = await fetchApi(`/lyrics/cache?trackId=${encodeURIComponent(trackId)}`);
     if (res.track) {
       track = res.track;
     }
   } catch (err) {
-    console.warn("Не удалось получить кэш текстов трека:", err);
+    console.warn("Не удалось получить свежие данные текстов трека:", err);
   }
 
   if (!track) {
@@ -384,28 +666,32 @@ async function openTrackInKaraoke(trackId) {
   const lrcPath = track.filePath ? track.filePath.replace(/\.[^/.]+$/, ".lrc") : "/music/track.lrc";
   document.getElementById("raw-file-path").textContent = lrcPath;
 
+  // ИСПРАВЛЕНИЕ БАГА: читаем activeLyrics с фоллбэком на lyricsBody!
+  const lyricsContent = (track.activeLyrics || track.lyricsBody || "").trim();
+
   const rawTextarea = document.getElementById("raw-lrc-textarea");
   if (rawTextarea) {
-    rawTextarea.value = track.lyricsBody || "";
+    rawTextarea.value = lyricsContent;
   }
 
   const providerLabel = document.getElementById("provider-info-label");
   if (providerLabel) {
-    if (track.lyricsSource) {
-      providerLabel.textContent = `Источник: ${track.lyricsSource.toUpperCase()}`;
+    const src = track.activeSource || track.lyricsSource;
+    if (src) {
+      providerLabel.textContent = `Источник: ${src.toUpperCase()}`;
     } else {
-      providerLabel.textContent = "Нет текста";
+      providerLabel.textContent = lyricsContent ? "Синхронизирован" : "Нет текста";
     }
   }
 
   // Парсим LRC
-  if (track.lyricsBody && track.lyricsBody.trim()) {
-    const parsed = parseLRC(track.lyricsBody);
+  if (lyricsContent) {
+    const parsed = parseLRC(lyricsContent);
     if (parsed.length > 0) {
       state.lyrics = parsed;
     } else {
-      // Обычный текст без таймкодов — разбиваем построчно
-      state.lyrics = track.lyricsBody.split("\n")
+      // Текст без таймкодов — раскладываем построчно с шагом 5 секунд
+      state.lyrics = lyricsContent.split("\n")
         .map(l => l.trim())
         .filter(l => l.length > 0)
         .map((text, idx) => ({ sec: idx * 5, text }));
@@ -414,7 +700,21 @@ async function openTrackInKaraoke(trackId) {
     state.lyrics = [];
   }
 
+  // Подключаем реальный аудиопоток к плееру
+  if (state.audioEl) {
+    state.audioEl.src = `/api/v1/tracks/stream?id=${encodeURIComponent(track.id)}`;
+    state.audioEl.load();
+    state.audioEl.play().then(() => {
+      state.isPlaying = true;
+      updatePlayIcons();
+    }).catch(() => {
+      state.isPlaying = false;
+      updatePlayIcons();
+    });
+  }
+
   renderLyricsTeleprompter();
+  renderKaraokeSidebar();
   updatePlayerUI();
   switchTab("karaoke");
 }
@@ -426,8 +726,8 @@ function renderLyricsTeleprompter() {
   if (state.lyrics.length === 0) {
     container.innerHTML = `
       <div class="lyric-line inactive" style="font-size: 16px; opacity: 0.7;">
-        Текст для этого трека еще не найден.<br>
-        Нажмите «Найти текст (LRC Турнир)» или «AI Караоке (Groq)» вверху.
+        Текст для этой песни еще не найден.<br>
+        Нажмите «Найти текст (LRC Турнир)» или «AI Караоке (Groq)» в шапке.
       </div>
     `;
     return;
@@ -442,12 +742,22 @@ function renderLyricsTeleprompter() {
 
 function seekToSecond(sec) {
   state.currentSec = Math.max(0, Math.min(state.totalSec, sec));
+  if (state.audioEl && !isNaN(state.audioEl.duration)) {
+    state.audioEl.currentTime = state.currentSec;
+    if (!state.isPlaying) {
+      state.audioEl.play();
+      state.isPlaying = true;
+      updatePlayIcons();
+    }
+  }
   updatePlayerUI();
-  if (!state.isPlaying) togglePlay();
 }
 
 function seekDelta(delta) {
   state.currentSec = Math.max(0, Math.min(state.totalSec, state.currentSec + delta));
+  if (state.audioEl && !isNaN(state.audioEl.duration)) {
+    state.audioEl.currentTime = state.currentSec;
+  }
   updatePlayerUI();
 }
 
@@ -457,31 +767,33 @@ function handleScrub(e) {
   const clickX = e.clientX - rect.left;
   const pct = Math.max(0, Math.min(1, clickX / rect.width));
   state.currentSec = Math.floor(pct * state.totalSec);
+  if (state.audioEl && !isNaN(state.audioEl.duration)) {
+    state.audioEl.currentTime = state.currentSec;
+  }
   updatePlayerUI();
 }
 
 function togglePlay() {
   state.isPlaying = !state.isPlaying;
+  if (state.audioEl) {
+    if (state.isPlaying) {
+      state.audioEl.play().catch(() => {});
+    } else {
+      state.audioEl.pause();
+    }
+  }
+  updatePlayIcons();
+}
+
+function updatePlayIcons() {
   const playIcon = document.getElementById("play-icon");
   const pauseIcon = document.getElementById("pause-icon");
-
   if (state.isPlaying) {
     playIcon?.classList.add("hidden");
     pauseIcon?.classList.remove("hidden");
-    clearInterval(state.timer);
-    state.timer = setInterval(() => {
-      state.currentSec++;
-      if (state.currentSec > state.totalSec) {
-        state.currentSec = 0;
-        togglePlay();
-        return;
-      }
-      updatePlayerUI();
-    }, 1000);
   } else {
     playIcon?.classList.remove("hidden");
     pauseIcon?.classList.add("hidden");
-    clearInterval(state.timer);
   }
 }
 
@@ -560,13 +872,15 @@ async function saveRawLrc() {
       showToast(`Текст сохранен в базу, но не удалось записать .lrc: ${res.writeError}`, "info");
     }
 
+    state.selectedTrack.activeLyrics = content;
     state.selectedTrack.lyricsBody = content;
     state.selectedTrack.lyricsStatus = res.status || "verified";
     state.lyrics = parseLRC(content);
-    
+
     renderLyricsTeleprompter();
     updatePlayerUI();
-    toggleLrcEditor(); // переключаем обратно в суфлер
+    toggleLrcEditor();
+    loadTracks();
   } catch (err) {
     showToast(`Ошибка сохранения: ${err.message}`, "error");
   }
@@ -584,6 +898,7 @@ async function enqueueLrcTournament() {
       jobType: "tournament"
     });
     showToast("✓ Задача турнира (LRCLIB, Genius, Yandex) поставлена в очередь воркера", "success");
+    loadJobsData();
   } catch (err) {
     showToast(`Ошибка: ${err.message}`, "error");
   }
@@ -601,13 +916,14 @@ async function enqueueWhisperKaraoke() {
       jobType: "whisper_karaoke"
     });
     showToast("✓ Задача AI Караоке (Groq Whisper Large v3 + Gemini) поставлена в очередь", "success");
+    loadJobsData();
   } catch (err) {
     showToast(`Ошибка: ${err.message}`, "error");
   }
 }
 
 // -----------------------------------------------------------------------------
-// 4. Staging-буфер рефакторинга
+// 5. Staging-буфер рефакторинга: Side-by-Side обложки и чистый диф тегов
 // -----------------------------------------------------------------------------
 async function loadStagingData() {
   const container = document.getElementById("staging-cards-container");
@@ -625,7 +941,7 @@ async function loadStagingData() {
   if (badgeStaging) badgeStaging.textContent = state.stagingItems.length;
 
   if (state.stagingItems.length === 0) {
-    container.innerHTML = `<div class="cell-empty">Очередь Staging пуста. Все теги каноничны. Запустите «MusicBrainz аудит» для поиска предложений.</div>`;
+    container.innerHTML = `<div class="cell-empty">Очередь Staging пуста. Все теги каноничны. Нажмите «MusicBrainz аудит» для поиска предложений.</div>`;
     return;
   }
 
@@ -635,61 +951,94 @@ async function loadStagingData() {
     try { curObj = JSON.parse(item.currentJson || "{}"); } catch (e) {}
     try { propObj = JSON.parse(item.proposedJson || "{}"); } catch (e) {}
 
-    let issueTitle = "Предложение по тегам";
-    if (item.changeType === "mojibake") issueTitle = "Битая кодировка (CP1251 → UTF-8)";
-    if (item.changeType === "musicbrainz") issueTitle = "Канонизация тегов MusicBrainz";
-    if (item.changeType === "artist_canonical") issueTitle = "Канонизация артиста";
-    if (item.changeType === "cover") issueTitle = "Найдена обложка альбома";
-
     const path = item.folderPath || item.targetId || "Аудиофайл";
 
-    // Специальное компактное и информативное отображение для обложек альбомов
+    // 1. Отображение только обложки (Side-by-Side без лишнего перечеркивания неизмененных тегов)
     if (item.changeType === "cover") {
-      const curCoverDesc = curObj.hasCover
-        ? `Низкое разрешение (${curObj.width || 0}×${curObj.height || 0} px)`
-        : `<span class="text-amber">Отсутствует в папке альбома</span>`;
+      const curHasCover = curObj.hasCover;
+      const curRes = curHasCover && curObj.width > 0 ? `${curObj.width}×${curObj.height} px` : "Отсутствует";
+      const curCoverSrc = curObj.existingFile
+        ? `/api/v1/covers/local?path=${encodeURIComponent(curObj.existingFile)}`
+        : "";
+
       const propRes = propObj.width && propObj.height ? `${propObj.width}×${propObj.height} px` : "3000×3000 px HD";
-      const sourceName = propObj.source === "itunes" ? "Apple Music / iTunes" : "Cover Art Archive";
+      const propSource = propObj.source === "itunes" ? "Apple Music / iTunes" : "Cover Art Archive";
 
       return `
         <div class="staging-card">
           <div class="staging-top">
             <div>
-              <div class="staging-issue">Найдена обложка альбома (Уверенность: ${item.confidence || 95}%)</div>
+              <div class="staging-issue">Найдена обложка альбома высокого разрешения (Уверенность: ${item.confidence || 95}%)</div>
               <div class="staging-path mono">${escapeHtml(path)}</div>
             </div>
             <div style="display: flex; gap: 8px;">
-              <button class="btn btn-secondary" onclick="dismissStaging(${item.id})">Пропустить</button>
-              <button class="btn btn-primary" onclick="applyStaging(${item.id})">Применить</button>
+              <button class="btn btn-secondary" onclick="dismissStaging(${item.id})">Оставить текущую</button>
+              <button class="btn btn-primary" onclick="applyStaging(${item.id})">Заменить на новую</button>
             </div>
           </div>
 
-          <div class="staging-diff-grid">
-            <div class="diff-cell">
-              <div class="diff-cell-head">Было (В папке альбома)</div>
-              <div><span class="text-muted">Артист:</span> ${escapeHtml(curObj.artist || "—")}</div>
-              <div><span class="text-muted">Альбом:</span> ${escapeHtml(curObj.album || "—")}</div>
-              <div style="margin-top: 4px;"><span class="text-muted">Файл обложки:</span> ${curCoverDesc}</div>
+          <div class="cover-compare-grid">
+            <div class="cover-side-card">
+              <div class="cover-side-title">Было (В папке альбома)</div>
+              ${curCoverSrc 
+                ? `<img src="${curCoverSrc}" class="cover-side-img" alt="Текущая" onerror="this.style.display='none'"/>` 
+                : `<div class="cover-side-img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);">Нет файла</div>`
+              }
+              <div class="cover-side-meta">Файл: ${curHasCover ? "Найден" : "Отсутствует"} · ${curRes}</div>
             </div>
-            <div class="diff-cell" style="display: flex; gap: 14px; align-items: flex-start;">
-              <div style="flex: 1;">
-                <div class="diff-cell-head text-emerald">Станет (Новый cover.jpg)</div>
-                <div><span class="text-muted">Разрешение:</span> <span class="diff-val-new">${escapeHtml(propRes)}</span></div>
-                <div><span class="text-muted">Источник:</span> <span class="text-light">${escapeHtml(sourceName)}</span></div>
-                <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
-                  ℹ️ <strong>Аудиофайлы не изменяются.</strong> В папку альбома будет атомарно скачан файл <code class="mono">cover.jpg</code> для отображения в Navidrome.
-                </div>
-              </div>
-              ${propObj.coverUrl ? `
-                <div style="width: 76px; height: 76px; border-radius: 6px; overflow: hidden; background: #000; flex-shrink: 0; border: 1px solid var(--border-active); box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
-                  <img src="${escapeHtml(propObj.coverUrl)}" alt="Обложка" style="width: 100%; height: 100%; object-fit: cover;" loading="lazy" />
-                </div>
-              ` : ""}
+
+            <div class="cover-side-card" style="border-color: rgba(16, 185, 129, 0.4);">
+              <div class="cover-side-title text-emerald">Станет (Новый cover.jpg)</div>
+              ${propObj.coverUrl 
+                ? `<img src="${escapeHtml(propObj.coverUrl)}" class="cover-side-img" alt="Новая" loading="lazy"/>` 
+                : `<div class="cover-side-img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);">♪</div>`
+              }
+              <div class="cover-side-meta">${propRes} · ${propSource}</div>
             </div>
+          </div>
+
+          <div style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
+            ℹ️ <strong>Аудиофайлы не изменяются.</strong> В папку альбома будет скачан файл <code class="mono">cover.jpg</code>.
           </div>
         </div>
       `;
     }
+
+    // 2. Отображение тегов: выводим ТОЛЬКО те поля, которые действительно изменились!
+    const diffRows = [];
+
+    if (curObj.artist !== propObj.artist && propObj.artist) {
+      diffRows.push({
+        label: "Артист",
+        oldVal: curObj.artist || "—",
+        newVal: propObj.artist
+      });
+    }
+    if (curObj.album !== propObj.album && propObj.album) {
+      diffRows.push({
+        label: "Альбом",
+        oldVal: curObj.album || "—",
+        newVal: propObj.album
+      });
+    }
+    if (curObj.title !== propObj.title && propObj.title) {
+      diffRows.push({
+        label: "Трек",
+        oldVal: curObj.title || "—",
+        newVal: propObj.title
+      });
+    }
+    if (curObj.year !== propObj.year && propObj.year) {
+      diffRows.push({
+        label: "Год",
+        oldVal: curObj.year || "—",
+        newVal: propObj.year
+      });
+    }
+
+    let issueTitle = "Канонизация тегов MusicBrainz";
+    if (item.changeType === "mojibake") issueTitle = "Битая кодировка (CP1251 → UTF-8)";
+    if (item.changeType === "artist_canonical") issueTitle = "Канонизация имени артиста";
 
     return `
       <div class="staging-card">
@@ -707,17 +1056,23 @@ async function loadStagingData() {
         <div class="staging-diff-grid">
           <div class="diff-cell">
             <div class="diff-cell-head">Было (В файле)</div>
-            <div><span class="text-muted">Артист:</span> <span class="diff-val-old">${escapeHtml(curObj.artist || curObj.albumArtist || "—")}</span></div>
-            <div><span class="text-muted">Альбом:</span> <span class="diff-val-old">${escapeHtml(curObj.album || "—")}</span></div>
-            ${curObj.title ? `<div><span class="text-muted">Трек:</span> <span class="diff-val-old">${escapeHtml(curObj.title)}</span></div>` : ""}
+            ${diffRows.map(r => `
+              <div><span class="text-muted">${r.label}:</span> <span class="diff-val-old">${escapeHtml(r.oldVal)}</span></div>
+            `).join("")}
           </div>
           <div class="diff-cell">
             <div class="diff-cell-head text-emerald">Станет (Канонично)</div>
-            <div><span class="text-muted">Артист:</span> <span class="diff-val-new">${escapeHtml(propObj.artist || propObj.albumArtist || "—")}</span></div>
-            <div><span class="text-muted">Альбом:</span> <span class="diff-val-new">${escapeHtml(propObj.album || "—")}</span></div>
-            ${propObj.title ? `<div><span class="text-muted">Трек:</span> <span class="diff-val-new">${escapeHtml(propObj.title)}</span></div>` : ""}
+            ${diffRows.map(r => `
+              <div><span class="text-muted">${r.label}:</span> <span class="diff-val-new">${escapeHtml(r.newVal)}</span></div>
+            `).join("")}
           </div>
         </div>
+
+        ${propObj.reason ? `
+          <div style="margin-top: 8px; font-size: 11px; color: var(--text-muted);">
+            ℹ️ ${escapeHtml(propObj.reason)}
+          </div>
+        ` : ""}
       </div>
     `;
   }).join("");
@@ -746,11 +1101,11 @@ async function dismissStaging(id) {
 
 async function applyAllStaging() {
   if (state.stagingItems.length === 0) {
-    showToast("Нет активных предложений для применения", "info");
+    showToast("Нет предложений для применения", "info");
     return;
   }
 
-  if (!confirm(`Применить все ${state.stagingItems.length} предложений в файлы фонотеки?`)) {
+  if (!confirm(`Применить все ${state.stagingItems.length} предложений в файлы медиатеки?`)) {
     return;
   }
 
@@ -761,16 +1116,13 @@ async function applyAllStaging() {
     await loadStagingData();
     await loadLibraryData();
   } catch (err) {
-    showToast(`Ошибка массового применения: ${err.message}`, "error");
+    showToast(`Ошибка применения: ${err.message}`, "error");
   }
 }
 
 async function discardAllStaging() {
   if (state.stagingItems.length === 0) return;
-
-  if (!confirm("Отклонить все текущие предложения Staging?")) {
-    return;
-  }
+  if (!confirm("Отклонить все текущие предложения Staging?")) return;
 
   for (const item of state.stagingItems) {
     try {
@@ -799,7 +1151,76 @@ async function undoStaging() {
 }
 
 // -----------------------------------------------------------------------------
-// 5. Пул API-ключей (AES-256-GCM)
+// 6. Очередь фоновых задач (Jobs)
+// -----------------------------------------------------------------------------
+async function loadJobsData() {
+  const tbody = document.getElementById("jobs-tbody");
+  const pauseBtn = document.getElementById("btn-toggle-worker-pause");
+  if (!tbody) return;
+
+  try {
+    const res = await fetchApi("/jobs");
+    state.jobs = res.jobs || [];
+    state.workerPaused = !!res.paused;
+
+    if (pauseBtn) {
+      pauseBtn.textContent = state.workerPaused ? "Возобновить воркер" : "Приостановить воркер";
+      pauseBtn.className = state.workerPaused ? "btn btn-primary" : "btn btn-secondary";
+    }
+
+    const badgeJobs = document.getElementById("badge-jobs-count");
+    const activeCount = state.jobs.filter(j => j.status === "pending" || j.status === "running").length;
+    if (badgeJobs) badgeJobs.textContent = activeCount;
+
+    if (state.jobs.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="7" class="cell-empty">Очередь фоновых задач пуста.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = state.jobs.map((j, idx) => {
+      let statusBadge = `<span class="badge-audit-queued">Ожидание</span>`;
+      if (j.status === "running") statusBadge = `<span class="badge-audit-processing">Выполняется...</span>`;
+      else if (j.status === "completed") statusBadge = `<span class="text-emerald">Завершена</span>`;
+      else if (j.status === "failed") statusBadge = `<span class="text-crimson" style="color:var(--color-crimson);">Ошибка</span>`;
+      else if (j.status === "waiting_quota") statusBadge = `<span class="text-amber">Ждет квоту API</span>`;
+
+      let jobTypeLabel = j.jobType;
+      if (j.jobType === "tournament") jobTypeLabel = "LRC Турнир";
+      else if (j.jobType === "whisper_karaoke") jobTypeLabel = "AI Караоке (Groq)";
+      else if (j.jobType === "full_pipeline") jobTypeLabel = "Полный конвейер";
+
+      const timeStr = j.createdAt ? new Date(j.createdAt * 1000).toLocaleTimeString() : "—";
+
+      return `
+        <tr>
+          <td class="col-num mono">${j.id}</td>
+          <td><span class="mono" style="font-size: 12px; color: #ffffff;">${escapeHtml(j.targetId)}</span></td>
+          <td>${escapeHtml(jobTypeLabel)}</td>
+          <td>${statusBadge}</td>
+          <td class="mono">${j.attempts || 0}</td>
+          <td class="mono text-muted" style="font-size: 11px;">${escapeHtml(j.lastError || "—")}</td>
+          <td class="mono text-muted">${timeStr}</td>
+        </tr>
+      `;
+    }).join("");
+  } catch (err) {
+    console.error("Ошибка загрузки задач:", err);
+  }
+}
+
+async function toggleWorkerPause() {
+  try {
+    const res = await fetchApi("/jobs", "POST", { paused: !state.workerPaused });
+    state.workerPaused = !!res.paused;
+    showToast(state.workerPaused ? "Воркер фоновых задач приостановлен" : "Воркер фоновых задач возобновлен", "info");
+    loadJobsData();
+  } catch (err) {
+    showToast(`Ошибка: ${err.message}`, "error");
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 7. Пул API-ключей (AES-256-GCM)
 // -----------------------------------------------------------------------------
 function initKeyModal() {
   const modal = document.getElementById("modal-add-key");
@@ -832,7 +1253,7 @@ function initKeyModal() {
     const apiKey = document.getElementById("key-secret")?.value.trim() || "";
 
     if (!provider || !apiKey) {
-      showToast("Выберите провайдера и укажите API-ключ", "error");
+      showToast("Выберите провайдера и укажите ключ", "error");
       return;
     }
 
@@ -900,9 +1321,7 @@ async function loadKeysData() {
 }
 
 async function deleteKey(id) {
-  if (!confirm("Удалить данный API-ключ из пула ротации?")) {
-    return;
-  }
+  if (!confirm("Удалить данный API-ключ из пула ротации?")) return;
 
   try {
     await fetchApi(`/keys?id=${id}`, "DELETE");
@@ -910,5 +1329,56 @@ async function deleteKey(id) {
     await loadKeysData();
   } catch (err) {
     showToast(`Ошибка удаления ключа: ${err.message}`, "error");
+  }
+}
+
+async function syncNavidrome() {
+  const btn = document.getElementById("btn-sync-navidrome");
+  const oldText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Синхронизация...";
+  }
+
+  showToast("Запущена синхронизация с Navidrome...", "info");
+
+  try {
+    const res = await fetchApi("/scan/sync", "POST");
+    showToast(`✓ Синхронизация завершена: обновлено ${res.syncedTracks} треков`, "success");
+    await loadLibraryData();
+  } catch (err) {
+    showToast(`Ошибка синхронизации: ${err.message}`, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }
+  }
+}
+
+async function runMusicBrainzAudit() {
+  const btn = document.getElementById("btn-run-audit");
+  const oldText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Запуск аудита...";
+  }
+
+  showToast("Запущен аудит MusicBrainz и поиск обложек в фоне...", "info");
+
+  try {
+    const res = await fetchApi("/scan/audit", "POST", { limitFolders: 50 });
+    showToast(res.message || "Аудит запущен! Результаты появятся в Staging-буфере.", "success");
+    setTimeout(() => {
+      loadLibraryData();
+      loadStagingData();
+    }, 2000);
+  } catch (err) {
+    showToast(`Ошибка запуска аудита: ${err.message}`, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }
   }
 }

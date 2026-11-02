@@ -662,3 +662,401 @@ body {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* --------------------------------------------------------------------------
+   Маскированный ввод ключей (защита от парольных менеджеров)
+   -------------------------------------------------------------------------- */
+.masked-key-input {
+  -webkit-text-security: disc;
+  text-security: disc;
+  letter-spacing: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Переключатели режимов медиатеки (Все треки, Исполнители, Альбомы) и фильтры
+   -------------------------------------------------------------------------- */
+.view-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.segmented-control {
+  display: inline-flex;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.seg-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.seg-btn.active {
+  background-color: var(--bg-surface-elevated);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.filter-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.filter-pill {
+  background-color: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.filter-pill:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-active);
+}
+
+.filter-pill.active {
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-active);
+  color: #ffffff;
+}
+
+/* --------------------------------------------------------------------------
+   Караоке Split-Layout (Сайдбар + Плеер)
+   -------------------------------------------------------------------------- */
+.karaoke-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 20px;
+  min-height: 600px;
+}
+
+@media (max-width: 900px) {
+  .karaoke-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.karaoke-sidebar {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-height: calc(100vh - 180px);
+}
+
+.sidebar-header {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.search-compact {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.sidebar-tracks {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.sidebar-track-item {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: background 0.15s ease;
+}
+
+.sidebar-track-item:hover {
+  background-color: var(--bg-surface-elevated);
+}
+
+.sidebar-track-item.active {
+  background-color: rgba(255, 255, 255, 0.07);
+  border-left: 3px solid #ffffff;
+}
+
+.sidebar-track-meta {
+  min-width: 0;
+  flex: 1;
+  padding-right: 8px;
+}
+
+.sidebar-track-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-track-artist {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.karaoke-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Группировки (Исполнители и Альбомы)
+   -------------------------------------------------------------------------- */
+.artist-grid, .album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.artist-card, .album-card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.artist-card:hover, .album-card:hover {
+  border-color: var(--border-active);
+  transform: translateY(-2px);
+  background-color: var(--bg-surface-elevated);
+}
+
+.album-cover-img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  object-fit: cover;
+  background-color: #000;
+  margin-bottom: 12px;
+  border: 1px solid var(--border-subtle);
+}
+
+.group-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------------------------------------
+   Slide-over Drawer информации о треке
+   -------------------------------------------------------------------------- */
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 95;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.drawer-panel {
+  width: 100%;
+  max-width: 440px;
+  background-color: var(--bg-surface);
+  border-left: 1px solid var(--border-active);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+  animation: slideInRight 0.25s ease;
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.drawer-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.drawer-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.drawer-body {
+  padding: 24px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.drawer-cover-wrap {
+  width: 140px;
+  height: 140px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background-color: #000;
+}
+
+.drawer-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.drawer-meta-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.drawer-meta-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.drawer-meta-label {
+  color: var(--text-muted);
+}
+
+.drawer-meta-val {
+  color: #ffffff;
+  font-weight: 500;
+  text-align: right;
+  max-width: 260px;
+  word-break: break-all;
+}
+
+/* --------------------------------------------------------------------------
+   Side-by-Side сравнение обложек в Staging
+   -------------------------------------------------------------------------- */
+.cover-compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+@media (max-width: 700px) {
+  .cover-compare-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cover-side-card {
+  background-color: var(--bg-page);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.cover-side-img {
+  width: 120px;
+  height: 120px;
+  border-radius: 6px;
+  object-fit: cover;
+  background-color: #000;
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 10px;
+}
+
+.cover-side-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.cover-side-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------------------------------------
+   Мягкая анимация прогресса проверки трека
+   -------------------------------------------------------------------------- */
+.row-in-progress {
+  position: relative;
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.row-in-progress::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: linear-gradient(90deg, transparent, var(--border-active), transparent);
+  animation: scanRowProgress 2s infinite ease-in-out;
+}
+
+@keyframes scanRowProgress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.badge-audit-ok {
+  color: var(--color-emerald);
+  font-size: 11px;
+}
+
+.badge-audit-queued {
+  color: var(--color-amber);
+  font-size: 11px;
+}
+
+.badge-audit-processing {
+  color: #38bdf8;
+  font-size: 11px;
+}
+

@@ -139,6 +139,7 @@ func main() {
 	adminHandler := admin.NewAdminServer(
 		trackRepo, stagingRepo, jobRepo, cacheRepo, keyPoolMgr,
 		libraryScanner, stagingService, lrcWriter, queueWorker,
+		pathGuard,
 		func() (*sql.DB, error) { return db.OpenDatabase(cfg.NavidromeDBPath) },
 	)
 	adminHTTPServer := &http.Server{
