@@ -643,6 +643,54 @@ async function loadStagingData() {
 
     const path = item.folderPath || item.targetId || "Аудиофайл";
 
+    // Специальное компактное и информативное отображение для обложек альбомов
+    if (item.changeType === "cover") {
+      const curCoverDesc = curObj.hasCover
+        ? `Низкое разрешение (${curObj.width || 0}×${curObj.height || 0} px)`
+        : `<span class="text-amber">Отсутствует в папке альбома</span>`;
+      const propRes = propObj.width && propObj.height ? `${propObj.width}×${propObj.height} px` : "3000×3000 px HD";
+      const sourceName = propObj.source === "itunes" ? "Apple Music / iTunes" : "Cover Art Archive";
+
+      return `
+        <div class="staging-card">
+          <div class="staging-top">
+            <div>
+              <div class="staging-issue">Найдена обложка альбома (Уверенность: ${item.confidence || 95}%)</div>
+              <div class="staging-path mono">${escapeHtml(path)}</div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-secondary" onclick="dismissStaging(${item.id})">Пропустить</button>
+              <button class="btn btn-primary" onclick="applyStaging(${item.id})">Применить</button>
+            </div>
+          </div>
+
+          <div class="staging-diff-grid">
+            <div class="diff-cell">
+              <div class="diff-cell-head">Было (В папке альбома)</div>
+              <div><span class="text-muted">Артист:</span> ${escapeHtml(curObj.artist || "—")}</div>
+              <div><span class="text-muted">Альбом:</span> ${escapeHtml(curObj.album || "—")}</div>
+              <div style="margin-top: 4px;"><span class="text-muted">Файл обложки:</span> ${curCoverDesc}</div>
+            </div>
+            <div class="diff-cell" style="display: flex; gap: 14px; align-items: flex-start;">
+              <div style="flex: 1;">
+                <div class="diff-cell-head text-emerald">Станет (Новый cover.jpg)</div>
+                <div><span class="text-muted">Разрешение:</span> <span class="diff-val-new">${escapeHtml(propRes)}</span></div>
+                <div><span class="text-muted">Источник:</span> <span class="text-light">${escapeHtml(sourceName)}</span></div>
+                <div style="margin-top: 6px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
+                  ℹ️ <strong>Аудиофайлы не изменяются.</strong> В папку альбома будет атомарно скачан файл <code class="mono">cover.jpg</code> для отображения в Navidrome.
+                </div>
+              </div>
+              ${propObj.coverUrl ? `
+                <div style="width: 76px; height: 76px; border-radius: 6px; overflow: hidden; background: #000; flex-shrink: 0; border: 1px solid var(--border-active); box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
+                  <img src="${escapeHtml(propObj.coverUrl)}" alt="Обложка" style="width: 100%; height: 100%; object-fit: cover;" loading="lazy" />
+                </div>
+              ` : ""}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     return `
       <div class="staging-card">
         <div class="staging-top">
@@ -668,7 +716,6 @@ async function loadStagingData() {
             <div><span class="text-muted">Артист:</span> <span class="diff-val-new">${escapeHtml(propObj.artist || propObj.albumArtist || "—")}</span></div>
             <div><span class="text-muted">Альбом:</span> <span class="diff-val-new">${escapeHtml(propObj.album || "—")}</span></div>
             ${propObj.title ? `<div><span class="text-muted">Трек:</span> <span class="diff-val-new">${escapeHtml(propObj.title)}</span></div>` : ""}
-            ${propObj.coverUrl ? `<div><span class="text-muted">Обложка:</span> <span class="diff-val-new mono" style="font-size: 11px;">${escapeHtml(propObj.coverUrl)}</span></div>` : ""}
           </div>
         </div>
       </div>
