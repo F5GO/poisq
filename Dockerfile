@@ -1,5 +1,5 @@
-# Многоэтапная сборка легковесного production-образа poisq (< 20MB)
-# Этап 1: Сборка статического бинарного файла на Go
+# Многоэтапная сборка легковесного production-образа poisq
+# Этап 1: Сборка статического бинарного файла на Go (с зашитым через //go:embed фронтендом)
 FROM golang:alpine AS builder
 
 WORKDIR /src
@@ -14,17 +14,17 @@ ENV GOTOOLCHAIN=auto
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Копируем исходный код
+# Копируем исходный код и встроенный веб-интерфейс (internal/admin/ui)
 COPY . .
 
-# Собираем чистый статический бинарник без CGO (pure Go modernc.org/sqlite)
+# Собираем чистый статический бинарник без CGO (pure Go modernc.org/sqlite + //go:embed)
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/poisq ./cmd/proxy
 
-# Этап 2: Минимальный финальный образ на базе Alpine Linux
+# Этап 2: Финальный образ на базе Alpine Linux с утилитами аудио-анализа (ffmpeg, fpcalc, flac)
 FROM alpine:3.20
 
-# Устанавливаем корневые сертификаты для внешних TLS-соединений и tzdata
-RUN apk --no-cache add ca-certificates tzdata && \
+# Устанавливаем сертификаты, часовые пояса (tzdata для PST сброса квот), ffmpeg и chromaprint (fpcalc)
+RUN apk --no-cache add ca-certificates tzdata ffmpeg chromaprint flac && \
     addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app
@@ -32,13 +32,17 @@ WORKDIR /app
 # Копируем скомпилированный бинарный файл из builder
 COPY --from=builder /bin/poisq /app/poisq
 
-# Проксирует запросы на порту 4534
-EXPOSE 4534
+# Порт 4534 — публичный Subsonic-прокси (только умный поиск)
+# Порт 4535 — закрытая веб-админка poisq Studio (локальная сеть / VPN / SSH-туннель)
+EXPOSE 4534 4535
 
 # Настройки по умолчанию через переменные окружения
 ENV LISTEN_ADDR=":4534" \
+    ADMIN_LISTEN_ADDR=":4535" \
     NAVIDROME_URL="http://navidrome:4533" \
     NAVIDROME_DB_PATH="/data/navidrome.db" \
+    POISQ_DB_PATH="/data/poisq.db" \
+    MUSIC_PATH="/music" \
     SYNC_INTERVAL="2m" \
     ENRICH_SQLITE_FULLTEXT="true" \
     LOG_LEVEL="info"

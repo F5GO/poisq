@@ -1,26 +1,24 @@
 # Конфигурация Docker Compose для совместного развертывания Navidrome и poisq
-# с общим доступом к базе данных SQLite (/data/navidrome.db).
+# с общим доступом к базе данных (/data) и папке медиатеки (/music).
 services:
   # Официальный музыкальный сервер Navidrome
   navidrome:
     image: deluan/navidrome:latest
     container_name: navidrome
-    # user: 1000:1000 # Опционально: укажите UID:GID владельца папки с музыкой при необходимости
+    # user: 1000:1000 # Опционально: укажите UID:GID владельца папки с музыкой
     restart: unless-stopped
     environment:
-      ND_SCANSCHEDULE: "1h"
+      ND_SCANSCHEDULE: "15m"
       ND_LOGLEVEL: "info"
       ND_SESSIONTIMEOUT: "24h"
       ND_BASEURL: ""
     volumes:
-      - /path/to/your/music:/music:ro # Укажите путь к вашей папке с музыкой на сервере
+      - /path/to/your/music:/music:ro # Navidrome читает теги, обложки и .lrc файлы из /music
       - navidrome_data:/data
-    # Порт 4533 можно оставить для прямого доступа к Navidrome или закрыть,
-    # чтобы все клиентские приложения подключались через poisq (порт 4534)
     ports:
       - "4533:4533"
 
-  # Умный реверс-прокси и обогатитель поиска для Navidrome
+  # Умный поисковый прокси (:4534) и AI-комбайн для медиатеки (:4535)
   poisq:
     image: ghcr.io/f5go/poisq:latest
     container_name: poisq
@@ -28,17 +26,25 @@ services:
     depends_on:
       - navidrome
     ports:
+      # Публичный порт — только умный поиск и прозрачный Subsonic-прокси (lyrics отдает сам Navidrome)
       - "4534:4534"
+      # Внутренний порт веб-админки — доступен только с localhost / SSH-туннеля / VPN
+      - "127.0.0.1:4535:4535"
     environment:
       LISTEN_ADDR: ":4534"
+      ADMIN_LISTEN_ADDR: ":4535"
       NAVIDROME_URL: "http://navidrome:4533"
       NAVIDROME_DB_PATH: "/data/navidrome.db"
+      POISQ_DB_PATH: "/data/poisq.db"
+      MUSIC_PATH: "/music"
       SYNC_INTERVAL: "2m"
       ENRICH_SQLITE_FULLTEXT: "true"
       LOG_LEVEL: "info"
     volumes:
-      # Общий том данных с Navidrome для прямого безопасного доступа к navidrome.db в WAL-режиме
+      # Общий том данных с Navidrome для доступа к navidrome.db (WAL) и хранения poisq.db
       - navidrome_data:/data
+      # Доступ к папке с музыкой для атомарной записи .lrc, cover.jpg и тегов по стандарту Picard (Staging)
+      - /path/to/your/music:/music:rw
 
 volumes:
   navidrome_data:
