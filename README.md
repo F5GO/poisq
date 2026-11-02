@@ -1,20 +1,14 @@
 # poisq (v0.0.1)
 
-**poisq** — умный поиск и модуль текстов песен (Lyrics) для музыкального сервера [Navidrome](https://www.navidrome.org/).
+**poisq** — умный и быстрый поиск для музыкального сервера [Navidrome](https://www.navidrome.org/).
 
-Он объединяет две ключевые возможности:
-1. **Интеллектуальный и быстрый поиск музыки:**
-   - **Забыли переключить язык:** найдет *Nirvana* по запросу `Тшкмфтф` или *Кино* по запросу `rbyj`.
-   - **Написали по-русски на слух:** поймет `офспринг` как *The Offspring*, а `металика` как *Metallica*.
-   - **Опечатались:** исправит случайные ошибки вроде `щеаызкштп` или `splean` на лету.
-   - **Ввели только первые буквы:** моментально подскажет исполнителя уже с 1–2 символов (например, `оф` -> *Offspring*).
-2. **Синхронизированные тексты песен (Lyrics) с акцентом на русский язык:**
-   - **Автоматический поиск слов:** мгновенно подтягивает синхронизированные построчные тексты (**LRC**) и plain-тексты прямо во время воспроизведения в **Feishin**, **Amperfy**, **Symfonium**, **Play:Sub**.
-   - **Русскоязычные и глобальные источники:** поиск в крупнейших базах — **Яндекс Музыка**, **Genius (RU)**, **Musixmatch**, **LRCLIB**, **Text-pesni / Amalgama**.
-   - **Подключение источников вручную:** поддержка любых внешних URL по протоколам LRCLIB / lrcmux.
-   - **Безопасное кэширование:** тексты сохраняются в SQLite и оперативной памяти, не загрязняя файлы медиатеки на диске.
+Он находит нужную музыку в вашей медиатеке, даже если запрос введен с ошибкой:
+- **Забыли переключить язык:** найдет *Nirvana* по запросу `Тшкмфтф` или *Кино* по запросу `rbyj`.
+- **Написали по-русски на слух:** поймет `офспринг` как *The Offspring*, а `металика` как *Metallica*.
+- **Опечатались:** исправит случайные ошибки вроде `щеаызкштп` или `splean` на лету.
+- **Ввели только первые буквы:** моментально подскажет исполнителя уже с 1–2 символов (например, `оф` -> *Offspring*).
 
-Сервис работает полностью прозрачно и незаметно: запросы обрабатываются быстрее чем за 0.5 мс и сразу отображаются во всех клиентских приложениях и веб-интерфейсе.
+Сервис работает полностью прозрачно и незаметно: запросы обрабатываются быстрее чем за 0.5 мс и сразу отображаются в любых приложениях (**Feishin**, **Amperfy**, **Play:Sub**, **Arpeggi**) и в обычном веб-интерфейсе Navidrome.
 
 ---
 
@@ -61,12 +55,6 @@ services:
       SYNC_INTERVAL: "2m"
       ENRICH_SQLITE_FULLTEXT: "true"
       LOG_LEVEL: "info"
-      # Подсистема текстов песен (Lyrics)
-      LYRICS_ENABLED: "true"
-      LYRICS_CACHE_TTL: "720h" # 30 дней
-      LYRICS_CACHE_MAX_ENTRIES: "5000" # Лимит записей в оперативной памяти
-      LYRICS_PROVIDERS: "yandex,genius,musixmatch,lrclib,amalgama"
-      # LYRICS_CUSTOM_SOURCES: "https://my-custom-lrclib.local"
     volumes:
       # Общий том данных с Navidrome для прямого безопасного доступа к navidrome.db в WAL-режиме
       - navidrome_data:/data
@@ -199,30 +187,6 @@ curl "http://localhost:4534/_smart/aliases"
 
 ---
 
-### 3.3. Модуль текстов песен (Lyrics) с акцентом на русский язык
-
-`poisq` перехватывает запросы текстов песен по протоколам Subsonic и OpenSubsonic (`/rest/getLyrics`, `/rest/getLyricsBySongId`), обеспечивая мгновенную отдачу из локального кэша и интеллектуальный поиск в русскоязычных базах.
-
-#### Возможности модуля:
-1. **Каскадный опрос с приоритетом синхронизированного LRC**:
-   - `Яндекс Музыка` (наибольшая база синхронизированных LRC для русских треков).
-   - `Genius (RU)` (тексты рэпа, рока, поп, инди и андеграунда).
-   - `Musixmatch` (мировая база с точной синхронизацией).
-   - `LRCLIB` (открытый глобальный источник без ограничений).
-   - `Amalgama-lab / Text-pesni` (эстрада, шансон, барды, переводы).
-2. **Добавление источников вручную (Custom Sources)**:
-   - Поддерживает любые внешние URL по протоколу LRCLIB/lrcmux через переменную `LYRICS_CUSTOM_SOURCES="https://my-lyrics-api.local"`.
-3. **Безопасное кэширование по умолчанию**:
-   - Тексты сохраняются в постоянном кэше (In-Memory LRU + SQLite в `/data`).
-   - Медиатека на диске по умолчанию **не изменяется** (`LYRICS_SAVE_TO_DISK=false`). Запись `.lrc` файлов в `/music` включается только по явному желанию.
-4. **Совместимость с официальным `nd-lyrics`**:
-   - `poisq` предоставляет LRCLIB-совместимый API: `/lyrics/api/get` и `/lyrics/api/search`. В плагине `nd-lyrics` Navidrome можно указать `http://poisq:4534/lyrics/api` в качестве источника с наивысшим приоритетом.
-5. **Диагностика**:
-   - `/_smart/lyrics/test?artist=Кино&title=Группа+крови` — замер скорости и проверка работы каждого источника.
-   - `/_smart/lyrics/sources` — список активных провайдеров.
-
----
-
 ## 4. Структура проекта (Header First & Модульность)
 
 Кодовая база разделена на независимые модули, каждый файл начинается с обязательной шапки с описанием назначения:
@@ -234,24 +198,6 @@ curl "http://localhost:4534/_smart/aliases"
 ├── internal/
 │   ├── config/
 │   │   └── config.go               # Загрузка и валидация конфигурации из ENV
-│   ├── lyrics/                     # Подсистема текстов песен (Lyrics)
-│   │   ├── types.go                # Доменные структуры: Lyrics, Line, SearchQuery
-│   │   ├── config.go               # Конфигурация подсистемы lyrics
-│   │   ├── cache.go                # Двухуровневый кэш (In-Memory LRU + SQLite)
-│   │   ├── lrc_parser.go           # Парсинг и генерация формата [mm:ss.xx]
-│   │   ├── writer.go               # Опциональная безопасная запись .lrc на диск
-│   │   ├── provider.go             # Интерфейс Provider
-│   │   ├── provider_yandex.go      # Адаптер Яндекс Музыки (LRC)
-│   │   ├── provider_genius.go      # Адаптер Genius RU (Plain)
-│   │   ├── provider_musixmatch.go  # Адаптер Musixmatch (LRC)
-│   │   ├── provider_lrclib.go      # Адаптер LRCLIB (LRC)
-│   │   ├── provider_amalgama.go    # Адаптер Amalgama / Text-pesni (Plain)
-│   │   ├── provider_custom.go      # Адаптер кастомных LRCLIB/lrcmux URL
-│   │   ├── engine.go               # Диспетчер провайдеров и дедупликация
-│   │   ├── response_subsonic.go    # Ответы getLyrics (XML/JSON)
-│   │   ├── response_opensubsonic.go# Ответы getLyricsBySongId (XML/JSON)
-│   │   ├── endpoint_handler.go     # LRCLIB-совместимый API (/lyrics/api/get)
-│   │   └── debug_handler.go        # Диагностика /_smart/lyrics/test
 │   ├── search/
 │   │   ├── layout.go               # Двунаправленный маппер QWERTY <-> ЙЦУКЕН
 │   │   ├── phonetic_rules.go       # Музыкальные алиасы и фонетические правила
@@ -269,7 +215,6 @@ curl "http://localhost:4534/_smart/aliases"
 │   └── proxy/
 │       ├── proxy.go                # HTTP Reverse Proxy и роутер
 │       ├── interceptor.go          # Перехватчик Subsonic и Native UI эндпоинтов
-│       ├── interceptor_lyrics.go   # Перехватчик Subsonic / OpenSubsonic текстов
 │       ├── fanout.go               # Параллельный fan-out к Navidrome
 │       ├── merge_json.go           # Слияние и дедупликация JSON Subsonic ответов
 │       ├── merge_xml.go            # Слияние и дедупликация XML Subsonic ответов

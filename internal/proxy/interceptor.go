@@ -18,42 +18,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/F5GO/poisq/internal/lyrics"
 	"github.com/F5GO/poisq/internal/search"
 )
 
 // Interceptor обрабатывает входящие HTTP-запросы, определяя необходимость модификации поисковых параметров.
 type Interceptor struct {
-	engine         *search.Engine
-	fanoutMgr      *FanoutManager
-	reverseProxy   *httputil.ReverseProxy
-	lyricsEngine   *lyrics.Engine
-	targetURL      *url.URL
-	upstreamClient *http.Client
+	engine       *search.Engine
+	fanoutMgr    *FanoutManager
+	reverseProxy *httputil.ReverseProxy
 }
 
 // NewInterceptor создает новый перехватчик запросов.
-func NewInterceptor(engine *search.Engine, fanoutMgr *FanoutManager, reverseProxy *httputil.ReverseProxy, lyricsEngine *lyrics.Engine) *Interceptor {
-	var targetURL *url.URL
-	var upstreamClient *http.Client
-	if fanoutMgr != nil {
-		targetURL = fanoutMgr.targetURL
-		upstreamClient = fanoutMgr.httpClient
-	}
+func NewInterceptor(engine *search.Engine, fanoutMgr *FanoutManager, reverseProxy *httputil.ReverseProxy) *Interceptor {
 	return &Interceptor{
-		engine:         engine,
-		fanoutMgr:      fanoutMgr,
-		reverseProxy:   reverseProxy,
-		lyricsEngine:   lyricsEngine,
-		targetURL:      targetURL,
-		upstreamClient: upstreamClient,
+		engine:       engine,
+		fanoutMgr:    fanoutMgr,
+		reverseProxy: reverseProxy,
 	}
-}
-
-// SetUpstream конфигурирует целевой адрес и HTTP-клиент для прямого опроса Navidrome без reverseProxy.
-func (it *Interceptor) SetUpstream(targetURL *url.URL, client *http.Client) {
-	it.targetURL = targetURL
-	it.upstreamClient = client
 }
 
 // ServeHTTP анализирует путь запроса и при необходимости выполняет умную обработку.
@@ -79,13 +60,7 @@ func (it *Interceptor) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 2. Проверка Subsonic / OpenSubsonic текстов песен (getLyrics, getLyricsBySongId)
-	if isSubsonicLyricsPath(path) {
-		it.handleSubsonicLyrics(w, req)
-		return
-	}
-
-	// 3. Проверка Native UI / Feishin поиска (/api/search, /api/song, /api/album, /api/artist)
+	// 2. Проверка Native UI / Feishin поиска (/api/search, /api/song, /api/album, /api/artist)
 	if isNativeAPIPath(path) {
 		it.handleNativeSearch(w, req)
 		return

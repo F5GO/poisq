@@ -18,7 +18,6 @@ import (
 
 	"github.com/F5GO/poisq/internal/config"
 	"github.com/F5GO/poisq/internal/db"
-	"github.com/F5GO/poisq/internal/lyrics"
 	"github.com/F5GO/poisq/internal/proxy"
 	"github.com/F5GO/poisq/internal/search"
 )
@@ -68,11 +67,8 @@ func main() {
 	go runBackgroundSync(ctx, cfg, dict)
 	aliasMgr.StartDailySync(ctx)
 
-	// 7. Инициализация подсистемы поиска текстов песен (Lyrics)
-	lyricsEngine := lyrics.NewEngine(cfg.Lyrics, sqliteDB)
-
-	// 8. Создание и запуск HTTP Reverse Proxy
-	proxyServer := proxy.NewServer(cfg.NavidromeURL, engine, dict, aliasMgr, cfg.EnableDebugAPI, lyricsEngine)
+	// 7. Создание и запуск HTTP Reverse Proxy
+	proxyServer := proxy.NewServer(cfg.NavidromeURL, engine, dict, aliasMgr, cfg.EnableDebugAPI)
 
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,

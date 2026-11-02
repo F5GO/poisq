@@ -11,12 +11,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/F5GO/poisq/internal/lyrics"
 )
 
 // Version определяет текущую версию микросервиса poisq.
-const Version = "0.0.6"
+const Version = "0.0.1"
 
 // Config содержит все настраиваемые параметры микросервиса poisq.
 type Config struct {
@@ -46,9 +44,6 @@ type Config struct {
 
 	// EnableDebugAPI — флаг включения диагностических эндпоинтов /_smart/* (по умолчанию false для безопасности).
 	EnableDebugAPI bool
-
-	// Lyrics — параметры подсистемы поиска и кэширования текстов песен.
-	Lyrics *lyrics.Config
 }
 
 // Load считывает конфигурацию из переменных окружения или устанавливает значения по умолчанию.
@@ -84,8 +79,6 @@ func Load() (*Config, error) {
 		enableDebugAPI = false
 	}
 
-	lyricsCfg := lyrics.LoadConfig()
-
 	cfg := &Config{
 		ListenAddr:           listenAddr,
 		NavidromeURL:         parsedURL,
@@ -96,7 +89,6 @@ func Load() (*Config, error) {
 		AliasesFile:          aliasesFile,
 		AliasesSyncURL:       aliasesSyncURL,
 		EnableDebugAPI:       enableDebugAPI,
-		Lyrics:               lyricsCfg,
 	}
 
 	return cfg, nil
