@@ -101,8 +101,9 @@
         </div>
 
         <div class="header-actions">
-          <button class="btn btn-secondary" id="btn-toggle-editor">Редактор .lrc</button>
+          <button class="btn btn-secondary" id="btn-enqueue-tournament">Найти текст (LRC Турнир)</button>
           <button class="btn btn-secondary" id="btn-cloud-karaoke">AI Караоке (Groq)</button>
+          <button class="btn btn-secondary" id="btn-toggle-editor">Редактор .lrc</button>
         </div>
       </div>
 
@@ -116,7 +117,7 @@
       <!-- Режим сырого редактора LRC -->
       <div id="view-raw-editor" class="raw-editor-viewport hidden">
         <div class="raw-editor-meta mono" id="raw-file-path">/music/track.lrc</div>
-        <textarea id="raw-lrc-textarea" rows="12" class="raw-textarea mono"></textarea>
+        <textarea id="raw-lrc-textarea" rows="12" class="raw-textarea mono" placeholder="[00:12.00]Текст первой строки..."></textarea>
         <div class="raw-actions">
           <button class="btn btn-primary" id="btn-save-raw-lrc">Сохранить .lrc рядом с треком</button>
         </div>
@@ -148,7 +149,7 @@
         </div>
 
         <div class="provider-label mono" id="provider-info-label">
-          LRCLIB Synced
+          Нет текста
         </div>
       </div>
     </section>
@@ -159,12 +160,13 @@
     <section id="panel-staging" class="tab-panel">
       <div class="panel-header">
         <div>
-          <h1 class="panel-title">Staging-буфер</h1>
+          <h1 class="panel-title">Staging-буфер (Безопасный режим)</h1>
           <p class="panel-desc">
-            Предложения по исправлению кодировки CP1251 и канонизации имен артистов. Файлы не перезаписываются без подтверждения.
+            Предложения по исправлению кодировки CP1251, канонизации имен артистов и обложкам. Файлы не перезаписываются без подтверждения.
           </p>
         </div>
         <div class="header-actions">
+          <button class="btn btn-secondary" id="btn-undo-staging">Откатить последнее (Undo)</button>
           <button class="btn btn-secondary" id="btn-discard-all-staging">Отклонить все</button>
           <button class="btn btn-primary" id="btn-apply-all-staging">Применить изменения</button>
         </div>
@@ -186,7 +188,7 @@
             Шифрование AES-256-GCM. Автоматическая ротация (LRU) и 65-секундный Cooldown при ошибке 429.
           </p>
         </div>
-        <button class="btn btn-primary" id="btn-add-key">+ Добавить ключ</button>
+        <button class="btn btn-primary" id="btn-open-add-key-modal">+ Добавить ключ</button>
       </div>
 
       <div class="table-wrapper">
@@ -194,9 +196,9 @@
           <thead>
             <tr>
               <th>Провайдер</th>
-              <th>Ключ</th>
+              <th>Метка / Ключ</th>
               <th>Статус</th>
-              <th>Запросов</th>
+              <th>Успехов / Ошибок</th>
               <th class="col-actions">Действие</th>
             </tr>
           </thead>
@@ -208,6 +210,47 @@
     </section>
 
   </main>
+
+  <!-- Модальное окно добавления API-ключа -->
+  <div id="modal-add-key" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 class="modal-title">Добавить API-ключ в пул</h2>
+        <button class="modal-close-btn" id="btn-close-key-modal">&times;</button>
+      </div>
+      <form id="form-add-key" class="modal-form">
+        <div class="form-group">
+          <label class="form-label" for="key-provider">Сервис / Провайдер</label>
+          <select id="key-provider" class="form-select" required>
+            <option value="gemini">Google Gemini (Gemini 2.5 Flash / Pro — консенсус и очистка текстов)</option>
+            <option value="groq">Groq Cloud (Whisper Large v3 — транскрибация караоке)</option>
+            <option value="acoustid">AcoustID (fpcalc — акустические отпечатки)</option>
+            <option value="yandex">Яндекс Музыка (OAuth токен с Плюсом)</option>
+            <option value="genius">Genius API (Поиск текстов андеграунда)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="key-label">Метка ключа (для себя)</label>
+          <input type="text" id="key-label" class="form-input" placeholder="например, Gemini Primary или Резервный" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="key-secret">API-ключ или OAuth-токен</label>
+          <input type="password" id="key-secret" class="form-input" placeholder="Вставьте секретный ключ..." required autocomplete="off" />
+          <span class="form-hint">Ключ надежно шифруется через AES-256-GCM перед сохранением в базу данных.</span>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-cancel-key">Отмена</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-key">Сохранить ключ</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Контейнер Toast-уведомлений -->
+  <div id="toast-container" class="toast-container"></div>
 
   <script src="/app.js"></script>
 </body>

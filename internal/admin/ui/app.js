@@ -1,52 +1,157 @@
 /**
- * poisq Studio v0.2.0 — Минималистичный клиентский скрипт
+ * poisq Studio v0.2.0 — Минималистичный контроллер веб-интерфейса
+ * 
  * Назначение:
- * Контроллер веб-интерфейса poisq Studio:
- * 1. Навигация по вкладкам (Медиатека, Караоке, Staging, Ключи API).
- * 2. Синхронизация текстов караоке (плавный переход, перемотка по клику на строчку).
- * 3. Применение и отклонение исправлений тегов в Staging.
- * 4. Управление пулом API-ключей.
+ * Обеспечивает полноценное взаимодействие панели управления (:4535) с REST API бэкенда:
+ * 1. Дашборд фонотеки: получение живой статистики здоровья медиатеки, синхронизация с Navidrome (:30043)
+ *    и запуск фонового глубокого аудита MusicBrainz / AcoustID.
+ * 2. Караоке и LRC Менеджер: загрузка текстов треков, симуляция синхронизированного воспроизведения
+ *    с таймкодами (Apple-style teleprompter), ручной редактор .lrc с атомарным сохранением рядом с файлом,
+ *    запуск Турнира провайдеров (LRCLIB/Genius/Yandex) и AI-караоке (Groq Whisper Large v3 + Gemini).
+ * 3. Staging-буфер рефакторинга: просмотр предложений Picard/Mojibake/Cover, поштучное или массовое
+ *    применение изменений в аудиофайлы, отклонение и мгновенный откат (Undo).
+ * 4. Пул API-ключей: отображение статусов ротации (LRU, 65s Cooldown, Exhausted Daily), модальное окно
+ *    добавления ключей с явным выбором провайдера (Gemini, Groq, AcoustID, Yandex, Genius) и удаление.
+ * 5. Всплывающие уведомления (Toasts) для мгновенной обратной связи без блокирующих alert().
  */
 
+// Состояние приложения
 const state = {
   activeTab: "library",
   tracks: [],
   selectedTrack: null,
   stagingItems: [],
   keys: [],
+  lastAppliedStagingId: null,
+  
+  // Плеер караоке
   isPlaying: false,
   currentSec: 0,
-  totalSec: 240,
+  totalSec: 0,
   lyrics: [],
   activeLyricIndex: -1,
-  timer: null
+  timer: null,
+
+  // Поиск с дебаунсом
+  searchDebounceTimer: null
 };
 
-// Хелпер вызова API
+// -----------------------------------------------------------------------------
+// Вспомогательные утилиты и Toast-уведомления
+// -----------------------------------------------------------------------------
+
+/**
+ * Выполняет сетевой запрос к REST API бэкенда (/api/v1).
+ */
 async function fetchApi(endpoint, method = "GET", payload = null) {
   const options = {
     method,
     headers: { "Content-Type": "application/json" }
   };
-  if (payload) {
+  if (payload !== null) {
     options.body = JSON.stringify(payload);
   }
   const res = await fetch("/api/v1" + endpoint, options);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || `HTTP ${res.status}`);
+    const errorMsg = data.error || `HTTP ${res.status}: ${res.statusText || "Ошибка сервера"}`;
+    throw new Error(errorMsg);
   }
   return data;
 }
 
+/**
+ * Отображает немодальное всплывающее уведомление (Toast).
+ */
+function showToast(message, type = "info") {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+
+  if (type === "error") {
+    toast.style.borderColor = "var(--color-crimson, #f43f5e)";
+    toast.style.color = "#fda4af";
+  } else if (type === "success") {
+    toast.style.borderColor = "var(--color-emerald, #10b981)";
+    toast.style.color = "#6ee7b7";
+  }
+
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateY(8px)";
+    toast.style.transition = "all 0.3s ease";
+    setTimeout(() => toast.remove(), 300);
+  }, 4000);
+}
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function formatDuration(sec) {
+  const sTotal = Math.round(sec);
+  const m = Math.floor(sTotal / 60);
+  const s = Math.floor(sTotal % 60);
+  return `${m < 10 ? "0" : ""}${m}:${s < 10 ? "0" : ""}${s}`;
+}
+
+function formatLrcTimestamp(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  const ms = Math.floor((sec % 1) * 100);
+  return `${m < 10 ? "0" : ""}${m}:${s < 10 ? "0" : ""}${s}.${ms < 10 ? "0" : ""}${ms}`;
+}
+
+/**
+ * Парсит LRC-строки формата [mm:ss.xx]Текст в массив { sec, text }.
+ */
+function parseLRC(lrcText) {
+  if (!lrcText) return [];
+  const lines = [];
+  const tagRegex = /\[(\d{1,2}):(\d{2})(?:\.(\d{2,3}))?\](.*)/;
+
+  for (const raw of lrcText.split("\n")) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(tagRegex);
+    if (match) {
+      const min = parseInt(match[1], 10);
+      const sec = parseInt(match[2], 10);
+      const ms = match[3] ? parseInt(match[3].padEnd(3, "0").slice(0, 3), 10) : 0;
+      const totalSec = min * 60 + sec + ms / 1000;
+      const text = match[4].trim();
+      if (text) {
+        lines.push({ sec: totalSec, text });
+      }
+    }
+  }
+
+  return lines.sort((a, b) => a.sec - b.sec);
+}
+
+// -----------------------------------------------------------------------------
+// Инициализация при загрузке документа
+// -----------------------------------------------------------------------------
 document.addEventListener("DOMContentLoaded", () => {
   initNavigation();
-  initPlayer();
+  initPlayerControls();
+  initKeyModal();
   loadLibraryData();
 });
 
 // -----------------------------------------------------------------------------
-// 1. Навигация по вкладкам
+// 1. Навигация и переключение вкладок
 // -----------------------------------------------------------------------------
 function initNavigation() {
   document.querySelectorAll(".nav-tab").forEach(tab => {
@@ -56,38 +161,38 @@ function initNavigation() {
     });
   });
 
-  // Действия
+  // Действия в шапках панелей
   document.getElementById("btn-sync-navidrome")?.addEventListener("click", syncNavidrome);
   document.getElementById("btn-run-audit")?.addEventListener("click", runMusicBrainzAudit);
+  
+  // Staging действия
   document.getElementById("btn-apply-all-staging")?.addEventListener("click", applyAllStaging);
   document.getElementById("btn-discard-all-staging")?.addEventListener("click", discardAllStaging);
-  document.getElementById("btn-add-key")?.addEventListener("click", promptAddKey);
+  document.getElementById("btn-undo-staging")?.addEventListener("click", undoStaging);
+
+  // Караоке действия
+  document.getElementById("btn-enqueue-tournament")?.addEventListener("click", enqueueLrcTournament);
+  document.getElementById("btn-cloud-karaoke")?.addEventListener("click", enqueueWhisperKaraoke);
   document.getElementById("btn-toggle-editor")?.addEventListener("click", toggleLrcEditor);
-  document.getElementById("btn-cloud-karaoke")?.addEventListener("click", triggerCloudKaraoke);
   document.getElementById("btn-save-raw-lrc")?.addEventListener("click", saveRawLrc);
 
-  // Фильтр таблицы
+  // Поиск по трекам с дебаунсом
   document.getElementById("track-search-input")?.addEventListener("input", (e) => {
-    filterTracks(e.target.value);
+    clearTimeout(state.searchDebounceTimer);
+    state.searchDebounceTimer = setTimeout(() => {
+      searchTracks(e.target.value);
+    }, 250);
   });
 }
 
 function switchTab(tabName) {
   state.activeTab = tabName;
   document.querySelectorAll(".nav-tab").forEach(tab => {
-    if (tab.dataset.tab === tabName) {
-      tab.classList.add("active");
-    } else {
-      tab.classList.remove("active");
-    }
+    tab.classList.toggle("active", tab.dataset.tab === tabName);
   });
 
   document.querySelectorAll(".tab-panel").forEach(panel => {
-    if (panel.id === `panel-${tabName}`) {
-      panel.classList.add("active");
-    } else {
-      panel.classList.remove("active");
-    }
+    panel.classList.toggle("active", panel.id === `panel-${tabName}`);
   });
 
   if (tabName === "library") loadLibraryData();
@@ -96,7 +201,7 @@ function switchTab(tabName) {
 }
 
 // -----------------------------------------------------------------------------
-// 2. Медиатека
+// 2. Медиатека и синхронизация
 // -----------------------------------------------------------------------------
 async function loadLibraryData() {
   try {
@@ -109,60 +214,62 @@ async function loadLibraryData() {
 
     const summary = document.getElementById("library-summary-desc");
     if (summary) {
-      summary.innerHTML = `Каталог <span class="mono text-light">/music</span> · ${total} треков · ${pct}% с синхронными текстами · ${stagingCount} в Staging`;
+      summary.innerHTML = `Каталог <span class="mono text-light">/music</span> · ${total} треков · ${pct}% с синхронными LRC · ${stagingCount} в Staging`;
     }
     const badgeStaging = document.getElementById("badge-staging-count");
     if (badgeStaging) badgeStaging.textContent = stagingCount;
 
-    loadTracks();
+    await loadTracks();
   } catch (err) {
-    console.warn("Ошибка получения статистики фонотеки:", err);
-    loadTracks();
+    console.warn("Ошибка получения статистики:", err);
+    await loadTracks();
   }
 }
 
-async function loadTracks() {
+async function loadTracks(query = "") {
   const tbody = document.getElementById("tracks-tbody");
   const countLabel = document.getElementById("tracks-count-label");
   if (!tbody) return;
 
   try {
-    const res = await fetchApi("/tracks?limit=50");
+    const endpoint = query ? `/tracks?q=${encodeURIComponent(query)}` : "/tracks";
+    const res = await fetchApi(endpoint);
     state.tracks = res.tracks || [];
-  } catch (err) {
-    // Демонстрационный набор, если сервис только инициализирован
-    if (!state.tracks.length) {
-      state.tracks = [
-        { id: 1, title: "Группа крови", artist: "Кино", album: "Группа крови (1988)", duration: 285, lyricsStatus: "synced" },
-        { id: 2, title: "Знаешь ли ты", artist: "МакSим", album: "Трудный возраст", duration: 242, lyricsStatus: "verified" },
-        { id: 3, title: "Полковнику никто не пишет", artist: "Би-2", album: "Брат 2 Саундтрек", duration: 292, lyricsStatus: "synced" }
-      ];
-    }
-  }
 
-  renderTracksTable(state.tracks);
+    if (countLabel) countLabel.textContent = `Показано: ${state.tracks.length} треков`;
+    renderTracksTable(state.tracks);
+  } catch (err) {
+    console.error("Ошибка загрузки треков:", err);
+    tbody.innerHTML = `<tr><td colspan="6" class="cell-empty" style="color: var(--color-crimson);">Не удалось загрузить треки: ${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+function searchTracks(query) {
+  loadTracks(query.trim());
 }
 
 function renderTracksTable(tracks) {
   const tbody = document.getElementById("tracks-tbody");
-  const countLabel = document.getElementById("tracks-count-label");
-  if (countLabel) countLabel.textContent = `Показано: ${tracks.length} треков`;
   if (!tbody) return;
 
   if (tracks.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="cell-empty">В каталоге /music пока нет треков</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="cell-empty">В медиатеке пока нет треков. Нажмите «Синхронизация Navidrome» для сканирования.</td></tr>`;
     return;
   }
 
   tbody.innerHTML = tracks.map((t, idx) => {
     const num = (idx + 1 < 10 ? "0" : "") + (idx + 1);
-    const hasLyrics = t.lyricsStatus === "synced" || t.lyricsStatus === "verified";
-    const statusHtml = hasLyrics
-      ? `<span class="text-emerald">Синхронизирован</span>`
-      : `<span class="text-muted">Нет текста</span>`;
+    let statusBadge = `<span class="text-muted">Нет текста</span>`;
+    if (t.lyricsStatus === "verified") {
+      statusBadge = `<span class="text-emerald">✓ Проверен</span>`;
+    } else if (t.lyricsStatus === "synced") {
+      statusBadge = `<span class="text-emerald">Синхронный</span>`;
+    } else if (t.lyricsStatus === "plain") {
+      statusBadge = `<span class="text-secondary">Обычный текст</span>`;
+    }
 
     return `
-      <tr onclick="openTrackInKaraoke(${t.id})" style="cursor: pointer;">
+      <tr onclick="openTrackInKaraoke('${escapeHtml(t.id)}')" style="cursor: pointer;">
         <td class="col-num mono">${num}</td>
         <td>
           <div style="font-weight: 500; color: #ffffff;">${escapeHtml(t.title || "Без названия")}</div>
@@ -170,39 +277,76 @@ function renderTracksTable(tracks) {
         </td>
         <td style="color: var(--text-secondary);">${escapeHtml(t.album || "—")}</td>
         <td class="mono" style="color: var(--text-muted);">${formatDuration(t.duration || 0)}</td>
-        <td>${statusHtml}</td>
+        <td>${statusBadge}</td>
         <td class="col-actions">
-          <button class="btn btn-secondary" onclick="event.stopPropagation(); openTrackInKaraoke(${t.id})">Караоке</button>
+          <button class="btn btn-secondary" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">Караоке</button>
         </td>
       </tr>
     `;
   }).join("");
 }
 
-function filterTracks(query) {
-  const q = query.toLowerCase().trim();
-  if (!q) {
-    renderTracksTable(state.tracks);
-    return;
+async function syncNavidrome() {
+  const btn = document.getElementById("btn-sync-navidrome");
+  const oldText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Синхронизация...";
   }
-  const filtered = state.tracks.filter(t => 
-    (t.title && t.title.toLowerCase().includes(q)) ||
-    (t.artist && t.artist.toLowerCase().includes(q)) ||
-    (t.album && t.album.toLowerCase().includes(q))
-  );
-  renderTracksTable(filtered);
+
+  showToast("Запущена синхронизация с базой Navidrome...", "info");
+
+  try {
+    const res = await fetchApi("/scan/sync", "POST");
+    showToast(`✓ Синхронизация завершена: обновлено ${res.syncedTracks} треков`, "success");
+    await loadLibraryData();
+  } catch (err) {
+    showToast(`Ошибка синхронизации: ${err.message}`, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }
+  }
+}
+
+async function runMusicBrainzAudit() {
+  const btn = document.getElementById("btn-run-audit");
+  const oldText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Запуск аудита...";
+  }
+
+  showToast("Запущен аудит MusicBrainz и поиск обложек в фоне...", "info");
+
+  try {
+    const res = await fetchApi("/scan/audit", "POST", { limitFolders: 50 });
+    showToast(res.message || "Аудит запущен! Результаты появятся в Staging-буфере.", "success");
+    
+    // Переключаемся на Staging или обновляем бейдж через 2 секунды
+    setTimeout(() => {
+      loadLibraryData();
+    }, 2000);
+  } catch (err) {
+    showToast(`Ошибка запуска аудита: ${err.message}`, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }
+  }
 }
 
 // -----------------------------------------------------------------------------
 // 3. Караоке и LRC Плеер
 // -----------------------------------------------------------------------------
-function initPlayer() {
+function initPlayerControls() {
   document.getElementById("btn-play")?.addEventListener("click", togglePlay);
   document.getElementById("btn-step-back")?.addEventListener("click", () => seekDelta(-10));
   document.getElementById("btn-step-forward")?.addEventListener("click", () => seekDelta(10));
   document.getElementById("scrub-bar")?.addEventListener("click", handleScrub);
 
-  // Клавиша пробел для паузы
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space" && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
       e.preventDefault();
@@ -211,56 +355,93 @@ function initPlayer() {
   });
 }
 
-function openTrackInKaraoke(trackId) {
-  const track = state.tracks.find(t => t.id === trackId) || state.tracks[0];
-  if (!track) return;
+async function openTrackInKaraoke(trackId) {
+  let track = state.tracks.find(t => t.id === trackId);
+  
+  try {
+    const res = await fetchApi(`/lyrics/cache?trackId=${encodeURIComponent(trackId)}`);
+    if (res.track) {
+      track = res.track;
+    }
+  } catch (err) {
+    console.warn("Не удалось получить кэш текстов трека:", err);
+  }
+
+  if (!track) {
+    showToast("Трек не найден", "error");
+    return;
+  }
 
   state.selectedTrack = track;
-  state.totalSec = track.duration || 285;
-  state.currentSec = 12;
+  state.totalSec = track.duration || 180;
+  state.currentSec = 0;
+  state.activeLyricIndex = -1;
 
-  document.getElementById("player-title").textContent = track.title || "Трек";
-  document.getElementById("player-artist").textContent = `${track.artist || "Артист"} — ${track.album || "Альбом"}`;
+  document.getElementById("player-title").textContent = track.title || "Без названия";
+  document.getElementById("player-artist").textContent = `${track.artist || "Неизвестный артист"} — ${track.album || "Без альбома"}`;
   document.getElementById("time-total").textContent = formatDuration(state.totalSec);
-  document.getElementById("raw-file-path").textContent = `/music/${track.artist || "Artist"}/${track.title || "Track"}.lrc`;
 
-  state.lyrics = [
-    { sec: 12, text: "Теплое место, но улицы ждут отпечатков наших ног." },
-    { sec: 21, text: "Звездная пыль — на сапогах." },
-    { sec: 32, text: "Мягкое кресло, клетчатый плед, не нажатый вовремя курок." },
-    { sec: 44, text: "Солнечный день — в ослепительных снах." },
-    { sec: 56, text: "Группа крови — на рукаве, мой порядковый номер — на рукаве!" },
-    { sec: 69, text: "Пожелай мне удачи в бою, пожелай мне:" },
-    { sec: 77, text: "Не остаться в этой траве, не остаться в этой траве!" },
-    { sec: 90, text: "Пожелай мне удачи, пожелай мне удачи!" }
-  ];
+  const lrcPath = track.filePath ? track.filePath.replace(/\.[^/.]+$/, ".lrc") : "/music/track.lrc";
+  document.getElementById("raw-file-path").textContent = lrcPath;
 
-  renderLyrics();
+  const rawTextarea = document.getElementById("raw-lrc-textarea");
+  if (rawTextarea) {
+    rawTextarea.value = track.lyricsBody || "";
+  }
+
+  const providerLabel = document.getElementById("provider-info-label");
+  if (providerLabel) {
+    if (track.lyricsSource) {
+      providerLabel.textContent = `Источник: ${track.lyricsSource.toUpperCase()}`;
+    } else {
+      providerLabel.textContent = "Нет текста";
+    }
+  }
+
+  // Парсим LRC
+  if (track.lyricsBody && track.lyricsBody.trim()) {
+    const parsed = parseLRC(track.lyricsBody);
+    if (parsed.length > 0) {
+      state.lyrics = parsed;
+    } else {
+      // Обычный текст без таймкодов — разбиваем построчно
+      state.lyrics = track.lyricsBody.split("\n")
+        .map(l => l.trim())
+        .filter(l => l.length > 0)
+        .map((text, idx) => ({ sec: idx * 5, text }));
+    }
+  } else {
+    state.lyrics = [];
+  }
+
+  renderLyricsTeleprompter();
   updatePlayerUI();
   switchTab("karaoke");
-  if (!state.isPlaying) togglePlay();
 }
 
-function renderLyrics() {
+function renderLyricsTeleprompter() {
   const container = document.getElementById("lyrics-stream");
-  const rawTextarea = document.getElementById("raw-lrc-textarea");
   if (!container) return;
+
+  if (state.lyrics.length === 0) {
+    container.innerHTML = `
+      <div class="lyric-line inactive" style="font-size: 16px; opacity: 0.7;">
+        Текст для этого трека еще не найден.<br>
+        Нажмите «Найти текст (LRC Турнир)» или «AI Караоке (Groq)» вверху.
+      </div>
+    `;
+    return;
+  }
 
   container.innerHTML = state.lyrics.map((l, idx) => `
     <div class="lyric-line inactive" data-index="${idx}" data-sec="${l.sec}" onclick="seekToSecond(${l.sec})">
       ${escapeHtml(l.text)}
     </div>
   `).join("");
-
-  if (rawTextarea) {
-    const rawContent = `[ti:${state.selectedTrack?.title || "Track"}]\n[ar:${state.selectedTrack?.artist || "Artist"}]\n` +
-      state.lyrics.map(l => `[${formatTimestamp(l.sec)}]${l.text}`).join("\n");
-    rawTextarea.value = rawContent;
-  }
 }
 
 function seekToSecond(sec) {
-  state.currentSec = sec;
+  state.currentSec = Math.max(0, Math.min(state.totalSec, sec));
   updatePlayerUI();
   if (!state.isPlaying) togglePlay();
 }
@@ -271,6 +452,7 @@ function seekDelta(delta) {
 }
 
 function handleScrub(e) {
+  if (state.totalSec <= 0) return;
   const rect = e.currentTarget.getBoundingClientRect();
   const clickX = e.clientX - rect.left;
   const pct = Math.max(0, Math.min(1, clickX / rect.width));
@@ -289,7 +471,11 @@ function togglePlay() {
     clearInterval(state.timer);
     state.timer = setInterval(() => {
       state.currentSec++;
-      if (state.currentSec > state.totalSec) state.currentSec = 0;
+      if (state.currentSec > state.totalSec) {
+        state.currentSec = 0;
+        togglePlay();
+        return;
+      }
       updatePlayerUI();
     }, 1000);
   } else {
@@ -303,12 +489,11 @@ function updatePlayerUI() {
   const curLabel = document.getElementById("time-current");
   const progress = document.getElementById("scrub-progress");
   if (curLabel) curLabel.textContent = formatDuration(state.currentSec);
-  if (progress) {
+  if (progress && state.totalSec > 0) {
     const pct = (state.currentSec / state.totalSec) * 100;
     progress.style.width = `${pct}%`;
   }
 
-  // Обновление караоке
   const lines = document.querySelectorAll("#lyrics-stream .lyric-line");
   let activeIdx = -1;
 
@@ -341,125 +526,280 @@ function toggleLrcEditor() {
   if (raw.classList.contains("hidden")) {
     raw.classList.remove("hidden");
     tele.classList.add("hidden");
-    btn.textContent = "Текст караоке";
+    if (btn) btn.textContent = "Режим суфлера";
   } else {
     raw.classList.add("hidden");
     tele.classList.remove("hidden");
-    btn.textContent = "Редактор .lrc";
+    if (btn) btn.textContent = "Редактор .lrc";
   }
 }
 
-function saveRawLrc() {
-  alert("✓ Файл .lrc успешно сохранен рядом с треком");
-  toggleLrcEditor();
+async function saveRawLrc() {
+  if (!state.selectedTrack) {
+    showToast("Трек не выбран", "error");
+    return;
+  }
+
+  const textarea = document.getElementById("raw-lrc-textarea");
+  const content = textarea ? textarea.value.trim() : "";
+  if (!content) {
+    showToast("Текст LRC не может быть пустым", "error");
+    return;
+  }
+
+  try {
+    const res = await fetchApi("/lyrics/save", "POST", {
+      trackId: state.selectedTrack.id,
+      content,
+      verified: true
+    });
+
+    if (res.lrcWritten) {
+      showToast(`✓ Файл .lrc сохранен рядом с аудиофайлом!`, "success");
+    } else if (res.writeError) {
+      showToast(`Текст сохранен в базу, но не удалось записать .lrc: ${res.writeError}`, "info");
+    }
+
+    state.selectedTrack.lyricsBody = content;
+    state.selectedTrack.lyricsStatus = res.status || "verified";
+    state.lyrics = parseLRC(content);
+    
+    renderLyricsTeleprompter();
+    updatePlayerUI();
+    toggleLrcEditor(); // переключаем обратно в суфлер
+  } catch (err) {
+    showToast(`Ошибка сохранения: ${err.message}`, "error");
+  }
 }
 
-function triggerCloudKaraoke() {
-  alert("Groq Whisper Large v3 транскрибировал аудиопоток, Gemini объединил эталонный текст с точными таймкодами.");
+async function enqueueLrcTournament() {
+  if (!state.selectedTrack) {
+    showToast("Сначала выберите трек в медиатеке", "error");
+    return;
+  }
+
+  try {
+    await fetchApi("/lyrics/enqueue", "POST", {
+      trackId: state.selectedTrack.id,
+      jobType: "tournament"
+    });
+    showToast("✓ Задача турнира (LRCLIB, Genius, Yandex) поставлена в очередь воркера", "success");
+  } catch (err) {
+    showToast(`Ошибка: ${err.message}`, "error");
+  }
+}
+
+async function enqueueWhisperKaraoke() {
+  if (!state.selectedTrack) {
+    showToast("Сначала выберите трек в медиатеке", "error");
+    return;
+  }
+
+  try {
+    await fetchApi("/lyrics/enqueue", "POST", {
+      trackId: state.selectedTrack.id,
+      jobType: "whisper_karaoke"
+    });
+    showToast("✓ Задача AI Караоке (Groq Whisper Large v3 + Gemini) поставлена в очередь", "success");
+  } catch (err) {
+    showToast(`Ошибка: ${err.message}`, "error");
+  }
 }
 
 // -----------------------------------------------------------------------------
-// 4. Staging
+// 4. Staging-буфер рефакторинга
 // -----------------------------------------------------------------------------
 async function loadStagingData() {
   const container = document.getElementById("staging-cards-container");
   if (!container) return;
 
   try {
-    const res = await fetchApi("/staging");
-    state.stagingItems = res.changes || [];
+    const res = await fetchApi("/staging?status=pending");
+    state.stagingItems = res.items || [];
   } catch (err) {
-    if (!state.stagingItems.length) {
-      state.stagingItems = [
-        {
-          id: 1,
-          filePath: "/music/MakSim/2006 - Trudny Vozrast/03 - Znaesh Li Ty.flac",
-          issue: "Битая кодировка CP1251 → NFC",
-          oldArtist: "Ã ÂœÃ Â°Ã ÂºÃ‘Â Ã Â¸Ã Â¼",
-          newArtist: "МакSим",
-          oldAlbum: "Ã’Ã°Ã³Ã¤Ã­Ã»Ã© Ã¢Ã®Ã§Ã°Ã Ã±Ã²",
-          newAlbum: "Трудный возраст"
-        },
-        {
-          id: 2,
-          filePath: "/music/Kino/1988 - Gruppa Krovi/01 - Gruppa Krovi.flac",
-          issue: "Канонизация регистра имен Picard",
-          oldArtist: "kino",
-          newArtist: "Кино",
-          oldAlbum: "gruppa krovi",
-          newAlbum: "Группа крови"
-        }
-      ];
-    }
+    console.error("Ошибка загрузки Staging:", err);
+    state.stagingItems = [];
   }
 
   const badgeStaging = document.getElementById("badge-staging-count");
   if (badgeStaging) badgeStaging.textContent = state.stagingItems.length;
 
   if (state.stagingItems.length === 0) {
-    container.innerHTML = `<div class="cell-empty">Очередь Staging пуста. Все теги каноничны.</div>`;
+    container.innerHTML = `<div class="cell-empty">Очередь Staging пуста. Все теги каноничны. Запустите «MusicBrainz аудит» для поиска предложений.</div>`;
     return;
   }
 
-  container.innerHTML = state.stagingItems.map(item => `
-    <div class="staging-card">
-      <div class="staging-top">
-        <div>
-          <div class="staging-issue">${escapeHtml(item.issue)}</div>
-          <div class="staging-path mono">${escapeHtml(item.filePath)}</div>
+  container.innerHTML = state.stagingItems.map(item => {
+    let curObj = {};
+    let propObj = {};
+    try { curObj = JSON.parse(item.currentJson || "{}"); } catch (e) {}
+    try { propObj = JSON.parse(item.proposedJson || "{}"); } catch (e) {}
+
+    let issueTitle = "Предложение по тегам";
+    if (item.changeType === "mojibake") issueTitle = "Битая кодировка (CP1251 → UTF-8)";
+    if (item.changeType === "musicbrainz") issueTitle = "Канонизация тегов MusicBrainz";
+    if (item.changeType === "artist_canonical") issueTitle = "Канонизация артиста";
+    if (item.changeType === "cover") issueTitle = "Найдена обложка альбома";
+
+    const path = item.folderPath || item.targetId || "Аудиофайл";
+
+    return `
+      <div class="staging-card">
+        <div class="staging-top">
+          <div>
+            <div class="staging-issue">${escapeHtml(issueTitle)} (Уверенность: ${item.confidence || 90}%)</div>
+            <div class="staging-path mono">${escapeHtml(path)}</div>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-secondary" onclick="dismissStaging(${item.id})">Пропустить</button>
+            <button class="btn btn-primary" onclick="applyStaging(${item.id})">Применить</button>
+          </div>
         </div>
-        <div style="display: flex; gap: 8px;">
-          <button class="btn btn-secondary" onclick="dismissStaging(${item.id})">Пропустить</button>
-          <button class="btn btn-primary" onclick="applyStaging(${item.id})">Применить</button>
+
+        <div class="staging-diff-grid">
+          <div class="diff-cell">
+            <div class="diff-cell-head">Было (В файле)</div>
+            <div><span class="text-muted">Артист:</span> <span class="diff-val-old">${escapeHtml(curObj.artist || curObj.albumArtist || "—")}</span></div>
+            <div><span class="text-muted">Альбом:</span> <span class="diff-val-old">${escapeHtml(curObj.album || "—")}</span></div>
+            ${curObj.title ? `<div><span class="text-muted">Трек:</span> <span class="diff-val-old">${escapeHtml(curObj.title)}</span></div>` : ""}
+          </div>
+          <div class="diff-cell">
+            <div class="diff-cell-head text-emerald">Станет (Канонично)</div>
+            <div><span class="text-muted">Артист:</span> <span class="diff-val-new">${escapeHtml(propObj.artist || propObj.albumArtist || "—")}</span></div>
+            <div><span class="text-muted">Альбом:</span> <span class="diff-val-new">${escapeHtml(propObj.album || "—")}</span></div>
+            ${propObj.title ? `<div><span class="text-muted">Трек:</span> <span class="diff-val-new">${escapeHtml(propObj.title)}</span></div>` : ""}
+            ${propObj.coverUrl ? `<div><span class="text-muted">Обложка:</span> <span class="diff-val-new mono" style="font-size: 11px;">${escapeHtml(propObj.coverUrl)}</span></div>` : ""}
+          </div>
         </div>
       </div>
-
-      <div class="staging-diff-grid">
-        <div class="diff-cell">
-          <div class="diff-cell-head">Было (В файле)</div>
-          <div><span class="text-muted">Артист:</span> <span class="diff-val-old">${escapeHtml(item.oldArtist || "—")}</span></div>
-          <div><span class="text-muted">Альбом:</span> <span class="diff-val-old">${escapeHtml(item.oldAlbum || "—")}</span></div>
-        </div>
-        <div class="diff-cell">
-          <div class="diff-cell-head text-emerald">Станет (Канонично)</div>
-          <div><span class="text-muted">Артист:</span> <span class="diff-val-new">${escapeHtml(item.newArtist || "—")}</span></div>
-          <div><span class="text-muted">Альбом:</span> <span class="diff-val-new">${escapeHtml(item.newAlbum || "—")}</span></div>
-        </div>
-      </div>
-    </div>
-  `).join("");
+    `;
+  }).join("");
 }
 
-function applyStaging(id) {
-  state.stagingItems = state.stagingItems.filter(i => i.id !== id);
-  alert("✓ Теги успешно записаны в аудио-файл через Picard Tagger.");
-  loadStagingData();
-}
-
-function dismissStaging(id) {
-  state.stagingItems = state.stagingItems.filter(i => i.id !== id);
-  loadStagingData();
-}
-
-function applyAllStaging() {
-  if (confirm("Применить все изменения в файлы медиатеки?")) {
-    state.stagingItems = [];
-    alert("✓ Изменения применены атомарно. Исходные файлы не повреждены.");
-    loadStagingData();
-    switchTab("library");
+async function applyStaging(id) {
+  try {
+    await fetchApi("/staging/apply", "POST", { id });
+    state.lastAppliedStagingId = id;
+    showToast("✓ Изменения успешно применены в файл", "success");
+    await loadStagingData();
+  } catch (err) {
+    showToast(`Ошибка применения: ${err.message}`, "error");
   }
 }
 
-function discardAllStaging() {
-  if (confirm("Отклонить все предложения Staging?")) {
-    state.stagingItems = [];
-    loadStagingData();
+async function dismissStaging(id) {
+  try {
+    await fetchApi("/staging/ignore", "POST", { id });
+    showToast("Предложение отклонено", "info");
+    await loadStagingData();
+  } catch (err) {
+    showToast(`Ошибка: ${err.message}`, "error");
+  }
+}
+
+async function applyAllStaging() {
+  if (state.stagingItems.length === 0) {
+    showToast("Нет активных предложений для применения", "info");
+    return;
+  }
+
+  if (!confirm(`Применить все ${state.stagingItems.length} предложений в файлы фонотеки?`)) {
+    return;
+  }
+
+  const ids = state.stagingItems.map(item => item.id);
+  try {
+    const res = await fetchApi("/staging/apply", "POST", { ids });
+    showToast(`✓ Успешно применено изменений: ${res.applied}`, "success");
+    await loadStagingData();
+    await loadLibraryData();
+  } catch (err) {
+    showToast(`Ошибка массового применения: ${err.message}`, "error");
+  }
+}
+
+async function discardAllStaging() {
+  if (state.stagingItems.length === 0) return;
+
+  if (!confirm("Отклонить все текущие предложения Staging?")) {
+    return;
+  }
+
+  for (const item of state.stagingItems) {
+    try {
+      await fetchApi("/staging/ignore", "POST", { id: item.id });
+    } catch (e) {}
+  }
+  showToast("Все предложения отклонены", "info");
+  await loadStagingData();
+}
+
+async function undoStaging() {
+  if (!state.lastAppliedStagingId) {
+    showToast("Нет недавно примененных предложений для отката", "info");
+    return;
+  }
+
+  try {
+    await fetchApi("/staging/undo", "POST", { id: state.lastAppliedStagingId });
+    showToast("✓ Последнее изменение успешно откатано", "success");
+    state.lastAppliedStagingId = null;
+    await loadStagingData();
+    await loadLibraryData();
+  } catch (err) {
+    showToast(`Ошибка отката: ${err.message}`, "error");
   }
 }
 
 // -----------------------------------------------------------------------------
-// 5. Ключи API
+// 5. Пул API-ключей (AES-256-GCM)
 // -----------------------------------------------------------------------------
+function initKeyModal() {
+  const modal = document.getElementById("modal-add-key");
+  const btnOpen = document.getElementById("btn-open-add-key-modal");
+  const btnClose = document.getElementById("btn-close-key-modal");
+  const btnCancel = document.getElementById("btn-cancel-key");
+  const form = document.getElementById("form-add-key");
+
+  btnOpen?.addEventListener("click", () => {
+    modal?.classList.remove("hidden");
+    document.getElementById("key-secret")?.focus();
+  });
+
+  const closeModal = () => {
+    modal?.classList.add("hidden");
+    form?.reset();
+  };
+
+  btnClose?.addEventListener("click", closeModal);
+  btnCancel?.addEventListener("click", closeModal);
+
+  modal?.addEventListener("click", (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  form?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const provider = document.getElementById("key-provider")?.value;
+    const label = document.getElementById("key-label")?.value.trim() || "";
+    const apiKey = document.getElementById("key-secret")?.value.trim() || "";
+
+    if (!provider || !apiKey) {
+      showToast("Выберите провайдера и укажите API-ключ", "error");
+      return;
+    }
+
+    try {
+      await fetchApi("/keys", "POST", { provider, label, apiKey });
+      showToast("✓ Ключ зашифрован (AES-256-GCM) и добавлен в пул ротации", "success");
+      closeModal();
+      await loadKeysData();
+    } catch (err) {
+      showToast(`Ошибка сохранения ключа: ${err.message}`, "error");
+    }
+  });
+}
+
 async function loadKeysData() {
   const tbody = document.getElementById("keys-tbody");
   if (!tbody) return;
@@ -468,27 +808,42 @@ async function loadKeysData() {
     const res = await fetchApi("/keys");
     state.keys = res.keys || [];
   } catch (err) {
-    if (!state.keys.length) {
-      state.keys = [
-        { id: 1, provider: "Google Gemini 2.5 Flash", key: "AIzaSyD...98x7A", status: "active", requests: 418 },
-        { id: 2, provider: "Groq (Whisper Large v3)", key: "gsk_u9X...31b9K", status: "active", requests: 86 },
-        { id: 3, provider: "AcoustID (fpcalc)", key: "8xA9b7...2Lq1", status: "active", requests: 1428 },
-        { id: 4, provider: "Gemini Secondary (Backup)", key: "AIzaSyC...77p2Z", status: "cooldown", requests: 104 }
-      ];
-    }
+    console.error("Ошибка загрузки ключей:", err);
+    state.keys = [];
   }
 
+  if (state.keys.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="cell-empty">В пуле пока нет ключей. Нажмите «+ Добавить ключ» для подключения Gemini, Groq, AcoustID или Yandex.</td></tr>`;
+    return;
+  }
+
+  const providerNames = {
+    gemini: "Google Gemini",
+    groq: "Groq Cloud (Whisper)",
+    acoustid: "AcoustID (fpcalc)",
+    yandex: "Яндекс Музыка",
+    genius: "Genius API"
+  };
+
   tbody.innerHTML = state.keys.map(k => {
-    const statusHtml = k.status === "active"
-      ? `<span class="text-emerald">Активен</span>`
-      : `<span class="text-amber">429 Cooldown (48с)</span>`;
+    let statusBadge = `<span class="text-emerald">Активен</span>`;
+    if (k.status === "cooldown") {
+      statusBadge = `<span class="text-amber">429 Cooldown (65с)</span>`;
+    } else if (k.status === "exhausted_daily") {
+      statusBadge = `<span class="text-amber">Исчерпан до 11:00 МСК</span>`;
+    } else if (k.status === "invalid") {
+      statusBadge = `<span class="text-crimson" style="color: var(--color-crimson);">Невалиден (401/403)</span>`;
+    }
+
+    const providerTitle = providerNames[k.provider] || k.provider;
+    const keyDisplay = k.label ? `${escapeHtml(k.label)} <span class="mono text-muted">(${escapeHtml(k.keyMask)})</span>` : `<span class="mono">${escapeHtml(k.keyMask)}</span>`;
 
     return `
       <tr>
-        <td style="font-weight: 500; color: #ffffff;">${escapeHtml(k.provider)}</td>
-        <td class="mono text-muted">${escapeHtml(k.key)}</td>
-        <td>${statusHtml}</td>
-        <td class="mono text-muted">${k.requests || 0}</td>
+        <td style="font-weight: 500; color: #ffffff;">${escapeHtml(providerTitle)}</td>
+        <td>${keyDisplay}</td>
+        <td>${statusBadge}</td>
+        <td class="mono text-muted">${k.successCount || 0} / ${k.errorCount || 0}</td>
         <td class="col-actions">
           <button class="btn btn-secondary" onclick="deleteKey(${k.id})">Удалить</button>
         </td>
@@ -497,53 +852,16 @@ async function loadKeysData() {
   }).join("");
 }
 
-function promptAddKey() {
-  const key = prompt("Введите API ключ (Gemini, Groq или AcoustID):");
-  if (key && key.trim()) {
-    fetchApi("/keys", "POST", { provider: "gemini", apiKey: key.trim() })
-      .finally(() => {
-        alert("✓ Ключ зашифрован (AES-256-GCM) и добавлен в пул ротации.");
-        loadKeysData();
-      });
+async function deleteKey(id) {
+  if (!confirm("Удалить данный API-ключ из пула ротации?")) {
+    return;
   }
-}
 
-function deleteKey(id) {
-  if (confirm("Удалить данный ключ из пула ротации?")) {
-    state.keys = state.keys.filter(k => k.id !== id);
-    loadKeysData();
+  try {
+    await fetchApi(`/keys?id=${id}`, "DELETE");
+    showToast("Ключ удален из пула", "info");
+    await loadKeysData();
+  } catch (err) {
+    showToast(`Ошибка удаления ключа: ${err.message}`, "error");
   }
-}
-
-function syncNavidrome() {
-  alert("Синхронизация Navidrome запущена");
-}
-
-function runMusicBrainzAudit() {
-  alert("Аудит MusicBrainz запущен. Найденные совпадения появятся в Staging.");
-}
-
-// -----------------------------------------------------------------------------
-// Утилиты форматирования
-// -----------------------------------------------------------------------------
-function formatDuration(sec) {
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m < 10 ? "0" : ""}${m}:${s < 10 ? "0" : ""}${s}`;
-}
-
-function formatTimestamp(sec) {
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m < 10 ? "0" : ""}${m}:${s < 10 ? "0" : ""}${s}.00`;
-}
-
-function escapeHtml(str) {
-  if (!str) return "";
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
 }
