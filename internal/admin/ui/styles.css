@@ -1,0 +1,544 @@
+/*
+ * poisq Studio v0.2.0 — Минималистичная дизайн-система (Modern Minimal)
+ * 
+ * Назначение:
+ * Чистые, эргономичные стили для веб-панели управления медиатекой.
+ * Исключает визуальный шум (Fake OS chrome, скевоморфизм, неоновые градиенты).
+ * Фокусируется на читаемости текста караоке, высокой контрастности и быстром отклике.
+ */
+
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Палитра Modern Minimal */
+  --bg-page: #090a0f;
+  --bg-surface: #12131a;
+  --bg-surface-elevated: #1a1c26;
+  --border-subtle: #222532;
+  --border-active: #32374a;
+
+  --text-primary: #f4f4f5;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+
+  --color-accent: #ffffff;
+  --color-accent-bg: #27272a;
+  --color-emerald: #10b981;
+  --color-amber: #f59e0b;
+  --color-red: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.text-light { color: var(--text-primary); }
+.text-muted { color: var(--text-muted); }
+.text-emerald { color: var(--color-emerald); }
+.text-amber { color: var(--color-amber); }
+.text-red { color: var(--color-red); }
+.hidden { display: none !important; }
+
+/* --------------------------------------------------------------------------
+   Шапка навигации (Navbar)
+   -------------------------------------------------------------------------- */
+.navbar {
+  border-bottom: 1px solid var(--border-subtle);
+  background-color: rgba(9, 10, 15, 0.95);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: blur(8px);
+}
+
+.nav-container {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 20px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.brand-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background-color: #ffffff;
+  color: #000000;
+  font-weight: 800;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.brand-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: #ffffff;
+}
+.brand-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nav-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+.nav-tab:hover {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.04);
+}
+.nav-tab.active {
+  color: #ffffff;
+  background-color: var(--bg-surface-elevated);
+}
+
+.badge-count {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--color-amber);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.nav-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--color-emerald);
+}
+
+/* --------------------------------------------------------------------------
+   Основная область (Main Layout)
+   -------------------------------------------------------------------------- */
+.main-content {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 24px 20px 48px 20px;
+}
+
+.tab-panel {
+  display: none;
+  flex-direction: column;
+  gap: 20px;
+}
+.tab-panel.active {
+  display: flex;
+}
+
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.panel-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+}
+.panel-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Кнопки (Buttons)
+   -------------------------------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: none;
+  text-decoration: none;
+}
+.btn-primary {
+  background-color: #ffffff;
+  color: #000000;
+  font-weight: 600;
+}
+.btn-primary:hover {
+  background-color: #e4e4e7;
+}
+
+.btn-secondary {
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+}
+.btn-secondary:hover {
+  background-color: var(--bg-surface-elevated);
+}
+
+/* --------------------------------------------------------------------------
+   Таблицы данных (Tables)
+   -------------------------------------------------------------------------- */
+.filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.search-field {
+  flex: 1;
+  max-width: 380px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: #ffffff;
+  outline: none;
+}
+.search-field:focus {
+  border-color: var(--border-active);
+}
+
+.meta-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.table-wrapper {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: var(--bg-surface);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12px;
+}
+
+.data-table th {
+  padding: 10px 16px;
+  background-color: rgba(0, 0, 0, 0.2);
+  color: var(--text-secondary);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.data-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+}
+
+.data-table tr:hover td {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.col-num { width: 44px; text-align: center; color: var(--text-muted); }
+.col-actions { text-align: right; }
+.cell-empty { text-align: center; padding: 32px; color: var(--text-muted); }
+
+/* --------------------------------------------------------------------------
+   Караоке и LRC Плеер
+   -------------------------------------------------------------------------- */
+.track-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.track-cover-placeholder {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  background-color: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--text-muted);
+}
+
+.karaoke-viewport {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 40px 16px;
+  min-height: 380px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.lyrics-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  text-align: center;
+}
+
+.lyric-line {
+  font-size: 24px;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  transition: color 0.2s ease, transform 0.2s ease;
+  cursor: pointer;
+  user-select: none;
+}
+.lyric-line.active {
+  color: #ffffff;
+  font-weight: 600;
+  transform: translateX(4px);
+}
+.lyric-line.inactive {
+  color: var(--text-muted);
+}
+.lyric-line:hover {
+  color: var(--text-secondary);
+}
+
+.raw-editor-viewport {
+  max-width: 680px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+.raw-editor-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.raw-textarea {
+  width: 100%;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 16px;
+  font-size: 12px;
+  color: #ffffff;
+  line-height: 1.6;
+  outline: none;
+  resize: none;
+}
+.raw-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Панель воспроизведения (Player Bar) */
+.player-bar {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.player-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn-step {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.btn-step:hover {
+  color: #ffffff;
+  background-color: var(--bg-surface-elevated);
+}
+
+.btn-play {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background-color: #ffffff;
+  color: #000000;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+.btn-play:active {
+  transform: scale(0.95);
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+}
+
+.scrub-section {
+  flex: 1;
+  max-width: 540px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.time-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  width: 36px;
+}
+.scrub-bar {
+  flex: 1;
+  height: 5px;
+  background-color: var(--border-subtle);
+  border-radius: 999px;
+  cursor: pointer;
+  overflow: hidden;
+}
+.scrub-progress {
+  height: 100%;
+  background-color: #ffffff;
+  border-radius: 999px;
+  width: 0%;
+}
+
+.provider-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------------------------------------
+   Staging Карточки (Picard буфер)
+   -------------------------------------------------------------------------- */
+.staging-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.staging-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 16px;
+  background-color: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.staging-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.staging-issue {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-amber);
+}
+.staging-path {
+  font-size: 13px;
+  font-weight: 500;
+  color: #ffffff;
+  margin-top: 2px;
+}
+
+.staging-diff-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.diff-cell {
+  background-color: rgba(0, 0, 0, 0.3);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  border: 1px solid var(--border-subtle);
+}
+.diff-cell-head {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+}
+.diff-val-old {
+  color: var(--color-red);
+  text-decoration: line-through;
+}
+.diff-val-new {
+  color: var(--color-emerald);
+  font-weight: 500;
+}

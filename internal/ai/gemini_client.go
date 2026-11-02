@@ -1,0 +1,184 @@
+// Package ai реализует облачные AI-пайплайны сервиса poisq: мультиязычную очистку
+// и консенсус текстов через Gemini 2.5 Flash, сжатие аудио на лету в моно-Opus
+// и двухэтапную генерацию синхронизированного караоке через Groq Whisper + Gemini.
+//
+// Данный файл gemini_client.go реализует отказоустойчивый клиент к Google Gemini API
+// (модель gemini-2.5-flash) с автоматической ротацией ключей из пула keypool,
+// мгновенным переключением при 429 (cooldown 65 сек) и отработкой дневных квот (RESOURCE_EXHAUSTED).
+package ai
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/F5GO/poisq/internal/keypool"
+)
+
+const (
+	defaultGeminiModel = "gemini-2.5-flash"
+	geminiAPIBase      = "https://generativelanguage.googleapis.com/v1beta/models"
+)
+
+type geminiGenerateRequest struct {
+	SystemInstruction *geminiContent       `json:"systemInstruction,omitempty"`
+	Contents          []geminiContent      `json:"contents"`
+	GenerationConfig  *geminiGenConfig     `json:"generationConfig,omitempty"`
+}
+
+type geminiContent struct {
+	Parts []geminiPart `json:"parts"`
+}
+
+type geminiPart struct {
+	Text string `json:"text"`
+}
+
+type geminiGenConfig struct {
+	Temperature      float64 `json:"temperature"`
+	ResponseMimeType string  `json:"responseMimeType,omitempty"`
+}
+
+type geminiGenerateResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error,omitempty"`
+}
+
+// GeminiClient выполняет запросы к Gemini 2.5 Flash с автоматической ротацией ключей.
+type GeminiClient struct {
+	keyPool *keypool.Manager
+	client  *http.Client
+	model   string
+}
+
+// NewGeminiClient создает новый экземпляр клиента Gemini.
+func NewGeminiClient(keyPool *keypool.Manager) *GeminiClient {
+	return &GeminiClient{
+		keyPool: keyPool,
+		model:   defaultGeminiModel,
+		client: &http.Client{
+			Timeout: 45 * time.Second,
+		},
+	}
+}
+
+// GenerateText выполняет запрос к Gemini с системной инструкцией и пользовательским промптом.
+// При ошибке 429 или исчерпании дневной квоты автоматически помечает текущий ключ и переключается на следующий.
+func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPrompt, responseMimeType string) (string, error) {
+	const maxKeySwitches = 5
+
+	var lastErr error
+	for attempt := 1; attempt <= maxKeySwitches; attempt++ {
+		leased, err := g.keyPool.Acquire("gemini")
+		if err != nil {
+			if lastErr != nil {
+				return "", fmt.Errorf("%w (последняя ошибка API: %v)", err, lastErr)
+			}
+			return "", err
+		}
+
+		resText, status, apiStatus, err := g.callOnce(ctx, leased.PlainKey, systemPrompt, userPrompt, responseMimeType)
+		if err == nil {
+			g.keyPool.ReportSuccess(leased.ID)
+			return resText, nil
+		}
+
+		lastErr = err
+		errLower := strings.ToLower(err.Error() + " " + apiStatus)
+
+		// Классификация ошибки для пула ключей
+		if status == http.StatusTooManyRequests || strings.Contains(errLower, "resource_exhausted") || strings.Contains(errLower, "quota") {
+			if strings.Contains(errLower, "perday") || strings.Contains(errLower, "daily") || strings.Contains(errLower, "quota exceeded for quota metric") {
+				g.keyPool.ReportDailyQuotaExhausted(leased.ID, err.Error())
+			} else {
+				g.keyPool.ReportRateLimit429(leased.ID, err.Error())
+			}
+			continue // Мгновенно переключаемся на следующий активный ключ!
+		}
+
+		if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden {
+			if strings.Contains(errLower, "api_key_invalid") || strings.Contains(errLower, "key not valid") || status != http.StatusBadRequest {
+				g.keyPool.ReportInvalid(leased.ID, status, err.Error())
+				continue
+			}
+		}
+
+		return "", err
+	}
+
+	return "", lastErr
+}
+
+func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
+	reqPayload := geminiGenerateRequest{
+		Contents: []geminiContent{
+			{Parts: []geminiPart{{Text: userPrompt}}},
+		},
+		GenerationConfig: &geminiGenConfig{
+			Temperature:      0.1,
+			ResponseMimeType: responseMimeType,
+		},
+	}
+	if strings.TrimSpace(systemPrompt) != "" {
+		reqPayload.SystemInstruction = &geminiContent{
+			Parts: []geminiPart{{Text: systemPrompt}},
+		}
+	}
+
+	bodyBytes, err := json.Marshal(reqPayload)
+	if err != nil {
+		return "", 0, "", err
+	}
+
+	endpoint := fmt.Sprintf("%s/%s:generateContent?key=%s", geminiAPIBase, g.model, apiKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", 0, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return "", 0, "", err
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return "", resp.StatusCode, "", err
+	}
+
+	var parsed geminiGenerateResponse
+	_ = json.Unmarshal(respBytes, &parsed)
+
+	if resp.StatusCode != http.StatusOK || parsed.Error != nil {
+		apiMsg := string(respBytes)
+		apiStatus := ""
+		if parsed.Error != nil {
+			apiMsg = parsed.Error.Message
+			apiStatus = parsed.Error.Status
+		}
+		return "", resp.StatusCode, apiStatus, fmt.Errorf("Gemini HTTP %d (%s): %s", resp.StatusCode, apiStatus, apiMsg)
+	}
+
+	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
+		return "", resp.StatusCode, "", fmt.Errorf("Gemini вернул пустой ответ без текста")
+	}
+
+	return strings.TrimSpace(parsed.Candidates[0].Content.Parts[0].Text), http.StatusOK, "OK", nil
+}

@@ -1,0 +1,214 @@
+<!--
+  poisq Studio (:4535) — Главный интерфейс веб-панели управления
+  Назначение:
+  Минималистичный, чистый интерфейс для управления фонотекой, синхронными LRC текстами,
+  буфером тегов Staging (Picard) и ротацией пула API-ключей.
+  Построен без визуального шума и лишних украшательств (Modern Minimal).
+-->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>poisq Studio (:4535)</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  
+  <!-- Верхняя строка навигации -->
+  <header class="navbar">
+    <div class="nav-container">
+      <div class="nav-brand">
+        <span class="brand-logo">p</span>
+        <span class="brand-name">poisq</span>
+        <span class="brand-sub">studio</span>
+      </div>
+
+      <nav class="nav-links">
+        <button class="nav-tab active" data-tab="library">Медиатека</button>
+        <button class="nav-tab" data-tab="karaoke">Караоке и LRC</button>
+        <button class="nav-tab" data-tab="staging">
+          <span>Staging</span>
+          <span class="badge-count" id="badge-staging-count">0</span>
+        </button>
+        <button class="nav-tab" data-tab="keys">Ключи API</button>
+      </nav>
+
+      <div class="nav-status">
+        <span class="status-dot"></span>
+        <span class="mono">:4534 Subsonic</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Основная рабочая область -->
+  <main class="main-content">
+
+    <!-- ============================================================== -->
+    <!-- Вкладка 1: Медиатека -->
+    <!-- ============================================================== -->
+    <section id="panel-library" class="tab-panel active">
+      <div class="panel-header">
+        <div>
+          <h1 class="panel-title">Фонотека</h1>
+          <p class="panel-desc" id="library-summary-desc">
+            Каталог <span class="mono text-light">/music</span> · Загрузка статистики...
+          </p>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-secondary" id="btn-sync-navidrome">Синхронизация Navidrome</button>
+          <button class="btn btn-primary" id="btn-run-audit">MusicBrainz аудит</button>
+        </div>
+      </div>
+
+      <!-- Фильтр и счетчик -->
+      <div class="filter-row">
+        <input type="text" id="track-search-input" placeholder="Поиск по артисту, треку или альбому..." class="search-field" />
+        <span class="meta-label mono" id="tracks-count-label">Показано: 0 треков</span>
+      </div>
+
+      <!-- Таблица треков -->
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th class="col-num mono">#</th>
+              <th>Трек</th>
+              <th>Альбом</th>
+              <th>Длительность</th>
+              <th>Текст</th>
+              <th class="col-actions">Действие</th>
+            </tr>
+          </thead>
+          <tbody id="tracks-tbody">
+            <tr><td colspan="6" class="cell-empty">Загрузка каталога...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- Вкладка 2: Караоке и LRC -->
+    <!-- ============================================================== -->
+    <section id="panel-karaoke" class="tab-panel">
+      <div class="panel-header">
+        <div class="track-header-meta">
+          <div class="track-cover-placeholder" id="player-cover">♪</div>
+          <div>
+            <h1 class="panel-title" id="player-title">Выберите трек</h1>
+            <p class="panel-desc" id="player-artist">Нажмите на любой трек в медиатеке для запуска текста</p>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <button class="btn btn-secondary" id="btn-toggle-editor">Редактор .lrc</button>
+          <button class="btn btn-secondary" id="btn-cloud-karaoke">AI Караоке (Groq)</button>
+        </div>
+      </div>
+
+      <!-- Вид караоке телесуфлера -->
+      <div id="view-karaoke" class="karaoke-viewport">
+        <div class="lyrics-stream" id="lyrics-stream">
+          <div class="lyric-line inactive">Выберите трек в медиатеке</div>
+        </div>
+      </div>
+
+      <!-- Режим сырого редактора LRC -->
+      <div id="view-raw-editor" class="raw-editor-viewport hidden">
+        <div class="raw-editor-meta mono" id="raw-file-path">/music/track.lrc</div>
+        <textarea id="raw-lrc-textarea" rows="12" class="raw-textarea mono"></textarea>
+        <div class="raw-actions">
+          <button class="btn btn-primary" id="btn-save-raw-lrc">Сохранить .lrc рядом с треком</button>
+        </div>
+      </div>
+
+      <!-- Панель воспроизведения -->
+      <div class="player-bar">
+        <div class="player-controls">
+          <button class="btn-step" id="btn-step-back" title="Назад 10с">
+            <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.334 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"></path></svg>
+          </button>
+          
+          <button class="btn-play" id="btn-play">
+            <svg id="play-icon" class="icon" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>
+            <svg id="pause-icon" class="icon hidden" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path></svg>
+          </button>
+
+          <button class="btn-step" id="btn-step-forward" title="Вперед 10с">
+            <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.934 12.8a1 1 0 000-1.6l-5.334-4A1 1 0 005 8v8a1 1 0 001.6.8l5.334-4zM19.934 12.8a1 1 0 000-1.6l-5.334-4A1 1 0 0013 8v8a1 1 0 001.6.8l5.334-4z"></path></svg>
+          </button>
+        </div>
+
+        <div class="scrub-section">
+          <span class="mono time-label" id="time-current">00:00</span>
+          <div class="scrub-bar" id="scrub-bar">
+            <div class="scrub-progress" id="scrub-progress"></div>
+          </div>
+          <span class="mono time-label text-muted" id="time-total">00:00</span>
+        </div>
+
+        <div class="provider-label mono" id="provider-info-label">
+          LRCLIB Synced
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- Вкладка 3: Staging Picard -->
+    <!-- ============================================================== -->
+    <section id="panel-staging" class="tab-panel">
+      <div class="panel-header">
+        <div>
+          <h1 class="panel-title">Staging-буфер</h1>
+          <p class="panel-desc">
+            Предложения по исправлению кодировки CP1251 и канонизации имен артистов. Файлы не перезаписываются без подтверждения.
+          </p>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-secondary" id="btn-discard-all-staging">Отклонить все</button>
+          <button class="btn btn-primary" id="btn-apply-all-staging">Применить изменения</button>
+        </div>
+      </div>
+
+      <div class="staging-cards" id="staging-cards-container">
+        <div class="cell-empty">Очередь Staging пуста. Все теги каноничны.</div>
+      </div>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- Вкладка 4: Ключи API -->
+    <!-- ============================================================== -->
+    <section id="panel-keys" class="tab-panel">
+      <div class="panel-header">
+        <div>
+          <h1 class="panel-title">Пул API-ключей</h1>
+          <p class="panel-desc">
+            Шифрование AES-256-GCM. Автоматическая ротация (LRU) и 65-секундный Cooldown при ошибке 429.
+          </p>
+        </div>
+        <button class="btn btn-primary" id="btn-add-key">+ Добавить ключ</button>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Провайдер</th>
+              <th>Ключ</th>
+              <th>Статус</th>
+              <th>Запросов</th>
+              <th class="col-actions">Действие</th>
+            </tr>
+          </thead>
+          <tbody id="keys-tbody">
+            <tr><td colspan="5" class="cell-empty">Загрузка пула ключей...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
