@@ -208,7 +208,7 @@ func TestServerDebugAPIAccessControl(t *testing.T) {
 	u, _ := reqGetURL("http://127.0.0.1:4533")
 
 	// 1. При EnableDebugAPI = false (production режим по умолчанию)
-	prodServer := NewServer(u, engine, dict, aliasMgr, false, nil)
+	prodServer := NewServer(u, engine, dict, aliasMgr, false)
 	req1 := httptest.NewRequest(http.MethodGet, "/_smart/aliases", nil)
 	rr1 := httptest.NewRecorder()
 	prodServer.ServeHTTP(rr1, req1)
@@ -226,7 +226,7 @@ func TestServerDebugAPIAccessControl(t *testing.T) {
 	}
 
 	// 2. При EnableDebugAPI = true (диагностический режим)
-	debugServer := NewServer(u, engine, dict, aliasMgr, true, nil)
+	debugServer := NewServer(u, engine, dict, aliasMgr, true)
 	req3 := httptest.NewRequest(http.MethodGet, "/_smart/aliases", nil)
 	rr3 := httptest.NewRecorder()
 	debugServer.ServeHTTP(rr3, req3)
@@ -278,7 +278,7 @@ func TestNativeSearchFilterJSON(t *testing.T) {
 	targetURL, _ := url.Parse("http://127.0.0.1:4533")
 	fanoutMgr := NewFanoutManager(targetURL, nil, nil)
 	reverseProxy := httputil.NewSingleHostReverseProxy(targetURL)
-	interceptor := NewInterceptor(engine, fanoutMgr, reverseProxy, nil)
+	interceptor := NewInterceptor(engine, fanoutMgr, reverseProxy)
 
 	req := httptest.NewRequest("GET", "/api/artist?filter=%7B%22_search%22%3A%22%D0%BB%D0%B8%D0%BD%D0%BA%D0%B8%D0%BD%22%7D", nil)
 	rr := httptest.NewRecorder()

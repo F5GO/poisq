@@ -6,9 +6,6 @@
 package proxy
 
 import (
-	"context"
-	"errors"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -17,7 +14,6 @@ import (
 	"time"
 
 	"github.com/F5GO/poisq/internal/cache"
-	"github.com/F5GO/poisq/internal/lyrics"
 	"github.com/F5GO/poisq/internal/search"
 )
 
@@ -27,7 +23,7 @@ type Server struct {
 }
 
 // NewServer создает новый экземпляр реверс-прокси сервера с оптимизированным пулом соединений и кэшем.
-func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionary, aliasMgr *search.AliasManager, enableDebugAPI bool, lyricsEngine *lyrics.Engine) *Server {
+func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionary, aliasMgr *search.AliasManager, enableDebugAPI bool) *Server {
 	// Высокопроизводительный пул Keep-Alive соединений с Navidrome для мгновенной отдачи ответов
 	transport := &http.Transport{
 		Proxy: nil,
@@ -44,15 +40,6 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 
 	reverseProxy := httputil.NewSingleHostReverseProxy(targetURL)
 	reverseProxy.Transport = transport
-
-	// Подавление шумных логов разрыва соединения клиентом (смена трека в мобильном плеере)
-	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
-			return
-		}
-		log.Printf("[WARN] [PROXY] Ошибка проксирования к Navidrome (%s): %v", r.URL.Path, err)
-		w.WriteHeader(http.StatusBadGateway)
-	}
 
 	// Настройка Director с безопасной нормализацией заголовков X-Forwarded-* для работы за CDN/Reverse Proxy
 	originalDirector := reverseProxy.Director
@@ -72,35 +59,14 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 
 	memCache := cache.NewMemoryCache(2048, 45*time.Second)
 	fanoutMgr := NewFanoutManager(targetURL, transport, memCache)
-	interceptor := NewInterceptor(engine, fanoutMgr, reverseProxy, lyricsEngine)
+	interceptor := NewInterceptor(engine, fanoutMgr, reverseProxy)
 	debugHandler := HandleDebugTest(engine, dict)
 	aliasHandler := HandleAliasesAPI(aliasMgr)
-
-	var lyricsDebugHandler http.HandlerFunc
-	var lyricsSourcesHandler http.HandlerFunc
-	var lyricsAPIHandler http.HandlerFunc
-	var lyricsCacheClearHandler http.HandlerFunc
-	if lyricsEngine != nil {
-		lyricsDebugHandler = lyrics.HandleLyricsDebugTest(lyricsEngine)
-		lyricsSourcesHandler = lyrics.HandleLyricsSourcesList(lyricsEngine)
-		lyricsAPIHandler = lyrics.HandleLRCLIBAPI(lyricsEngine)
-		lyricsCacheClearHandler = lyrics.HandleLyricsCacheClear(lyricsEngine)
-	}
 
 	mux := http.NewServeMux()
 
 	// Все входящие запросы проходят централизованную маршрутизацию
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Совместимый с LRCLIB API (/lyrics/api/get, /lyrics/api/search)
-		if strings.HasPrefix(r.URL.Path, "/lyrics/api/") {
-			if lyricsAPIHandler != nil {
-				lyricsAPIHandler(w, r)
-			} else {
-				http.NotFound(w, r)
-			}
-			return
-		}
-
 		// Безопасность: диагностические эндпоинты /_smart/* закрыты по умолчанию в production
 		if strings.HasPrefix(r.URL.Path, "/_smart/") {
 			if !enableDebugAPI {
@@ -114,30 +80,6 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 			}
 			if strings.HasPrefix(r.URL.Path, "/_smart/aliases") {
 				aliasHandler(w, r)
-				return
-			}
-			if strings.HasPrefix(r.URL.Path, "/_smart/lyrics/test") {
-				if lyricsDebugHandler != nil {
-					lyricsDebugHandler(w, r)
-				} else {
-					http.NotFound(w, r)
-				}
-				return
-			}
-			if strings.HasPrefix(r.URL.Path, "/_smart/lyrics/sources") {
-				if lyricsSourcesHandler != nil {
-					lyricsSourcesHandler(w, r)
-				} else {
-					http.NotFound(w, r)
-				}
-				return
-			}
-			if strings.HasPrefix(r.URL.Path, "/_smart/lyrics/cache/clear") {
-				if lyricsCacheClearHandler != nil {
-					lyricsCacheClearHandler(w, r)
-				} else {
-					http.NotFound(w, r)
-				}
 				return
 			}
 			http.NotFound(w, r)

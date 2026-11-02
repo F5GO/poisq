@@ -16,3 +16,9 @@ test_data/
 .DS_Store
 .idea/
 .vscode/
+
+# Архивы и локальные расширения
+lyrics_archive/
+_lyrics_archive/
+.lyrics_backup/
+chrome-extension/
