@@ -38,13 +38,32 @@ func (s *AdminServer) handleTrackStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	root := s.guard.Root()
 	safePath, err := s.guard.ValidateTarget(track.FilePath, false)
+	searchTarget := safePath
 	if err != nil {
-		writeJSONError(w, http.StatusForbidden, "access denied: "+err.Error())
+		searchTarget = filepath.Join(root, strings.TrimPrefix(track.FilePath, "/"))
+	}
+
+	found := metadata.FindAudioFileAnywhere(root, searchTarget)
+	if found == "" && searchTarget != track.FilePath {
+		found = metadata.FindAudioFileAnywhere(root, track.FilePath)
+	}
+
+	if found != "" {
+		if validated, err := s.guard.ValidateTarget(found, false); err == nil {
+			found = validated
+		}
+		http.ServeFile(w, r, found)
 		return
 	}
 
-	http.ServeFile(w, r, safePath)
+	if safePath != "" {
+		http.ServeFile(w, r, safePath)
+		return
+	}
+
+	writeJSONError(w, http.StatusNotFound, "audio file not found")
 }
 
 // handleLocalCover безопасно отдает локальный файл обложки для предпросмотра и сравнения в Staging.

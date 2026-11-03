@@ -146,3 +146,28 @@ func (r *StagingRepository) UpdateProposedJSON(id int64, proposedJSON string) er
 	_, err := r.db.Exec(`UPDATE staging_changes SET proposed_json = ? WHERE id = ?`, proposedJSON, id)
 	return err
 }
+
+// UpdateCurrentJSON обновляет снимок текущего состояния (current_json) для предложения.
+func (r *StagingRepository) UpdateCurrentJSON(id int64, currentJSON string) error {
+	_, err := r.db.Exec(`UPDATE staging_changes SET current_json = ? WHERE id = ?`, currentJSON, id)
+	return err
+}
+
+// ClearPendingCoverProposals удаляет не примененные предложения обложек (change_type = 'cover' и status = 'pending'),
+// позволяя запустить чистый аудит обложек заново с учетом новых локаторов.
+func (r *StagingRepository) ClearPendingCoverProposals() (int64, error) {
+	res, err := r.db.Exec(`DELETE FROM staging_changes WHERE change_type = 'cover' AND status = 'pending'`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ClearAllPending удаляет все не примененные предложения Staging для полной перезагрузки очереди.
+func (r *StagingRepository) ClearAllPending() (int64, error) {
+	res, err := r.db.Exec(`DELETE FROM staging_changes WHERE status = 'pending'`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
