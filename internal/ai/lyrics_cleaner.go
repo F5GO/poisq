@@ -9,7 +9,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -96,14 +95,5 @@ func (c *LyricsCleaner) BuildConsensus(ctx context.Context, artist, title string
 		return nil, err
 	}
 
-	var out ConsensusOutput
-	if err := json.Unmarshal([]byte(respJSON), &out); err != nil {
-		return nil, fmt.Errorf("ошибка разбора JSON ответа Gemini: %w", err)
-	}
-	out.CleanedLyrics = strings.TrimSpace(out.CleanedLyrics)
-	if out.CleanedLyrics == "" {
-		return nil, fmt.Errorf("Gemini вернул пустой очищенный текст")
-	}
-
-	return &out, nil
+	return ParseConsensusOutput(respJSON)
 }
