@@ -23,6 +23,7 @@ import (
 	"github.com/F5GO/poisq/internal/config"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/keypool"
+	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/lyrics"
 	"github.com/F5GO/poisq/internal/metadata"
 	"github.com/F5GO/poisq/internal/proxy"
@@ -41,8 +42,24 @@ func main() {
 		log.Fatalf("[FATAL] Ошибка конфигурации: %v", err)
 	}
 
-	log.Printf("[INFO] Конфигурация: ProxyAddr=%s, AdminAddr=%s, NavidromeURL=%s, NavDB=%s, PoisqDB=%s, MusicPath=%s",
+	logger.SetLevel(cfg.LogLevel)
+	logger.Info("Уровень логирования установлен: %s (LOG_LEVEL=%s)", logger.CurrentLevelStr(), cfg.LogLevel)
+
+	logger.Info("Конфигурация: ProxyAddr=%s, AdminAddr=%s, NavidromeURL=%s, NavDB=%s, PoisqDB=%s, MusicPath=%s",
 		cfg.ListenAddr, cfg.AdminListenAddr, cfg.NavidromeURL, cfg.NavidromeDBPath, cfg.PoisqDBPath, cfg.MusicPath)
+
+	// Диагностика файловой системы точки монтирования MusicPath при старте
+	if entries, err := os.ReadDir(cfg.MusicPath); err == nil {
+		var subdirs []string
+		for _, e := range entries {
+			if e.IsDir() {
+				subdirs = append(subdirs, e.Name())
+			}
+		}
+		logger.Info("[MOUNT] Точка монтирования %s доступна, обнаружено каталогов первого уровня (%d): %v", cfg.MusicPath, len(subdirs), subdirs)
+	} else {
+		logger.Warn("[MOUNT] Точка монтирования %s недоступна для чтения: %v", cfg.MusicPath, err)
+	}
 
 	// 2. Инициализация словаря, поискового движка и менеджера алиасов
 	dict := search.NewDictionary()

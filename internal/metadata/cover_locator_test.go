@@ -70,4 +70,25 @@ func TestFindCoverAnywhere(t *testing.T) {
 	if found != parentCover {
 		t.Errorf("Parent folder search failed: got %q, expected %q", found, parentCover)
 	}
+
+	// Тест 6: Поиск обложки при наличии суффикса « — копия» в пути базы Navidrome
+	// На диске папка: tmpDir/Music/Король и Шут/Король и Шут – Будь как дома, Путник/cover.jpg
+	kishDir := filepath.Join(tmpDir, "Music", "Король и Шут", "Король и Шут – Будь как дома, Путник")
+	_ = os.MkdirAll(kishDir, 0755)
+	kishCover := filepath.Join(kishDir, "cover.jpg")
+	_ = os.WriteFile(kishCover, []byte("fake-kish-cover"), 0644)
+
+	// Запрос с «Music — копия»
+	copyRequestPath := filepath.Join(tmpDir, "Music — копия", "Король и Шут", "Король и Шут – Будь как дома, Путник")
+	found = FindCoverAnywhere(tmpDir, copyRequestPath)
+	if found != kishCover {
+		t.Errorf("Copy suffix resolution failed: got %q, expected %q", found, kishCover)
+	}
+
+	// Запрос напрямую без префикса Music
+	directKishPath := filepath.Join(tmpDir, "Король и Шут", "Король и Шут – Будь как дома, Путник")
+	found = FindCoverAnywhere(tmpDir, directKishPath)
+	if found != kishCover {
+		t.Errorf("Direct kish path failed: got %q, expected %q", found, kishCover)
+	}
 }

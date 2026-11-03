@@ -3,14 +3,16 @@
 //
 // Данный файл audio_locator.go реализует надежный и устойчивый поиск аудиофайлов треков
 // на файловой системе медиатеки. Разрешает расхождения в дефисах/тире (- vs – vs —),
-// нормализации Unicode (NFC/NFD на macOS APFS), вариациях префикса библиотеки (/music/Music vs /music)
-// и регистре расширений файлов для бесперебойного воспроизведения в караоке-плеере.
+// суффиксах копий (« — копия»), нормализации Unicode (NFC/NFD на macOS APFS),
+// вариациях префикса библиотеки (/music/Music vs /music) и регистре расширений файлов.
 package metadata
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 // FindAudioFileAnywhere выполняет поиск реального аудиофайла на диске,
@@ -26,37 +28,32 @@ func FindAudioFileAnywhere(musicRoot, targetPath string) string {
 		return clean
 	}
 
-	targetDir := filepath.Dir(clean)
-	targetFileName := filepath.Base(clean)
-
-	// 2. Разрешаем директорию с нечетким сопоставлением (тире, Unicode, префикс Music)
-	resolvedDir := ResolveFuzzyDirectory(musicRoot, targetDir)
-	if resolvedDir == "" {
-		resolvedDir = targetDir
+	candidatePaths := GeneratePathVariants(musicRoot, targetPath)
+	if len(candidatePaths) == 0 {
+		candidatePaths = []string{clean}
 	}
 
-	// 3. Ищем аудиофайл внутри найденного каталога
-	if found := matchAudioFileInDirectory(resolvedDir, targetFileName); found != "" {
-		return found
-	}
+	for _, cand := range candidatePaths {
+		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			logger.Debug("[AUDIO] Аудиофайл найден напрямую: %s", cand)
+			return cand
+		}
 
-	// 4. Если каталог не разрешился или файл не найден, пробуем поискать в родительских папках
-	if musicRoot != "" && strings.HasPrefix(targetDir, musicRoot) {
-		trimmedRel := strings.TrimPrefix(targetDir, musicRoot)
-		trimmedRel = strings.TrimPrefix(trimmedRel, "/")
-		// Пробуем отрезать префикс Music/ если он есть
-		for _, prefix := range []string{"Music/", "music/", "Audio/", "audio/"} {
-			if strings.HasPrefix(trimmedRel, prefix) {
-				altDir := filepath.Join(musicRoot, strings.TrimPrefix(trimmedRel, prefix))
-				if altResolved := ResolveFuzzyDirectory(musicRoot, altDir); altResolved != "" {
-					if found := matchAudioFileInDirectory(altResolved, targetFileName); found != "" {
-						return found
-					}
-				}
-			}
+		targetDir := filepath.Dir(cand)
+		targetFileName := filepath.Base(cand)
+
+		resolvedDir := ResolveFuzzyDirectory(musicRoot, targetDir)
+		if resolvedDir == "" {
+			resolvedDir = targetDir
+		}
+
+		if found := matchAudioFileInDirectory(resolvedDir, targetFileName); found != "" {
+			logger.Debug("[AUDIO] Аудиофайл найден в каталоге: %s (запрос: %s)", found, targetPath)
+			return found
 		}
 	}
 
+	logger.Debug("[AUDIO] Аудиофайл не найден на диске для пути %q (проверено вариантов: %d)", targetPath, len(candidatePaths))
 	return ""
 }
 
@@ -86,7 +83,7 @@ func matchAudioFileInDirectory(dirPath, targetFileName string) string {
 		}
 	}
 
-	// 2-й проход: совпадение по имени без расширения (на случай если расширение в другом регистре или формате)
+	// 2-й проход: совпадение по имени без расширения
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -106,7 +103,7 @@ func matchAudioFileInDirectory(dirPath, targetFileName string) string {
 		}
 	}
 
-	// 3-й проход: частичное вхождение (если в названии файла на диске опущен или добавлен номер дорожки)
+	// 3-й проход: частичное вхождение
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -118,7 +115,6 @@ func matchAudioFileInDirectory(dirPath, targetFileName string) string {
 		normEntry := normalizeNameForMatch(entry.Name())
 		entryBase := strings.TrimSuffix(normEntry, normalizeNameForMatch(entryExt))
 
-		// Проверяем, содержится ли значимая часть названия
 		if len(targetBase) > 4 && len(entryBase) > 4 {
 			if strings.Contains(entryBase, targetBase) || strings.Contains(targetBase, entryBase) {
 				full := filepath.Join(dirPath, entry.Name())

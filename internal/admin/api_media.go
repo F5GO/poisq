@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/metadata"
 	"github.com/F5GO/poisq/internal/proxy"
 )
@@ -128,6 +129,8 @@ func (s *AdminServer) handleLocalCover(w http.ResponseWriter, r *http.Request) {
 	albumName := strings.TrimSpace(r.URL.Query().Get("album"))
 	artistName := strings.TrimSpace(r.URL.Query().Get("artist"))
 
+	logger.Debug("[COVER-API] [LOCAL] Запрос локальной обложки: path=%q, album=%q, artist=%q", coverPath, albumName, artistName)
+
 	if coverPath == "" && albumName == "" && artistName == "" {
 		writeJSONError(w, http.StatusBadRequest, "cover path or album is required")
 		return
@@ -150,9 +153,11 @@ func (s *AdminServer) handleLocalCover(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if s.serveCoverPathOrEmbedded(w, r, root, searchTarget, "") {
+			logger.Debug("[COVER-API] [LOCAL] Обложка отдана по searchTarget=%q", searchTarget)
 			return
 		}
 		if searchTarget != coverPath && s.serveCoverPathOrEmbedded(w, r, root, coverPath, "") {
+			logger.Debug("[COVER-API] [LOCAL] Обложка отдана по coverPath=%q", coverPath)
 			return
 		}
 
@@ -172,7 +177,7 @@ func (s *AdminServer) handleLocalCover(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Поиск по паре Исполнитель / Альбом на диске, в navidrome.db и в кэше Navidrome
 	if albumName != "" || artistName != "" {
-		// Делегируем комплексному резолверу обложек Navidrome + Диск + Embedded
+		logger.Debug("[COVER-API] [LOCAL] Делегирование в handleNavidromeAlbumCover: artist=%q, album=%q", artistName, albumName)
 		q := r.URL.Query()
 		if q.Get("album") == "" && albumName != "" {
 			q.Set("album", albumName)
@@ -185,7 +190,7 @@ func (s *AdminServer) handleLocalCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Заглушка-таймаут не нужна — возвращаем 404, если обложка действительно нигде не существует
+	logger.Warn("[COVER-API] [LOCAL] Локальная обложка не найдена: path=%q, album=%q, artist=%q", coverPath, albumName, artistName)
 	_ = time.Second
 	writeJSONError(w, http.StatusNotFound, "cover file not found")
 }
