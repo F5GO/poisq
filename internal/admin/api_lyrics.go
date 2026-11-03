@@ -125,6 +125,57 @@ func (s *AdminServer) handleLyricsSave(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *AdminServer) handleLyricsDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		TrackID string `json:"trackId"`
+	}
+	if r.Method == http.MethodDelete {
+		req.TrackID = strings.TrimSpace(r.URL.Query().Get("trackId"))
+	} else {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+
+	trackID := strings.TrimSpace(req.TrackID)
+	if trackID == "" {
+		writeJSONError(w, http.StatusBadRequest, "trackId is required")
+		return
+	}
+
+	track, err := s.tracksRepo.GetByID(trackID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, "track not found")
+		return
+	}
+
+	var lrcDeletedPath string
+	var delErr error
+	if s.lrcWriter != nil && track.FilePath != "" {
+		lrcDeletedPath, delErr = s.lrcWriter.DeleteForAudioFile(track.FilePath)
+	}
+
+	if err := s.tracksRepo.ClearLyrics(track.ID); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = s.cacheRepo.DeleteAllByTrack(track.ID)
+
+	logger.Info("[API] Удален текст и файл .lrc для трека «%s — %s» (%s)", track.Artist, track.Title, track.ID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"status":     "none",
+		"lrcDeleted": lrcDeletedPath,
+		"deleteErr":  errString(delErr),
+	})
+}
+
 func (s *AdminServer) handleLyricsEnqueue(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -199,9 +250,19 @@ func (s *AdminServer) handleJobsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	jobLogs := make(map[int64][]string, len(jobs))
+	if s.worker != nil {
+		for _, j := range jobs {
+			if logs := s.worker.GetJobLogs(j.ID); len(logs) > 0 {
+				jobLogs[j.ID] = logs
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"jobs":   jobs,
-		"paused": s.worker.IsPaused(),
+		"jobs":    jobs,
+		"jobLogs": jobLogs,
+		"paused":  s.worker.IsPaused(),
 	})
 }
 
@@ -255,7 +316,11 @@ func (s *AdminServer) handleJobAction(w http.ResponseWriter, r *http.Request) {
 		if req.Stage == "restart" {
 			if jobRec, jErr := s.jobRepo.GetByID(req.ID); jErr == nil && jobRec != nil {
 				_ = s.cacheRepo.Delete(jobRec.TrackID, "whisper_raw")
-				logger.Info("[API] Задача #%d: очищен промежуточный кэш whisper_raw для трека %s (перезапуск с 1 этапа)", req.ID, jobRec.TrackID)
+				_ = s.cacheRepo.Delete(jobRec.TrackID, "whisper_words_v2")
+				logger.Info("[API] Задача #%d: очищен промежуточный кэш Whisper для трека %s (перезапуск с 1 этапа)", req.ID, jobRec.TrackID)
+			}
+			if s.worker != nil {
+				s.worker.ClearJobLogs(req.ID)
 			}
 		}
 		err = s.jobRepo.RetryJob(req.ID)
@@ -265,6 +330,9 @@ func (s *AdminServer) handleJobAction(w http.ResponseWriter, r *http.Request) {
 		logger.Info("[API] Задача #%d перезапущена пользователем (режим этапа: %s)", req.ID, req.Stage)
 	case "delete":
 		err = s.jobRepo.DeleteJob(req.ID)
+		if s.worker != nil {
+			s.worker.ClearJobLogs(req.ID)
+		}
 		logger.Info("[API] Задача #%d удалена пользователем", req.ID)
 	default:
 		writeJSONError(w, http.StatusBadRequest, "Неизвестное действие: "+req.Action)

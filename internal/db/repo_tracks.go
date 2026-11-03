@@ -209,6 +209,18 @@ func (r *TrackRepository) UpdateLyrics(trackID, status, source, content, langCod
 	return err
 }
 
+// ClearLyrics полностью удаляет сохраненный или сгенерированный текст у трека и сбрасывает статус в 'none'.
+func (r *TrackRepository) ClearLyrics(trackID string) error {
+	now := time.Now().Unix()
+	_, err := r.db.Exec(`
+		UPDATE tracks
+		SET lyrics_status = 'none', active_source = '', active_lyrics = '',
+		    lrc_file_synced = 0, updated_at = ?
+		WHERE id = ?
+	`, now, trackID)
+	return err
+}
+
 // UpdateMetadata обновляет теги трека в poisq.db после применения Staging-предложения или отката.
 func (r *TrackRepository) UpdateMetadata(trackID, artist, album, albumArtist, title string, year int, isMojibake bool) error {
 	now := time.Now().Unix()

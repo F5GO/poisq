@@ -177,6 +177,7 @@
               <button class="btn btn-primary hidden" id="btn-create-ai-lrc" title="Создать синхронизированный .lrc тайминг через AI (Groq Whisper)">Сгенерировать .lrc</button>
               <button class="btn btn-secondary" id="btn-enqueue-tournament">Найти текст</button>
               <button class="btn btn-secondary" id="btn-toggle-editor">Редактор .lrc</button>
+              <button class="btn btn-danger-outline hidden" id="btn-delete-lyrics" title="Удалить текст песни и файл .lrc с диска">Удалить текст</button>
             </div>
           </div>
 
@@ -274,7 +275,7 @@
         <div>
           <h1 class="panel-title">Очередь фоновых задач</h1>
           <p class="panel-desc">
-            Фоновый процессор задач: поиск синхронных текстов, AI-караоке и глубокий аудит MusicBrainz.
+            Фоновый процессор задач: нажмите на любую строку задачи, чтобы раскрыть живой лог и этапы выполнения под капотом.
           </p>
         </div>
         <div class="header-actions">
@@ -292,7 +293,7 @@
               <th>Тип задачи</th>
               <th>Статус</th>
               <th>Попыток</th>
-              <th>Результат / Ошибка</th>
+              <th>Текущий этап / Результат</th>
               <th>Время создания</th>
               <th class="col-actions">Действия</th>
             </tr>

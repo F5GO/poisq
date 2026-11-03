@@ -85,3 +85,36 @@ func (w *AtomicLRCWriter) WriteForAudioFile(audioFilePath string, lrcContent str
 
 	return safeTarget, nil
 }
+
+// DeleteForAudioFile безопасно удаляет файл <audio_filename>.lrc рядом с аудиофайлом, если он существует.
+func (w *AtomicLRCWriter) DeleteForAudioFile(audioFilePath string) (string, error) {
+	if strings.TrimSpace(audioFilePath) == "" {
+		return "", nil
+	}
+
+	root := ""
+	if w.guard != nil {
+		root = w.guard.Root()
+	}
+
+	realAudioPath := audioFilePath
+	if w.resolver != nil {
+		if found := w.resolver(root, audioFilePath); found != "" {
+			realAudioPath = found
+		}
+	}
+
+	ext := filepath.Ext(realAudioPath)
+	targetLrc := strings.TrimSuffix(realAudioPath, ext) + ".lrc"
+
+	safeTarget, err := w.guard.ValidateTarget(targetLrc, true)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.Remove(safeTarget); err != nil && !os.IsNotExist(err) {
+		return safeTarget, fmt.Errorf("ошибка удаления .lrc файла: %w", err)
+	}
+
+	return safeTarget, nil
+}

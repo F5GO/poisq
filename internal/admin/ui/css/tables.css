@@ -200,3 +200,141 @@
   background: rgba(37, 99, 235, 0.1);
   border-color: rgba(37, 99, 235, 0.3);
 }
+
+/* Раскрывающиеся подробности задачи в очереди (Job Telemetry Inspector) */
+.job-row.expanded {
+  background-color: var(--bg-subtle);
+}
+
+.job-expand-chevron {
+  display: inline-block;
+  width: 12px;
+  color: var(--poisq-blue);
+  font-weight: 700;
+}
+
+.job-details-row {
+  background-color: var(--bg-subtle);
+}
+
+.job-details-row:hover {
+  background-color: var(--bg-subtle) !important;
+}
+
+.job-details-row td {
+  padding: 0 16px 16px 16px !important;
+}
+
+.job-details-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.job-stages-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.job-stage-card {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  transition: all 0.2s ease;
+}
+
+.job-stage-card.done {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.06);
+}
+
+.job-stage-card.running {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.job-stage-card.failed {
+  border-color: rgba(244, 63, 94, 0.4);
+  background: rgba(244, 63, 94, 0.07);
+}
+
+.job-stage-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.job-stage-card.done .job-stage-icon {
+  color: var(--color-emerald);
+}
+
+.job-stage-card.running .job-stage-icon {
+  color: var(--poisq-blue);
+}
+
+.job-stage-card.failed .job-stage-icon {
+  color: var(--color-crimson, #f43f5e);
+}
+
+.job-stage-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  line-height: 1.35;
+}
+
+.job-meta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.job-console {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.job-console-header {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 12px;
+  background: #1e293b;
+  color: #94a3b8;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.job-console-body {
+  padding: 10px 12px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.job-log-line {
+  word-break: break-word;
+}

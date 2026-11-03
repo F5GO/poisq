@@ -57,6 +57,12 @@ func (r *ProviderCacheRepository) Delete(trackID, provider string) error {
 	return err
 }
 
+// DeleteAllByTrack полностью очищает все закэшированные варианты текста для указанного трека.
+func (r *ProviderCacheRepository) DeleteAllByTrack(trackID string) error {
+	_, err := r.db.Exec(`DELETE FROM provider_cache WHERE track_id = ?`, trackID)
+	return err
+}
+
 // ListByTrack возвращает все сохраненные варианты текста от разных провайдеров для указанного трека,
 // отсортированные по убыванию оценки качества (score).
 func (r *ProviderCacheRepository) ListByTrack(trackID string) ([]ProviderCacheRecord, error) {
