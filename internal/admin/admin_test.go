@@ -145,4 +145,17 @@ func TestAdminServerEndToEnd(t *testing.T) {
 	if recCand.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK on /api/v1/covers/candidates, got %d", recCand.Code)
 	}
+
+	// 7. Проверка полного сброса БД (/api/v1/db/reset)
+	srv.SetPoisqDB(poisqDB)
+	reqReset := httptest.NewRequest(http.MethodPost, "/api/v1/db/reset", strings.NewReader(`{"keepKeys":true}`))
+	recReset := httptest.NewRecorder()
+	srv.ServeHTTP(recReset, reqReset)
+	if recReset.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on /api/v1/db/reset, got %d: %s", recReset.Code, recReset.Body.String())
+	}
+	tracksAfter, _ := trackRepo.ListTracks("all", "", 10)
+	if len(tracksAfter) != 0 {
+		t.Fatalf("expected 0 tracks after DB reset, got %d", len(tracksAfter))
+	}
 }

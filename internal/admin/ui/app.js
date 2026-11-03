@@ -185,7 +185,7 @@ function initNavigation() {
   document.getElementById("btn-run-audit")?.addEventListener("click", runMusicBrainzAudit);
 
   // Staging действия
-  document.getElementById("btn-clear-covers-staging")?.addEventListener("click", clearCoversStaging);
+  document.getElementById("btn-reset-db")?.addEventListener("click", resetFullDatabase);
   document.getElementById("btn-rescan-audit")?.addEventListener("click", rescanStagingAudit);
   document.getElementById("btn-apply-all-staging")?.addEventListener("click", applyAllStaging);
   document.getElementById("btn-discard-all-staging")?.addEventListener("click", discardAllStaging);
@@ -1689,17 +1689,38 @@ async function applyAllStaging() {
   }
 }
 
-async function clearCoversStaging() {
-  if (!confirm("Очистить все не примененные предложения обложек в базе? Это позволит запустить чистый аудит обложек заново.")) {
-    return;
+async function resetFullDatabase() {
+  const confirmed = confirm(
+    "⚠️ ВНИМАНИЕ: Вы уверены, что хотите выполнить ПОЛНЫЙ СБРОС БД?\n\n" +
+    "• Будет очищена вся очередь предложений Staging;\n" +
+    "• Будут сброшены кэш треков и текстов;\n" +
+    "• Все API-ключи (Gemini / Groq) будут сохранены;\n" +
+    "• Сразу после сброса запустится свежее сканирование из Navidrome.\n\n" +
+    "Выполнить полный сброс базы данных?"
+  );
+  if (!confirmed) return;
+
+  const btn = document.getElementById("btn-reset-db");
+  const origText = btn ? btn.textContent : "Полный сброс БД";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Сброс базы...";
   }
+
   try {
-    const res = await fetchApi("/staging/clear-covers", "POST");
-    showToast(`✓ Очищено устаревших предложений обложек: ${res.deleted || 0}`, "success");
+    showToast("Выполняется сброс базы данных и синхронизация из Navidrome...", "info");
+    const res = await fetchApi("/db/reset", "POST", { keepKeys: true });
+    showToast(`✓ База успешно сброшена! Синхронизировано треков: ${res.syncedTracks || 0}`, "success");
     await loadStagingData();
+    await loadLibraryData();
     await loadHealthStats();
   } catch (err) {
-    showToast(`Ошибка очистки обложек: ${err.message}`, "error");
+    showToast(`Ошибка сброса базы: ${err.message}`, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origText;
+    }
   }
 }
 

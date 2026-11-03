@@ -38,6 +38,7 @@ type AdminServer struct {
 	worker      *worker.QueueProcessor
 	guard       *security.PathGuard
 	openNavDB   func() (*sql.DB, error)
+	poisqDB     *sql.DB
 	arbiter     *ai.MetadataArbiter
 	handler     http.Handler
 }
@@ -83,6 +84,7 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/staging/undo", s.handleStagingUndo)
 	mux.HandleFunc("/api/v1/staging/clear-covers", s.handleStagingClearCovers)
 	mux.HandleFunc("/api/v1/staging/clear-all", s.handleStagingClearAll)
+	mux.HandleFunc("/api/v1/db/reset", s.handleDatabaseReset)
 
 	mux.HandleFunc("/api/v1/tracks", s.handleTracksList)
 	mux.HandleFunc("/api/v1/tracks/stream", s.handleTrackStream)
