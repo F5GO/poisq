@@ -9,6 +9,8 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/F5GO/poisq/internal/metadata"
 )
 
 func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) {
@@ -28,6 +30,32 @@ func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Для предложений по обложкам проверяем актуальное состояние папки на диске,
+	// чтобы гарантированно отображать существующую обложку cover.jpg, даже если в старом слепке стояло false.
+	for i := range items {
+		if items[i].ChangeType == "cover" && items[i].FolderPath != "" && s.guard != nil {
+			var cur map[string]any
+			if err := json.Unmarshal([]byte(items[i].CurrentJSON), &cur); err == nil {
+				hasCov, _ := cur["hasCover"].(bool)
+				existingFile, _ := cur["existingFile"].(string)
+				if !hasCov || existingFile == "" {
+					if safeFolder, err := s.guard.ValidateTarget(items[i].FolderPath, false); err == nil {
+						if foundFile := metadata.FindLocalCoverFile(safeFolder); foundFile != "" {
+							cur["hasCover"] = true
+							cur["existingFile"] = foundFile
+							dim := metadata.DetectImageDimensions(foundFile)
+							cur["width"] = dim.Width
+							cur["height"] = dim.Height
+							if updatedBytes, err := json.Marshal(cur); err == nil {
+								items[i].CurrentJSON = string(updatedBytes)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items": items,
 	})
@@ -40,8 +68,9 @@ func (s *AdminServer) handleStagingApply(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req struct {
-		ID  int64   `json:"id"`
-		IDs []int64 `json:"ids"`
+		ID       int64   `json:"id"`
+		IDs      []int64 `json:"ids"`
+		CoverURL string  `json:"coverUrl,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
@@ -60,7 +89,7 @@ func (s *AdminServer) handleStagingApply(w http.ResponseWriter, r *http.Request)
 	applied := 0
 	var lastErr string
 	for _, id := range targets {
-		if err := s.stagingSvc.ApplyProposal(r.Context(), id); err != nil {
+		if err := s.stagingSvc.ApplyProposalWithCustomCover(r.Context(), id, req.CoverURL); err != nil {
 			lastErr = err.Error()
 		} else {
 			applied++

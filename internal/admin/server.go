@@ -83,6 +83,7 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/tracks", s.handleTracksList)
 	mux.HandleFunc("/api/v1/tracks/stream", s.handleTrackStream)
 	mux.HandleFunc("/api/v1/covers/local", s.handleLocalCover)
+	mux.HandleFunc("/api/v1/covers/candidates", s.handleCoverCandidates)
 	mux.HandleFunc("/api/v1/lyrics/cache", s.handleLyricsCache)
 	mux.HandleFunc("/api/v1/lyrics/save", s.handleLyricsSave)
 	mux.HandleFunc("/api/v1/lyrics/enqueue", s.handleLyricsEnqueue)

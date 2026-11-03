@@ -123,4 +123,26 @@ func TestAdminServerEndToEnd(t *testing.T) {
 	if !strings.Contains(string(lrcOnDisk), "[00:14.20] Теплое место") {
 		t.Fatalf("unexpected .lrc content on disk: %q", string(lrcOnDisk))
 	}
+
+	// 5. Проверка безопасной отдачи локальной обложки по пути к папке альбома
+	coverFile := filepath.Join(musicDir, "Kino", "cover.jpg")
+	_ = os.WriteFile(coverFile, []byte("\xFF\xD8\xFF\xE0\x00\x10JFIFdummy"), 0644)
+
+	reqCover := httptest.NewRequest(http.MethodGet, "/api/v1/covers/local?path="+filepath.Join(musicDir, "Kino"), nil)
+	recCover := httptest.NewRecorder()
+	srv.ServeHTTP(recCover, reqCover)
+	if recCover.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for local cover by folder path, got %d: %s", recCover.Code, recCover.Body.String())
+	}
+	if !bytes.Contains(recCover.Body.Bytes(), []byte("JFIFdummy")) {
+		t.Fatalf("expected cover file content to be served")
+	}
+
+	// 6. Проверка эндпоинта кандидатов обложек
+	reqCand := httptest.NewRequest(http.MethodGet, "/api/v1/covers/candidates?artist=Kino&album=Gruppa", nil)
+	recCand := httptest.NewRecorder()
+	srv.ServeHTTP(recCand, reqCand)
+	if recCand.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on /api/v1/covers/candidates, got %d", recCand.Code)
+	}
 }

@@ -360,6 +360,39 @@
     </div>
   </div>
 
+  <!-- Полноэкранный Lightbox для просмотра и перелистывания обложек (Было / Станет / Варианты) -->
+  <div id="modal-cover-lightbox" class="lightbox-overlay hidden" tabindex="-1">
+    <div class="lightbox-container">
+      <div class="lightbox-topbar">
+        <div class="lightbox-badge-group">
+          <span class="lightbox-badge" id="lightbox-badge-type">Станет (Новый cover.jpg)</span>
+          <span class="lightbox-res-badge" id="lightbox-badge-res">3000×3000 px · Apple Music / iTunes</span>
+        </div>
+        <div class="lightbox-controls-top">
+          <button class="lightbox-btn" id="lightbox-btn-prev" title="Предыдущая обложка (←)">‹</button>
+          <span class="lightbox-counter" id="lightbox-counter">1 / 2</span>
+          <button class="lightbox-btn" id="lightbox-btn-next" title="Следующая обложка (→)">›</button>
+          <button class="lightbox-close-btn" id="lightbox-btn-close" title="Закрыть (Esc)">&times;</button>
+        </div>
+      </div>
+      <div class="lightbox-body">
+        <button class="lightbox-nav-arrow arrow-left" id="lightbox-nav-left" title="Назад (←)">‹</button>
+        <div class="lightbox-image-wrapper">
+          <img id="lightbox-img" class="lightbox-img" src="" alt="Обложка" />
+          <div id="lightbox-empty-state" class="lightbox-empty-state hidden">
+            <span>Файл отсутствует на диске</span>
+          </div>
+        </div>
+        <button class="lightbox-nav-arrow arrow-right" id="lightbox-nav-right" title="Вперед (→)">›</button>
+      </div>
+      <div class="lightbox-bottombar">
+        <div class="lightbox-tabs" id="lightbox-tabs">
+          <!-- Динамические переключатели [Было] [Станет] [Вариант 1] -->
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Контейнер Toast-уведомлений -->
   <div id="toast-container" class="toast-container"></div>
 
