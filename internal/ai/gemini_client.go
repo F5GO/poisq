@@ -1,9 +1,9 @@
 // Package ai реализует облачные AI-пайплайны сервиса poisq: мультиязычную очистку
-// и консенсус текстов через Gemini 2.5 Flash, сжатие аудио на лету в моно-Opus
+// и консенсус текстов через Gemini 3.8 Flash, сжатие аудио на лету в моно-Opus
 // и двухэтапную генерацию синхронизированного караоке через Groq Whisper + Gemini.
 //
 // Данный файл gemini_client.go реализует отказоустойчивый клиент к Google Gemini API
-// (модель gemini-2.5-flash) с автоматической ротацией ключей из пула keypool,
+// (модель gemini-3.8-flash с автоматическим фоллбэком) с автоматической ротацией ключей из пула keypool,
 // мгновенным переключением при 429 (cooldown 65 сек) и отработкой дневных квот (RESOURCE_EXHAUSTED).
 package ai
 
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 )
 
 const (
-	defaultGeminiModel = "gemini-2.5-flash"
+	defaultGeminiModel = "gemini-3.8-flash"
 	geminiAPIBase      = "https://generativelanguage.googleapis.com/v1beta/models"
 )
 
@@ -68,9 +69,13 @@ type GeminiClient struct {
 
 // NewGeminiClient создает новый экземпляр клиента Gemini.
 func NewGeminiClient(keyPool *keypool.Manager) *GeminiClient {
+	model := strings.TrimSpace(os.Getenv("GEMINI_MODEL"))
+	if model == "" {
+		model = defaultGeminiModel
+	}
 	return &GeminiClient{
 		keyPool: keyPool,
-		model:   defaultGeminiModel,
+		model:   model,
 		client: &http.Client{
 			Timeout: 45 * time.Second,
 		},
@@ -125,6 +130,44 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 }
 
 func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
+	// Список моделей для последовательной проверки при HTTP 404 NOT_FOUND (устаревшие/недоступные модели)
+	modelsToTry := []string{g.model}
+	candidates := []string{"gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"}
+	for _, c := range candidates {
+		if c != g.model {
+			modelsToTry = append(modelsToTry, c)
+		}
+	}
+
+	var lastStatus int
+	var lastApiStatus string
+	var lastErr error
+
+	for _, m := range modelsToTry {
+		resText, status, apiStatus, err := g.callSingleModel(ctx, m, apiKey, systemPrompt, userPrompt, responseMimeType)
+		if err == nil {
+			if m != g.model {
+				g.model = m // Автоматически фиксируем успешно ответившую модель
+			}
+			return resText, status, apiStatus, nil
+		}
+
+		lastStatus = status
+		lastApiStatus = apiStatus
+		lastErr = err
+
+		// Пробуем следующую модель ТОЛЬКО если Google вернул 404 Not Found (модель устарела/недоступна)
+		if status == http.StatusNotFound {
+			continue
+		}
+		// При других ошибках (429 квота, 401/403 неверный ключ) выходим для ротации ключа
+		break
+	}
+
+	return "", lastStatus, lastApiStatus, lastErr
+}
+
+func (g *GeminiClient) callSingleModel(ctx context.Context, modelName, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
 	reqPayload := geminiGenerateRequest{
 		Contents: []geminiContent{
 			{Parts: []geminiPart{{Text: userPrompt}}},
@@ -145,7 +188,7 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 		return "", 0, "", err
 	}
 
-	endpoint := fmt.Sprintf("%s/%s:generateContent?key=%s", geminiAPIBase, g.model, apiKey)
+	endpoint := fmt.Sprintf("%s/%s:generateContent?key=%s", geminiAPIBase, modelName, apiKey)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", 0, "", err
