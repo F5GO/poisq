@@ -10,6 +10,7 @@
 package metadata
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -43,6 +44,32 @@ func StripCopySuffix(segment string) string {
 	norm := NormalizePathSpaces(segment)
 	cleaned := copySuffixRegex.ReplaceAllString(norm, "")
 	return strings.TrimSpace(cleaned)
+}
+
+// IsCopyPath проверяет, содержит ли путь признаки папки-дубликата (« — копия», «_copy», « (1)» и др.).
+func IsCopyPath(pathStr string) bool {
+	norm := strings.ToLower(NormalizePathSpaces(pathStr))
+	if strings.Contains(norm, "копия") || strings.Contains(norm, "copy") {
+		return true
+	}
+	parts := strings.Split(norm, string(filepath.Separator))
+	for _, part := range parts {
+		if copySuffixRegex.MatchString(part) {
+			return true
+		}
+	}
+	return false
+}
+
+// TrackDedupKey строит нормализованный ключ трека для выявления дубликатов с погрешностью длительности 2 секунды.
+func TrackDedupKey(artist, title string, durationSec int) string {
+	a := strings.ToLower(strings.TrimSpace(NormalizeNFC(NormalizePathSpaces(artist))))
+	t := strings.ToLower(strings.TrimSpace(NormalizeNFC(NormalizePathSpaces(title))))
+	durBucket := 0
+	if durationSec > 0 {
+		durBucket = durationSec / 2
+	}
+	return a + "|" + t + "|" + strings.TrimSpace(string(rune('0'+durBucket%10))) + fmt.Sprintf("|%d", durBucket)
 }
 
 // GeneratePathVariants создает упорядоченный список потенциальных путей к папке на диске,
