@@ -92,6 +92,18 @@ func (cf *CoverFetcher) InspectFolderCover(folderPath string) (hasCover bool, wi
 		foundPath = FindCoverAnywhere(root, folderPath)
 	}
 	if foundPath == "" {
+		// Проверяем наличие встроенной обложки внутри аудиофайлов этой папки
+		targetDir := ResolveFuzzyDirectory(root, safeFolder)
+		if targetDir == "" {
+			targetDir = safeFolder
+		}
+		if imgBytes, _ := ExtractCoverFromAudioOrDir(targetDir); len(imgBytes) > 0 {
+			cfg, _, err := image.DecodeConfig(bytes.NewReader(imgBytes))
+			if err == nil && cfg.Width > 0 && cfg.Height > 0 {
+				return true, cfg.Width, cfg.Height, targetDir
+			}
+			return true, 600, 600, targetDir
+		}
 		return false, 0, 0, ""
 	}
 

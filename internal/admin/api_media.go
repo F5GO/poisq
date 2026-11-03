@@ -3,18 +3,25 @@
 //
 // Данный файл api_media.go реализует безопасную отдачу аудиопотоков (/api/v1/tracks/stream)
 // и локальных обложек альбомов (/api/v1/covers/local) для караоке-плеера и предпросмотра в Staging.
+// Включает фоллбэк на извлечение встроенных обложек (ID3v2 APIC / FLAC PICTURE / ffmpeg),
+// базу данных и кэш Navidrome, а также прямое проксирование потока из живого Navidrome.
 package admin
 
 import (
+	"io"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/F5GO/poisq/internal/metadata"
+	"github.com/F5GO/poisq/internal/proxy"
 )
 
 // handleTrackStream безопасно отдает аудиофайл браузеру с поддержкой Range-запросов
-// для воспроизведения в караоке-плеере.
+// для воспроизведения в караоке-плеере. Если локальный файл смонтирован по иному пути,
+// автоматически проксирует поток из Navidrome (/rest/stream).
 func (s *AdminServer) handleTrackStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -33,16 +40,18 @@ func (s *AdminServer) handleTrackStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if s.guard == nil {
-		writeJSONError(w, http.StatusInternalServerError, "path guard is not configured")
-		return
+	root := ""
+	if s.guard != nil {
+		root = s.guard.Root()
 	}
 
-	root := s.guard.Root()
-	safePath, err := s.guard.ValidateTarget(track.FilePath, false)
-	searchTarget := safePath
-	if err != nil {
-		searchTarget = filepath.Join(root, strings.TrimPrefix(track.FilePath, "/"))
+	searchTarget := track.FilePath
+	if s.guard != nil {
+		if safePath, err := s.guard.ValidateTarget(track.FilePath, false); err == nil {
+			searchTarget = safePath
+		} else {
+			searchTarget = filepath.Join(root, strings.TrimPrefix(track.FilePath, "/"))
+		}
 	}
 
 	found := metadata.FindAudioFileAnywhere(root, searchTarget)
@@ -50,23 +59,65 @@ func (s *AdminServer) handleTrackStream(w http.ResponseWriter, r *http.Request) 
 		found = metadata.FindAudioFileAnywhere(root, track.FilePath)
 	}
 
+	// Проверяем путь из navidrome.db, если в poisq.db путь относительный
+	if found == "" && s.openNavDB != nil {
+		if navDB, err := s.openNavDB(); err == nil && navDB != nil {
+			libRoot := queryLibraryRoot(navDB, root)
+			mfRow := findMediaFileRow(navDB, trackID, "", "")
+			_ = navDB.Close()
+			if p := strings.TrimSpace(mfRow["path"]); p != "" {
+				found = metadata.FindAudioFileAnywhere(libRoot, p)
+				if found == "" {
+					found = metadata.FindAudioFileAnywhere(root, filepath.Join(libRoot, p))
+				}
+			}
+		}
+	}
+
 	if found != "" {
-		if validated, err := s.guard.ValidateTarget(found, false); err == nil {
-			found = validated
+		if s.guard != nil {
+			if validated, err := s.guard.ValidateTarget(found, false); err == nil {
+				found = validated
+			}
 		}
 		http.ServeFile(w, r, found)
 		return
 	}
 
-	if safePath != "" {
-		http.ServeFile(w, r, safePath)
-		return
+	// Фоллбэк: проксируем аудиопоток напрямую из сервера Navidrome (/rest/stream?id=...)
+	if s.navidromeURL != "" {
+		streamURL := s.navidromeURL + "/rest/stream?id=" + url.QueryEscape(trackID)
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, streamURL, nil)
+		if err == nil {
+			proxy.ApplyCachedAuthToRequest(req)
+			if rng := r.Header.Get("Range"); rng != "" {
+				req.Header.Set("Range", rng)
+			}
+			client := &http.Client{Timeout: 0} // Без таймаута для потокового аудио
+			if resp, err := client.Do(req); err == nil {
+				defer resp.Body.Close()
+				ct := strings.ToLower(resp.Header.Get("Content-Type"))
+				if (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) &&
+					!strings.Contains(ct, "xml") && !strings.Contains(ct, "json") && !strings.Contains(ct, "html") {
+					for k, vals := range resp.Header {
+						for _, v := range vals {
+							w.Header().Add(k, v)
+						}
+					}
+					w.WriteHeader(resp.StatusCode)
+					_, _ = io.Copy(w, resp.Body)
+					return
+				}
+			}
+		}
 	}
 
 	writeJSONError(w, http.StatusNotFound, "audio file not found")
 }
 
 // handleLocalCover безопасно отдает локальный файл обложки для предпросмотра и сравнения в Staging.
+// Проверяет файлы обложек на диске (cover.jpg, folder.jpg и др.), встроенные в аудиофайлы теги
+// (ID3v2 APIC / FLAC PICTURE / ffmpeg), базу и кэш Navidrome.
 func (s *AdminServer) handleLocalCover(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -74,36 +125,67 @@ func (s *AdminServer) handleLocalCover(w http.ResponseWriter, r *http.Request) {
 	}
 
 	coverPath := strings.TrimSpace(r.URL.Query().Get("path"))
-	if coverPath == "" {
-		writeJSONError(w, http.StatusBadRequest, "cover path is required")
+	albumName := strings.TrimSpace(r.URL.Query().Get("album"))
+	artistName := strings.TrimSpace(r.URL.Query().Get("artist"))
+
+	if coverPath == "" && albumName == "" && artistName == "" {
+		writeJSONError(w, http.StatusBadRequest, "cover path or album is required")
 		return
 	}
 
-	if s.guard == nil {
-		writeJSONError(w, http.StatusInternalServerError, "path guard is not configured")
-		return
+	root := ""
+	if s.guard != nil {
+		root = s.guard.Root()
 	}
 
-	root := s.guard.Root()
-	safePath, err := s.guard.ValidateTarget(coverPath, false)
-	searchTarget := safePath
-	if err != nil {
-		searchTarget = filepath.Join(root, strings.TrimPrefix(coverPath, "/"))
-	}
-
-	found := metadata.FindCoverAnywhere(root, searchTarget)
-	if found == "" && searchTarget != coverPath {
-		found = metadata.FindCoverAnywhere(root, coverPath)
-	}
-
-	if found != "" {
-		if validated, err := s.guard.ValidateTarget(found, false); err == nil {
-			found = validated
+	// 1. Поиск файла обложки или встроенной картинки по переданному пути
+	if coverPath != "" {
+		searchTarget := coverPath
+		if s.guard != nil {
+			if safePath, err := s.guard.ValidateTarget(coverPath, false); err == nil {
+				searchTarget = safePath
+			} else {
+				searchTarget = filepath.Join(root, strings.TrimPrefix(coverPath, "/"))
+			}
 		}
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		http.ServeFile(w, r, found)
+
+		if s.serveCoverPathOrEmbedded(w, r, root, searchTarget, "") {
+			return
+		}
+		if searchTarget != coverPath && s.serveCoverPathOrEmbedded(w, r, root, coverPath, "") {
+			return
+		}
+
+		// Если artist/album не были переданы в query, извлекаем их из структуры пути папки
+		if artistName == "" || albumName == "" {
+			clean := filepath.Clean(coverPath)
+			base := filepath.Base(clean)
+			parent := filepath.Base(filepath.Dir(clean))
+			if albumName == "" && base != "." && base != "/" {
+				albumName = base
+			}
+			if artistName == "" && parent != "." && parent != "/" && !strings.EqualFold(parent, "music") {
+				artistName = parent
+			}
+		}
+	}
+
+	// 2. Поиск по паре Исполнитель / Альбом на диске, в navidrome.db и в кэше Navidrome
+	if albumName != "" || artistName != "" {
+		// Делегируем комплексному резолверу обложек Navidrome + Диск + Embedded
+		q := r.URL.Query()
+		if q.Get("album") == "" && albumName != "" {
+			q.Set("album", albumName)
+		}
+		if q.Get("artist") == "" && artistName != "" {
+			q.Set("artist", artistName)
+		}
+		r.URL.RawQuery = q.Encode()
+		s.handleNavidromeAlbumCover(w, r)
 		return
 	}
 
+	// Заглушка-таймаут не нужна — возвращаем 404, если обложка действительно нигде не существует
+	_ = time.Second
 	writeJSONError(w, http.StatusNotFound, "cover file not found")
 }

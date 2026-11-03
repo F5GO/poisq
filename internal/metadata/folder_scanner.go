@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/F5GO/poisq/internal/ai"
@@ -116,14 +117,26 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 		return 0, nil
 	}
 
-	rows, err := navDB.Query(`
-		SELECT id, path, title, artist, album, album_artist, track_number, year, duration
-		FROM media_file
-	`)
+	// Выясняем базовый путь библиотеки из таблицы library (если есть в navidrome.db)
+	libRoot := s.musicRoot
+	var dbLibPath sql.NullString
+	if err := navDB.QueryRow(`SELECT path FROM library LIMIT 1`).Scan(&dbLibPath); err == nil && dbLibPath.Valid {
+		p := strings.TrimSpace(dbLibPath.String)
+		if p != "" {
+			libRoot = p
+		}
+	}
+
+	rows, err := navDB.Query(`SELECT * FROM media_file`)
 	if err != nil {
 		return 0, err
 	}
 	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return 0, err
+	}
 
 	folderCoverCache := make(map[string]struct {
 		has bool
@@ -134,25 +147,55 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 	batch := make([]db.TrackRecord, 0, 500)
 	count := 0
 	for rows.Next() {
-		var id, relOrAbsPath, title, artist, album, albumArtist string
-		var trackNum, year int
-		var durationFloat float64
-
-		if err := rows.Scan(&id, &relOrAbsPath, &title, &artist, &album, &albumArtist, &trackNum, &year, &durationFloat); err != nil {
+		rawVals := make([]sql.NullString, len(cols))
+		scanPtrs := make([]any, len(cols))
+		for i := range rawVals {
+			scanPtrs[i] = &rawVals[i]
+		}
+		if err := rows.Scan(scanPtrs...); err != nil {
 			continue
 		}
 
-		fullPath := s.resolveMusicPath(relOrAbsPath)
+		rowMap := make(map[string]string, len(cols))
+		for i, c := range cols {
+			if rawVals[i].Valid {
+				rowMap[strings.ToLower(c)] = rawVals[i].String
+			}
+		}
+
+		id := rowMap["id"]
+		relOrAbsPath := rowMap["path"]
+		title := rowMap["title"]
+		artist := rowMap["artist"]
+		album := rowMap["album"]
+		albumArtist := rowMap["album_artist"]
+		trackNum := parseIntDefault(rowMap["track_number"], 0)
+		year := parseIntDefault(rowMap["year"], 0)
+		durationSec := parseFloatIntDefault(rowMap["duration"], 0)
+
+		navHasCover := rowMap["has_cover_art"] == "1" || strings.EqualFold(rowMap["has_cover_art"], "true") || strings.TrimSpace(rowMap["embed_art_path"]) != ""
+
+		fullPath := s.resolveMusicPathWithRoot(libRoot, relOrAbsPath)
 		folderPath := filepath.Dir(fullPath)
 
 		cov, ok := folderCoverCache[folderPath]
 		if !ok {
 			has, w, h, _ := s.coverFetch.InspectFolderCover(folderPath)
+			if !has && navHasCover {
+				has = true
+				w = 600
+				h = 600
+			}
 			cov = struct {
 				has bool
 				w   int
 				h   int
 			}{has: has, w: w, h: h}
+			folderCoverCache[folderPath] = cov
+		} else if !cov.has && navHasCover {
+			cov.has = true
+			cov.w = 600
+			cov.h = 600
 			folderCoverCache[folderPath] = cov
 		}
 
@@ -190,7 +233,7 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 			Title:         NormalizeNFC(title),
 			TrackNumber:   trackNum,
 			Year:          year,
-			Duration:      int(durationFloat),
+			Duration:      durationSec,
 			HasCover:      cov.has,
 			CoverWidth:    cov.w,
 			CoverHeight:   cov.h,
@@ -450,11 +493,32 @@ func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (in
 }
 
 func (s *LibraryScanner) resolveMusicPath(p string) string {
+	return s.resolveMusicPathWithRoot(s.musicRoot, p)
+}
+
+func (s *LibraryScanner) resolveMusicPathWithRoot(root, p string) string {
 	clean := filepath.Clean(p)
 	if filepath.IsAbs(clean) {
 		return clean
 	}
-	return filepath.Join(s.musicRoot, clean)
+	if root == "" {
+		root = s.musicRoot
+	}
+	return filepath.Join(root, clean)
+}
+
+func parseIntDefault(s string, def int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+		return v
+	}
+	return def
+}
+
+func parseFloatIntDefault(s string, def int) int {
+	if v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+		return int(v)
+	}
+	return def
 }
 
 func maxKeyString(m map[string]int) string {

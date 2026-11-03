@@ -54,6 +54,9 @@ func (it *Interceptor) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	path := strings.ToLower(req.URL.Path)
 
+	// Сохраняем Subsonic/Navidrome сессию в памяти для нужд внутренней панели Studio (:4535)
+	CaptureSubsonicAuth(req)
+
 	// 1. Проверка Subsonic поиска (search3, search2, search, а также расширения .view)
 	if isSubsonicSearchPath(path) {
 		it.handleSubsonicSearch(w, req)

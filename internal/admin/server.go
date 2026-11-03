@@ -37,10 +37,11 @@ type AdminServer struct {
 	lrcWriter   *lyrics.AtomicLRCWriter
 	worker      *worker.QueueProcessor
 	guard       *security.PathGuard
-	openNavDB   func() (*sql.DB, error)
-	poisqDB     *sql.DB
-	arbiter     *ai.MetadataArbiter
-	handler     http.Handler
+	openNavDB    func() (*sql.DB, error)
+	poisqDB      *sql.DB
+	arbiter      *ai.MetadataArbiter
+	navidromeURL string
+	handler      http.Handler
 }
 
 // NewAdminServer конструирует HTTP-сервер панели управления poisq.
