@@ -85,8 +85,12 @@ func (kp *KaraokePipeline) MergeSegmentsWithReference(ctx context.Context, acous
 - Сопоставить строчки эталонного текста с физическими таймкодами Whisper.
 - Заменить любые возможные ослышки или оговорки Whisper на 100% правильные слова из эталонного текста, сохранив точную миллисекундную привязку к началу звучания каждой строчки [mm:ss.xx].
 - Удалить любые пометки [Куплет], [Припев], переводы и мусор.
-- Вернуть результат СТРОГО в JSON формате:
-{"langCode": "ru", "isSynced": true, "cleanedLyrics": "[00:14.20] Первая строчка\n[00:18.05] Вторая строчка"}`
+- Вернуть результат СТРОГО в виде валидного JSON объекта:
+{
+  "langCode": "ru",
+  "isSynced": true,
+  "cleanedLyrics": "[00:14.20] Первая строчка\n[00:18.05] Вторая строчка"
+}`
 
 	userPrompt := fmt.Sprintf(
 		"Артист: %s\nНазвание: %s\n\n=== ЭТАЛОННЫЙ ТЕКСТ ===\n%s\n\n=== ТАЙМКОДЫ WHISPER (JSON) ===\n%s",
@@ -98,16 +102,12 @@ func (kp *KaraokePipeline) MergeSegmentsWithReference(ctx context.Context, acous
 		return nil, fmt.Errorf("этап 3 (Gemini Merge): %w", err)
 	}
 
-	var out ConsensusOutput
-	if err := json.Unmarshal([]byte(respJSON), &out); err != nil {
-		return nil, fmt.Errorf("ошибка декодирования JSON от Gemini: %w", err)
-	}
-	out.CleanedLyrics = strings.TrimSpace(out.CleanedLyrics)
-	if out.CleanedLyrics == "" {
-		return nil, fmt.Errorf("Gemini вернул пустой LRC после мерджа с Whisper")
+	out, err := ParseConsensusOutput(respJSON)
+	if err != nil {
+		return nil, fmt.Errorf("этап 3 (Gemini Merge): %w", err)
 	}
 
-	return &out, nil
+	return out, nil
 }
 
 // GenerateSyncedLRC выполняет полный сквозной цикл генерации караоке.
