@@ -317,6 +317,7 @@ func (s *AdminServer) handleJobAction(w http.ResponseWriter, r *http.Request) {
 			if jobRec, jErr := s.jobRepo.GetByID(req.ID); jErr == nil && jobRec != nil {
 				_ = s.cacheRepo.Delete(jobRec.TrackID, "whisper_raw")
 				_ = s.cacheRepo.Delete(jobRec.TrackID, "whisper_words_v2")
+				_ = s.cacheRepo.Delete(jobRec.TrackID, "whisper_words_v3")
 				logger.Info("[API] Задача #%d: очищен промежуточный кэш Whisper для трека %s (перезапуск с 1 этапа)", req.ID, jobRec.TrackID)
 			}
 			if s.worker != nil {

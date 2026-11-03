@@ -2162,6 +2162,17 @@ async function loadJobsData() {
       return;
     }
 
+    // Сохраняем состояние прокрутки открытых консолей задач перед перерисовкой
+    const consoleScrollState = {};
+    tbody.querySelectorAll(".job-console-body[data-job-id]").forEach(el => {
+      const jid = el.getAttribute("data-job-id");
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      consoleScrollState[jid] = {
+        stickToBottom: distFromBottom <= 36,
+        scrollTop: el.scrollTop
+      };
+    });
+
     tbody.innerHTML = state.jobs.map((j) => {
       const isExpanded = state.expandedJobIds.has(j.id);
       let statusBadge = `<span class="badge-audit-queued">Ожидание</span>`;
@@ -2235,6 +2246,17 @@ async function loadJobsData() {
 
       return mainRow + buildJobDetailsRowHtml(j, trackObj);
     }).join("");
+
+    // Восстанавливаем скролл или автоматически прокручиваем лог вниз к новым записям
+    tbody.querySelectorAll(".job-console-body[data-job-id]").forEach(el => {
+      const jid = el.getAttribute("data-job-id");
+      const prev = consoleScrollState[jid];
+      if (!prev || prev.stickToBottom) {
+        el.scrollTop = el.scrollHeight;
+      } else {
+        el.scrollTop = prev.scrollTop;
+      }
+    });
   } catch (err) {
     console.error("Ошибка загрузки задач:", err);
   }
@@ -2337,7 +2359,7 @@ function buildJobDetailsRowHtml(j, trackObj) {
           </div>
           <div class="job-console">
             <div class="job-console-header mono">Живой журнал выполнения под капотом (Задача #${j.id})</div>
-            <div class="job-console-body mono">${logLinesHtml}</div>
+            <div class="job-console-body mono" id="job-console-body-${j.id}" data-job-id="${j.id}">${logLinesHtml}</div>
           </div>
         </div>
       </td>
