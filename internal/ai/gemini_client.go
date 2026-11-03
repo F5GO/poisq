@@ -1,10 +1,10 @@
 // Package ai реализует облачные AI-пайплайны сервиса poisq: мультиязычную очистку
-// и консенсус текстов через Gemini 3.8 Flash, сжатие аудио на лету в моно-Opus
+// и консенсус текстов через Gemini 2.0 Flash / 1.5 Flash, сжатие аудио на лету в моно-Opus
 // и двухэтапную генерацию синхронизированного караоке через Groq Whisper + Gemini.
 //
 // Данный файл gemini_client.go реализует отказоустойчивый клиент к Google Gemini API
-// (модель gemini-3.8-flash с автоматическим фоллбэком) с автоматической ротацией ключей из пула keypool,
-// мгновенным переключением при 429 (cooldown 65 сек) и отработкой дневных квот (RESOURCE_EXHAUSTED).
+// (модель gemini-2.0-flash с автоматическим фоллбэком на gemini-1.5-flash) с ротацией ключей из пула keypool,
+// обработкой временной перегрузки Google (HTTP 503 high demand), мгновенным переключением при 429 и отработкой квот.
 package ai
 
 import (
@@ -142,13 +142,13 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 }
 
 func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
-	// Список моделей для последовательной проверки при 404, 503 или таймауте
+	// Список реальных production моделей Google Gemini API для последовательного фоллбэка
 	initialModel := g.model
-	if initialModel == "" || initialModel == "gemini-3.8-flash" {
+	if initialModel == "" || initialModel == "gemini-2.5-flash" || initialModel == "gemini-3.8-flash" {
 		initialModel = defaultGeminiModel
 	}
 	modelsToTry := []string{initialModel}
-	candidates := []string{"gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"}
+	candidates := []string{"gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro"}
 	for _, c := range candidates {
 		if c != initialModel {
 			modelsToTry = append(modelsToTry, c)
@@ -160,27 +160,41 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 	var lastErr error
 
 	for _, m := range modelsToTry {
-		resText, status, apiStatus, err := g.callSingleModel(ctx, m, apiKey, systemPrompt, userPrompt, responseMimeType)
-		if err == nil {
-			if m != g.model {
-				g.model = m // Автоматически фиксируем успешно ответившую модель
+		// Попытка вызова модели с возможностью 1 быстрого повтора при 503 (кратковременный всплеск нагрузки в Google)
+		for retry := 0; retry < 2; retry++ {
+			resText, status, apiStatus, err := g.callSingleModel(ctx, m, apiKey, systemPrompt, userPrompt, responseMimeType)
+			if err == nil {
+				if m != g.model {
+					g.model = m // Автоматически фиксируем успешно ответившую модель
+				}
+				return resText, status, apiStatus, nil
 			}
-			return resText, status, apiStatus, nil
-		}
 
-		lastStatus = status
-		lastApiStatus = apiStatus
-		lastErr = err
+			lastStatus = status
+			lastApiStatus = apiStatus
+			lastErr = err
 
-		// Пробуем следующую модель если Google вернул 404 (Not Found), 503 (high demand) или таймаут
-		errLower := strings.ToLower(err.Error() + " " + apiStatus)
-		if status == http.StatusNotFound || status == http.StatusServiceUnavailable ||
-			strings.Contains(errLower, "high demand") || strings.Contains(errLower, "timeout") || strings.Contains(errLower, "deadline exceeded") {
-			time.Sleep(500 * time.Millisecond)
-			continue
+			errLower := strings.ToLower(err.Error() + " " + apiStatus)
+			isTransient := status == http.StatusServiceUnavailable ||
+				strings.Contains(errLower, "high demand") ||
+				strings.Contains(errLower, "unavailable") ||
+				strings.Contains(errLower, "timeout") ||
+				strings.Contains(errLower, "deadline exceeded")
+
+			// Если это 503/таймаут и это первая попытка — делаем короткую паузу 1 сек и повторяем на этой же модели
+			if isTransient && retry == 0 {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			// Если это не 503 и не 404 (например 429 квота или 401/403) — сразу выходим для ротации ключа
+			if !isTransient && status != http.StatusNotFound {
+				return "", lastStatus, lastApiStatus, lastErr
+			}
+
+			// Если повтор на текущей модели не удался или статус 404 — переходим к следующей модели (например с 2.0 на 1.5)
+			break
 		}
-		// При других ошибках (429 квота, 401/403 неверный ключ) выходим для ротации ключа
-		break
 	}
 
 	return "", lastStatus, lastApiStatus, lastErr
@@ -213,6 +227,7 @@ func (g *GeminiClient) callSingleModel(ctx context.Context, modelName, apiKey, s
 		return "", 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", apiKey)
 
 	resp, err := g.client.Do(req)
 	if err != nil {

@@ -1,11 +1,11 @@
 // Package ai реализует облачные AI-пайплайны сервиса poisq: мультиязычную очистку
-// и консенсус текстов через Gemini 3.8 Flash, сжатие аудио на лету в моно-Opus
+// и консенсус текстов через Gemini 2.0 Flash / 1.5 Flash, сжатие аудио на лету в моно-Opus
 // и двухэтапную генерацию синхронизированного караоке через Groq Whisper + Gemini.
 //
 // Что делает этот код и для чего он нужен:
 // Данный файл gemini_client_test.go тестирует инициализацию клиента Gemini,
 // чтение модели из переменной окружения GEMINI_MODEL и работу каскадного фоллбэка
-// при ошибке 404 (NOT_FOUND) для устаревших или обновленных моделей Google API.
+// при ошибках 503 (high demand) и 404 (NOT_FOUND) для моделей Google API.
 package ai
 
 import (
@@ -47,10 +47,10 @@ func TestGeminiClient_FallbackOn404(t *testing.T) {
 			return
 		}
 
-		if strings.Contains(path, "gemini-3.8-flash") {
-			requestedModels = append(requestedModels, "gemini-3.8-flash")
+		if strings.Contains(path, "gemini-1.5-flash") || strings.Contains(path, "gemini-2.0-flash") {
+			requestedModels = append(requestedModels, "gemini-2.0-flash")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"Успешный ответ Gemini 3.8"}]}}]}`))
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"Успешный ответ Gemini"}]}}]}`))
 			return
 		}
 
@@ -63,14 +63,7 @@ func TestGeminiClient_FallbackOn404(t *testing.T) {
 		client: srv.Client(),
 	}
 
-	// Перенаправляем базовый URL для теста
-	oldAPIBase := geminiAPIBase
-	_ = oldAPIBase
-
-	// Вызываем callSingleModel напрямую на нашем srv через кастомный метод
-	// Проверяем логику callOnce
 	t.Run("Переключение_модели_при_404", func(t *testing.T) {
-		// Тест подтверждает, что при статусе 404 клиент не падает сразу, а пробует следующий кандидат
 		if client.model != "gemini-old-model" {
 			t.Errorf("начальная модель должна быть gemini-old-model")
 		}
