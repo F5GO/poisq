@@ -968,6 +968,9 @@ async function loadStagingData() {
       const propRes = propObj.width && propObj.height ? `${propObj.width}×${propObj.height} px` : "3000×3000 px HD";
       const propSource = propObj.source === "itunes" ? "Apple Music / iTunes" : "Cover Art Archive";
 
+      const propArtist = propObj.artist || curObj.artist || (path.split("/").length >= 2 ? path.split("/")[path.split("/").length - 2] : "");
+      const propAlbum = propObj.album || curObj.album || (path.split("/").length >= 1 ? path.split("/")[path.split("/").length - 1] : "");
+
       return `
         <div class="staging-card">
           <div class="staging-top">
@@ -1022,16 +1025,22 @@ async function loadStagingData() {
               }
               <div class="cover-side-zoom-hint">🔍 Нажмите для увеличения</div>
               <div class="cover-side-meta" id="prop-cover-meta-${item.id}">${propRes} · ${propSource}</div>
+
+              <!-- Кнопка варианты обложек СПРАВА, под новой обложкой -->
+              <div style="margin-top: 10px; width: 100%;">
+                <button 
+                  class="cover-candidates-toggle-btn" 
+                  id="btn-toggle-cand-${item.id}"
+                  onclick="toggleCoverCandidates(${item.id}, '${escapeHtml(propArtist)}', '${escapeHtml(propAlbum)}', '${escapeHtml(path)}')"
+                >
+                  📷 Другие варианты обложек <span id="cand-count-${item.id}"></span>
+                </button>
+              </div>
             </div>
           </div>
 
-          <!-- Альтернативные варианты обложек -->
-          <div class="cover-candidates-section">
-            <button class="cover-candidates-toggle-btn" onclick="toggleCoverCandidates(${item.id}, '${escapeHtml(propObj.artist || "")}', '${escapeHtml(propObj.album || "")}')">
-              📷 Другие варианты обложек <span id="cand-count-${item.id}"></span>
-            </button>
-            <div id="candidates-container-${item.id}" class="cover-candidates-grid hidden"></div>
-          </div>
+          <!-- Секция альтернативных вариантов обложек под сеткой -->
+          <div id="candidates-container-${item.id}" class="cover-candidates-grid hidden"></div>
 
           <div style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
             ℹ️ <strong>Аудиофайлы не изменяются.</strong> В папку альбома будет скачан файл <code class="mono">cover.jpg</code>.
@@ -1135,7 +1144,7 @@ async function applyStaging(id) {
 window.selectedCovers = window.selectedCovers || {};
 window.coverCandidatesCache = window.coverCandidatesCache || {};
 
-async function toggleCoverCandidates(itemId, artist, album) {
+async function toggleCoverCandidates(itemId, artist, album, path) {
   const container = document.getElementById(`candidates-container-${itemId}`);
   if (!container) return;
 
@@ -1153,25 +1162,25 @@ async function toggleCoverCandidates(itemId, artist, album) {
     const item = (state.stagingItems || []).find(it => it.id === itemId);
     let candidates = [];
 
-    // 1. Проверяем, были ли кандидаты уже прикреплены в proposedJson
-    if (item && item.proposedJson) {
+    // Запрашиваем актуальные варианты обложек через /api/v1/covers/candidates
+    const q = new URLSearchParams();
+    if (artist) q.set("artist", artist);
+    if (album) q.set("album", album);
+    if (path) q.set("path", path);
+
+    const resp = await fetchApi(`/covers/candidates?${q.toString()}`);
+    if (resp && Array.isArray(resp.candidates) && resp.candidates.length > 0) {
+      candidates = resp.candidates;
+    }
+
+    // Если кандидаты не найдены по запросу, но в предложении были альтернативы
+    if (candidates.length === 0 && item && item.proposedJson) {
       try {
         const prop = JSON.parse(item.proposedJson);
         if (Array.isArray(prop.alternatives) && prop.alternatives.length > 0) {
-          candidates = [
-            { url: prop.coverUrl, source: prop.source, width: prop.width, height: prop.height, title: prop.album || album, artist: prop.artist || artist },
-            ...prop.alternatives
-          ];
+          candidates = prop.alternatives;
         }
       } catch (e) {}
-    }
-
-    // 2. Если кандидатов нет в слепке, выполняем динамический запрос к /api/v1/covers/candidates
-    if (candidates.length <= 1) {
-      const resp = await fetchApi(`/covers/candidates?artist=${encodeURIComponent(artist)}&album=${encodeURIComponent(album)}`);
-      if (resp && Array.isArray(resp.candidates) && resp.candidates.length > 0) {
-        candidates = resp.candidates;
-      }
     }
 
     window.coverCandidatesCache[itemId] = candidates;
@@ -1188,12 +1197,15 @@ async function toggleCoverCandidates(itemId, artist, album) {
       const resText = cand.width && cand.height ? `${cand.width}×${cand.height} px` : "3000×3000 px";
       const srcText = cand.source === "itunes" ? "Apple Music" : "Cover Art Archive";
       return `
-        <div class="cover-cand-card ${isSel ? 'active' : ''}" id="cand-card-${itemId}-${idx}" onclick="selectCoverCandidate(${itemId}, ${idx})">
-          <img src="${escapeHtml(cand.url)}" class="cover-cand-thumb" alt="Вариант" loading="lazy" />
+        <div class="cover-cand-card ${isSel ? 'active' : ''}" id="cand-card-${itemId}-${idx}">
+          <div class="cover-cand-thumb-wrap" onclick="openCoverLightboxForCandidate(${itemId}, ${idx})" title="Нажмите для полноэкранного просмотра">
+            <img src="${escapeHtml(cand.url)}" class="cover-cand-thumb" alt="Вариант" loading="lazy" />
+            <span class="cover-cand-zoom-hint">🔍 Увеличить</span>
+          </div>
           <div class="cover-cand-title" title="${escapeHtml(cand.title || album)}">${escapeHtml(cand.title || album)}</div>
           <div class="cover-cand-meta">${escapeHtml(cand.artist || artist)}</div>
           <div class="cover-cand-meta">${resText} · ${srcText}</div>
-          <button class="btn btn-secondary cover-cand-btn" style="pointer-events:none;">${isSel ? '✓ Выбрано' : 'Выбрать'}</button>
+          <button class="btn btn-secondary cover-cand-btn" onclick="selectCoverCandidate(${itemId}, ${idx})">${isSel ? '✓ Выбрано' : 'Выбрать'}</button>
         </div>
       `;
     }).join("");
@@ -1204,6 +1216,10 @@ async function toggleCoverCandidates(itemId, artist, album) {
   } catch (err) {
     container.innerHTML = `<div style="grid-column: 1/-1; padding: 12px; color: var(--accent-danger); font-size: 12px; text-align: center;">Ошибка поиска вариантов: ${escapeHtml(err.message)}</div>`;
   }
+}
+
+function openCoverLightboxForCandidate(itemId, candIndex) {
+  openCoverLightbox(itemId, 2 + candIndex);
 }
 
 function selectCoverCandidate(itemId, candIndex) {
@@ -1288,22 +1304,32 @@ function openCoverLightbox(itemId, initialIndex) {
     }
   ];
 
-  // Добавляем альтернативные варианты в слайды, если они были найдены
+  // Добавляем ВСЕ найденные кандидаты в слайды, чтобы их можно было перелистывать!
   const candidates = window.coverCandidatesCache[itemId];
   if (candidates && candidates.length > 0) {
     candidates.forEach((cand, idx) => {
-      if (cand.url !== chosenUrl) {
-        slides.push({
-          type: "candidate",
-          badgeTitle: `Вариант ${idx + 1} (${cand.title || 'Альбом'})`,
-          badgeClass: "badge-proposed",
-          res: `${cand.width}×${cand.height} px · ${cand.source === 'itunes' ? 'Apple Music' : 'Cover Art Archive'}`,
-          src: cand.url,
-          tabTitle: `Вариант ${idx + 1}`,
-        });
-      }
+      slides.push({
+        type: "candidate",
+        badgeTitle: `Вариант ${idx + 1}: ${cand.title || 'Альбом'}`,
+        badgeClass: "badge-proposed",
+        res: `${cand.width}×${cand.height} px · ${cand.source === 'itunes' ? 'Apple Music' : 'Cover Art Archive'}`,
+        src: cand.url,
+        tabTitle: `Вариант ${idx + 1}`,
+      });
     });
   }
+
+  window.lightboxState.slides = slides;
+  window.lightboxState.currentIndex = Math.max(0, Math.min(initialIndex || 0, slides.length - 1));
+
+  renderLightboxSlide();
+
+  const modal = document.getElementById("modal-cover-lightbox");
+  if (modal) {
+    modal.classList.remove("hidden");
+    modal.focus();
+  }
+}
 
   window.lightboxState.slides = slides;
   window.lightboxState.currentIndex = Math.max(0, Math.min(initialIndex || 0, slides.length - 1));

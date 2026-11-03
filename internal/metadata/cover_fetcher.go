@@ -143,47 +143,72 @@ func (cf *CoverFetcher) FindCoverCandidates(ctx context.Context, releaseMBID, ar
 		}
 	}
 
-	// 2. Поиск в iTunes Search API (до 15 результатов с чистыми 3000x3000bb)
-	term := strings.TrimSpace(artist + " " + album)
-	if term != "" {
-		itunesURL := fmt.Sprintf("https://itunes.apple.com/search?term=%s&entity=album&limit=15", url.QueryEscape(term))
+	// 2. Многоуровневый поиск в iTunes Search API (альбомы, треки/синглы и дискография артиста)
+	cleanAlbum := CleanTargetAlbum(artist, album)
+
+	type itunesQuery struct {
+		term   string
+		entity string
+	}
+
+	queries := []itunesQuery{}
+	if strings.TrimSpace(artist) != "" && strings.TrimSpace(cleanAlbum) != "" {
+		queries = append(queries,
+			itunesQuery{term: artist + " " + cleanAlbum, entity: "album"},
+			itunesQuery{term: artist + " " + cleanAlbum, entity: "song"},
+		)
+	}
+	if strings.TrimSpace(artist) != "" {
+		queries = append(queries, itunesQuery{term: artist, entity: "album"})
+	}
+
+	for _, q := range queries {
+		if len(candidates) >= limit*2 {
+			break
+		}
+		itunesURL := fmt.Sprintf("https://itunes.apple.com/search?term=%s&entity=%s&limit=15", url.QueryEscape(q.term), q.entity)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, itunesURL, nil)
-		if err == nil {
-			req.Header.Set("User-Agent", musicBrainzUserAgent)
-			if resp, err := cf.client.Do(req); err == nil {
-				defer resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					var parsed itunesSearchResp
-					if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&parsed); err == nil {
-						for _, item := range parsed.Results {
-							if item.ArtworkURL100 == "" {
-								continue
-							}
-							valid, score := ScoreCoverCandidate(item.ArtistName, item.CollectionName, artist, album)
-							if !valid {
-								continue
-							}
+		if err != nil {
+			continue
+		}
+		req.Header.Set("User-Agent", musicBrainzUserAgent)
 
-							highResURL := strings.ReplaceAll(item.ArtworkURL100, "100x100bb", "3000x3000bb")
-							if seenURLs[highResURL] {
-								continue
-							}
-							seenURLs[highResURL] = true
+		resp, err := cf.client.Do(req)
+		if err != nil {
+			continue
+		}
 
-							candidates = append(candidates, &CoverCandidate{
-								URL:    highResURL,
-								Source: "itunes",
-								Width:  3000,
-								Height: 3000,
-								Title:  item.CollectionName,
-								Artist: item.ArtistName,
-								Score:  score,
-							})
-						}
+		if resp.StatusCode == http.StatusOK {
+			var parsed itunesSearchResp
+			if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&parsed); err == nil {
+				for _, item := range parsed.Results {
+					if item.ArtworkURL100 == "" {
+						continue
 					}
+					valid, score := ScoreCoverCandidate(item.ArtistName, item.CollectionName, artist, album)
+					if !valid {
+						continue
+					}
+
+					highResURL := strings.ReplaceAll(item.ArtworkURL100, "100x100bb", "3000x3000bb")
+					if seenURLs[highResURL] {
+						continue
+					}
+					seenURLs[highResURL] = true
+
+					candidates = append(candidates, &CoverCandidate{
+						URL:    highResURL,
+						Source: "itunes",
+						Width:  3000,
+						Height: 3000,
+						Title:  item.CollectionName,
+						Artist: item.ArtistName,
+						Score:  score,
+					})
 				}
 			}
 		}
+		_ = resp.Body.Close()
 	}
 
 	// Сортируем кандидатов по убыванию оценки соответствия

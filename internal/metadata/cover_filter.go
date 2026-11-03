@@ -30,14 +30,36 @@ var DisallowedCoverKeywords = []string{
 }
 
 var genericArtistNames = map[string]bool{
-	"various artists":    true,
-	"разные исполнители": true,
-	"soundtrack":         true,
-	"саундтрек":          true,
-	"va":                 true,
-	"v.a.":               true,
+	"various artists":     true,
+	"разные исполнители":  true,
+	"soundtrack":          true,
+	"саундтрек":           true,
+	"va":                  true,
+	"v.a.":                true,
 	"original soundtrack": true,
-	"ost":                true,
+	"ost":                 true,
+}
+
+// CleanTargetAlbum очищает название альбома от повторения имени артиста
+// (например, "Green Day – Boulevard of Broken Dreams" -> "Boulevard of Broken Dreams").
+func CleanTargetAlbum(artist, album string) string {
+	a := strings.TrimSpace(album)
+	art := strings.TrimSpace(artist)
+	if art == "" || a == "" {
+		return a
+	}
+
+	normArt := strings.ToLower(art)
+	normAlb := strings.ToLower(a)
+
+	separators := []string{" - ", " – ", " — ", ": "}
+	for _, sep := range separators {
+		prefix := normArt + sep
+		if strings.HasPrefix(normAlb, prefix) {
+			return strings.TrimSpace(a[len(prefix):])
+		}
+	}
+	return a
 }
 
 // IsDisallowedCoverRelease проверяет, содержит ли кандидат стоп-слова караоке/трибьютов,
@@ -65,7 +87,9 @@ func ScoreCoverCandidate(candArtist, candAlbum, targetArtist, targetAlbum string
 	normCandArtist := strings.ToLower(strings.TrimSpace(candArtist))
 	normCandAlbum := strings.ToLower(strings.TrimSpace(candAlbum))
 	normTgtArtist := strings.ToLower(strings.TrimSpace(targetArtist))
-	normTgtAlbum := strings.ToLower(strings.TrimSpace(targetAlbum))
+
+	cleanAlbum := CleanTargetAlbum(targetArtist, targetAlbum)
+	normCleanAlbum := strings.ToLower(cleanAlbum)
 
 	if IsDisallowedCoverRelease(candArtist, candAlbum, targetArtist, targetAlbum) {
 		return false, 0
@@ -81,7 +105,7 @@ func ScoreCoverCandidate(candArtist, candAlbum, targetArtist, targetAlbum string
 		} else if strings.Contains(normCandArtist, normTgtArtist) || strings.Contains(normTgtArtist, normCandArtist) {
 			artistMatchScore = 35
 		} else {
-			// Артист вообще не совпадает — это чужой релиз (например, караоке-лейбл или другой исполнитель)
+			// Артист вообще не совпадает — это чужой релиз (караоке-лейбл или другой исполнитель)
 			return false, 0
 		}
 	} else if isGeneric {
@@ -90,12 +114,18 @@ func ScoreCoverCandidate(candArtist, candAlbum, targetArtist, targetAlbum string
 
 	// 2. Проверка альбома
 	albumMatchScore := 0
-	if normCandAlbum == normTgtAlbum && normTgtAlbum != "" {
-		albumMatchScore = 50
-	} else if normTgtAlbum != "" && (strings.Contains(normCandAlbum, normTgtAlbum) || strings.Contains(normTgtAlbum, normCandAlbum)) {
-		albumMatchScore = 35
+	if normCleanAlbum != "" {
+		if normCandAlbum == normCleanAlbum {
+			albumMatchScore = 50
+		} else if strings.Contains(normCandAlbum, normCleanAlbum) || strings.Contains(normCleanAlbum, normCandAlbum) {
+			albumMatchScore = 40
+		} else {
+			// Название релиза отличается (например, сингл "Boulevard of Broken Dreams" входит в альбом "American Idiot")
+			// Для того же официального артиста это валидный кандидат
+			albumMatchScore = 20
+		}
 	} else {
-		albumMatchScore = 10
+		albumMatchScore = 25
 	}
 
 	totalScore := artistMatchScore + albumMatchScore

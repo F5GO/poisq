@@ -140,3 +140,9 @@ func (r *StagingRepository) MarkStatus(id int64, status string) error {
 	_, err := r.db.Exec(`UPDATE staging_changes SET status = ? WHERE id = ?`, status, id)
 	return err
 }
+
+// UpdateProposedJSON обновляет предложенные данные (proposed_json) для предложения.
+func (r *StagingRepository) UpdateProposedJSON(id int64, proposedJSON string) error {
+	_, err := r.db.Exec(`UPDATE staging_changes SET proposed_json = ? WHERE id = ?`, proposedJSON, id)
+	return err
+}
