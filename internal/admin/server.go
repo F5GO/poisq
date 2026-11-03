@@ -100,6 +100,7 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/jobs", s.handleJobsList)
 
 	mux.HandleFunc("/api/v1/keys", s.handleKeysAPI)
+	mux.HandleFunc("/api/v1/debug/fs", s.handleDebugFS)
 
 	// Встроенный фронтенд (SPA) через //go:embed
 	uiSub, err := fs.Sub(embeddedUI, "ui")

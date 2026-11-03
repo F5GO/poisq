@@ -78,11 +78,11 @@ func TestFindCoverAnywhere(t *testing.T) {
 	kishCover := filepath.Join(kishDir, "cover.jpg")
 	_ = os.WriteFile(kishCover, []byte("fake-kish-cover"), 0644)
 
-	// Запрос с «Music — копия»
-	copyRequestPath := filepath.Join(tmpDir, "Music — копия", "Король и Шут", "Король и Шут – Будь как дома, Путник")
+	// Запрос с неразрывным пробелом «Music\u00a0— копия» и запятой в названии
+	copyRequestPath := filepath.Join(tmpDir, "Music\u00a0— копия", "Король и Шут", "Король и Шут – Будь как дома, Путник")
 	found = FindCoverAnywhere(tmpDir, copyRequestPath)
 	if found != kishCover {
-		t.Errorf("Copy suffix resolution failed: got %q, expected %q", found, kishCover)
+		t.Errorf("Copy suffix with NBSP and comma failed: got %q, expected %q", found, kishCover)
 	}
 
 	// Запрос напрямую без префикса Music
@@ -90,5 +90,16 @@ func TestFindCoverAnywhere(t *testing.T) {
 	found = FindCoverAnywhere(tmpDir, directKishPath)
 	if found != kishCover {
 		t.Errorf("Direct kish path failed: got %q, expected %q", found, kishCover)
+	}
+
+	// Тест 7: Nickelback с запятой и The Offspring
+	offspringDir := filepath.Join(tmpDir, "Music", "The Offspring", "The Offspring - Americana")
+	_ = os.MkdirAll(offspringDir, 0755)
+	offspringCover := filepath.Join(offspringDir, "cover.jpg")
+	_ = os.WriteFile(offspringCover, []byte("fake-offspring"), 0644)
+
+	found = FindCoverAnywhere(tmpDir, filepath.Join(tmpDir, "Music\u00a0— копия", "The Offspring", "The Offspring - Americana"))
+	if found != offspringCover {
+		t.Errorf("Offspring copy path resolution failed: got %q, expected %q", found, offspringCover)
 	}
 }

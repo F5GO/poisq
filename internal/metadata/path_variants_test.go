@@ -12,7 +12,7 @@ import (
 
 func TestGeneratePathVariants(t *testing.T) {
 	musicRoot := "/music"
-	targetPath := "/music/Music — копия/Король и Шут/Король и Шут – Будь как дома, Путник"
+	targetPath := "/music/Music\u00a0— копия/Король и Шут/Король и Шут – Будь как дома, Путник"
 
 	variants := GeneratePathVariants(musicRoot, targetPath)
 

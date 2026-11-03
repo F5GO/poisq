@@ -298,6 +298,7 @@ func (s *AdminServer) serveCoverPathOrEmbedded(w http.ResponseWriter, r *http.Re
 		}
 		if resolvedAudio != "" {
 			if data, mime := metadata.ExtractCoverFromAudioFile(resolvedAudio); len(data) > 0 {
+				logger.Debug("[COVER] Извлечена встроенная обложка из аудиофайла: %s", resolvedAudio)
 				w.Header().Set("Content-Type", mime)
 				w.Header().Set("Cache-Control", "public, max-age=86400")
 				_, _ = w.Write(data)
@@ -307,18 +308,19 @@ func (s *AdminServer) serveCoverPathOrEmbedded(w http.ResponseWriter, r *http.Re
 	}
 
 	if folderOrFile != "" {
-		resolvedDir := metadata.ResolveFuzzyDirectory(root, folderOrFile)
-		if resolvedDir == "" && !filepath.IsAbs(folderOrFile) && root != "" {
-			resolvedDir = metadata.ResolveFuzzyDirectory(root, filepath.Join(root, folderOrFile))
-		}
-		if resolvedDir == "" {
-			resolvedDir = folderOrFile
-		}
-		if data, mime := metadata.ExtractCoverFromAudioOrDir(resolvedDir); len(data) > 0 {
-			w.Header().Set("Content-Type", mime)
-			w.Header().Set("Cache-Control", "public, max-age=86400")
-			_, _ = w.Write(data)
-			return true
+		candidates := metadata.GeneratePathVariants(root, folderOrFile)
+		for _, cand := range candidates {
+			resolvedDir := metadata.ResolveFuzzyDirectory(root, cand)
+			if resolvedDir == "" {
+				resolvedDir = cand
+			}
+			if data, mime := metadata.ExtractCoverFromAudioOrDir(resolvedDir); len(data) > 0 {
+				logger.Debug("[COVER] Извлечена встроенная обложка из аудиофайлов каталога: %s", resolvedDir)
+				w.Header().Set("Content-Type", mime)
+				w.Header().Set("Cache-Control", "public, max-age=86400")
+				_, _ = w.Write(data)
+				return true
+			}
 		}
 	}
 
