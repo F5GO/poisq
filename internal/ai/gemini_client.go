@@ -1,10 +1,12 @@
 // Package ai реализует облачные AI-пайплайны сервиса poisq: мультиязычную очистку
-// и консенсус текстов через Gemini 2.0 Flash / 1.5 Flash, сжатие аудио на лету в моно-Opus
+// и консенсус текстов через Gemini, сжатие аудио на лету в моно-Opus
 // и двухэтапную генерацию синхронизированного караоке через Groq Whisper + Gemini.
 //
-// Данный файл gemini_client.go реализует отказоустойчивый клиент к Google Gemini API
-// (модель gemini-2.0-flash с автоматическим фоллбэком на gemini-1.5-flash) с ротацией ключей из пула keypool,
-// обработкой временной перегрузки Google (HTTP 503 high demand), мгновенным переключением при 429 и отработкой квот.
+// Что делает этот код и для чего он нужен:
+// Данный файл gemini_client.go реализует высокопроизводительный клиент к Google Gemini API
+// на базе официального Interactions API (/v1beta/interactions) с оптимальной моделью по умолчанию
+// gemini-3.8-flash (и каскадным фоллбэком на gemini-3.6-flash / gemini-4-argon), ротацией ключей из пула keypool,
+// автоматической обработкой пиковых нагрузок (HTTP 503 high demand) и квот.
 package ai
 
 import (
@@ -22,14 +24,55 @@ import (
 )
 
 const (
-	defaultGeminiModel = "gemini-2.0-flash"
-	geminiAPIBase      = "https://generativelanguage.googleapis.com/v1beta/models"
+	// defaultGeminiModel — оптимальная быстрая и экономичная модель Google Gemini для караоке и консенсуса текстов.
+	defaultGeminiModel    = "gemini-3.8-flash"
+	geminiInteractionsURL = "https://generativelanguage.googleapis.com/v1beta/interactions"
+	geminiAPIBase         = "https://generativelanguage.googleapis.com/v1beta/models"
+	geminiAPIVersionDate  = "2026-05-20"
 )
 
+// geminiInteractionRequest представляет запрос к официальному Interactions API Google.
+type geminiInteractionRequest struct {
+	Model             string                `json:"model"`
+	Input             string                `json:"input"`
+	SystemInstruction string                `json:"system_instruction,omitempty"`
+	Store             bool                  `json:"store"`
+	ResponseFormat    *geminiResponseFormat `json:"response_format,omitempty"`
+}
+
+type geminiResponseFormat struct {
+	Type     string `json:"type,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+}
+
+type geminiInteractionResponse struct {
+	ID     string                  `json:"id"`
+	Status string                  `json:"status"`
+	Steps  []geminiInteractionStep `json:"steps"`
+	Error  *geminiAPIError         `json:"error,omitempty"`
+}
+
+type geminiInteractionStep struct {
+	Type    string                         `json:"type"`
+	Content []geminiInteractionContentPart `json:"content,omitempty"`
+}
+
+type geminiInteractionContentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type geminiAPIError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Status  string `json:"status"`
+}
+
+// Устаревший формат generateContent (для совместимости со старыми моделями)
 type geminiGenerateRequest struct {
-	SystemInstruction *geminiContent       `json:"systemInstruction,omitempty"`
-	Contents          []geminiContent      `json:"contents"`
-	GenerationConfig  *geminiGenConfig     `json:"generationConfig,omitempty"`
+	SystemInstruction *geminiContent   `json:"systemInstruction,omitempty"`
+	Contents          []geminiContent  `json:"contents"`
+	GenerationConfig  *geminiGenConfig `json:"generationConfig,omitempty"`
 }
 
 type geminiContent struct {
@@ -54,24 +97,20 @@ type geminiGenerateResponse struct {
 			} `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
-	Error *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Status  string `json:"status"`
-	} `json:"error,omitempty"`
+	Error *geminiAPIError `json:"error,omitempty"`
 }
 
-// GeminiClient выполняет запросы к Gemini 2.5 Flash с автоматической ротацией ключей.
+// GeminiClient выполняет запросы к Gemini с автоматической ротацией ключей.
 type GeminiClient struct {
 	keyPool *keypool.Manager
 	client  *http.Client
 	model   string
 }
 
-// NewGeminiClient создает новый экземпляр клиента Gemini.
+// NewGeminiClient создает новый экземпляр клиента Gemini с оптимальной моделью gemini-3.8-flash.
 func NewGeminiClient(keyPool *keypool.Manager) *GeminiClient {
 	model := strings.TrimSpace(os.Getenv("GEMINI_MODEL"))
-	if model == "" || model == "gemini-3.8-flash" {
+	if model == "" || model == "gemini-2.0-flash" || model == "gemini-2.5-flash" {
 		model = defaultGeminiModel
 	}
 	return &GeminiClient{
@@ -142,13 +181,13 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 }
 
 func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
-	// Список реальных production моделей Google Gemini API для последовательного фоллбэка
+	// Список актуальных production моделей Google Gemini API для последовательного фоллбэка
 	initialModel := g.model
-	if initialModel == "" || initialModel == "gemini-2.5-flash" || initialModel == "gemini-3.8-flash" {
+	if initialModel == "" || initialModel == "gemini-2.0-flash" || initialModel == "gemini-2.5-flash" {
 		initialModel = defaultGeminiModel
 	}
 	modelsToTry := []string{initialModel}
-	candidates := []string{"gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro"}
+	candidates := []string{"gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-4-argon"}
 	for _, c := range candidates {
 		if c != initialModel {
 			modelsToTry = append(modelsToTry, c)
@@ -192,7 +231,7 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 				return "", lastStatus, lastApiStatus, lastErr
 			}
 
-			// Если повтор на текущей модели не удался или статус 404 — переходим к следующей модели (например с 2.0 на 1.5)
+			// Если повтор на текущей модели не удался или статус 404 — переходим к следующей модели (например с 3.8 на 3.6 или 4-argon)
 			break
 		}
 	}
@@ -200,7 +239,84 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 	return "", lastStatus, lastApiStatus, lastErr
 }
 
+// callSingleModel выполняет запрос к модели: в первую очередь через официальный Interactions API,
+// а при необходимости прозрачно поддерживает фоллбэк на legacy generateContent.
 func (g *GeminiClient) callSingleModel(ctx context.Context, modelName, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
+	// 1. Попытка вызова через официальный Interactions API Google
+	resText, status, apiStatus, err := g.callInteractionsAPI(ctx, modelName, apiKey, systemPrompt, userPrompt, responseMimeType)
+	if err == nil {
+		return resText, status, apiStatus, nil
+	}
+
+	// Если Interactions API вернул 404 или endpoint недоступен — пробуем legacy generateContent
+	if status == http.StatusNotFound || status == http.StatusMethodNotAllowed {
+		return g.callGenerateContent(ctx, modelName, apiKey, systemPrompt, userPrompt, responseMimeType)
+	}
+
+	return "", status, apiStatus, err
+}
+
+// callInteractionsAPI отправляет запрос к официальному Interactions API Google (/v1beta/interactions).
+func (g *GeminiClient) callInteractionsAPI(ctx context.Context, modelName, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
+	reqPayload := geminiInteractionRequest{
+		Model:             modelName,
+		Input:             userPrompt,
+		SystemInstruction: systemPrompt,
+		Store:             false,
+	}
+	if responseMimeType != "" {
+		reqPayload.ResponseFormat = &geminiResponseFormat{
+			Type:     "text",
+			MimeType: responseMimeType,
+		}
+	}
+
+	bodyBytes, err := json.Marshal(reqPayload)
+	if err != nil {
+		return "", 0, "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, geminiInteractionsURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", 0, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", apiKey)
+	req.Header.Set("Api-Revision", geminiAPIVersionDate)
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return "", 0, "", err
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return "", resp.StatusCode, "", err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var parsedErr geminiInteractionResponse
+		_ = json.Unmarshal(respBytes, &parsedErr)
+		apiMsg := string(respBytes)
+		apiStatus := ""
+		if parsedErr.Error != nil {
+			apiMsg = parsedErr.Error.Message
+			apiStatus = parsedErr.Error.Status
+		}
+		return "", resp.StatusCode, apiStatus, fmt.Errorf("Gemini Interactions HTTP %d (%s): %s", resp.StatusCode, apiStatus, apiMsg)
+	}
+
+	resText, apiStatus, err := parseInteractionResponse(respBytes)
+	if err != nil {
+		return "", resp.StatusCode, apiStatus, err
+	}
+
+	return resText, http.StatusOK, "OK", nil
+}
+
+// callGenerateContent отправляет запрос к устаревшему generateContent эндпоинту Google.
+func (g *GeminiClient) callGenerateContent(ctx context.Context, modelName, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
 	reqPayload := geminiGenerateRequest{
 		Contents: []geminiContent{
 			{Role: "user", Parts: []geminiPart{{Text: userPrompt}}},
@@ -250,7 +366,7 @@ func (g *GeminiClient) callSingleModel(ctx context.Context, modelName, apiKey, s
 			apiMsg = parsed.Error.Message
 			apiStatus = parsed.Error.Status
 		}
-		return "", resp.StatusCode, apiStatus, fmt.Errorf("Gemini HTTP %d (%s): %s", resp.StatusCode, apiStatus, apiMsg)
+		return "", resp.StatusCode, apiStatus, fmt.Errorf("Gemini generateContent HTTP %d (%s): %s", resp.StatusCode, apiStatus, apiMsg)
 	}
 
 	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
