@@ -150,6 +150,24 @@ func (m *Manager) ReportInvalid(keyID int64, httpCode int, details string) {
 	_ = m.repo.MarkStatus(keyID, "invalid", 0, msg)
 }
 
+// HasKeys возвращает true, если для данного провайдера в пуле есть хотя бы один зарегистрированный ключ.
+func (m *Manager) HasKeys(provider string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	keys, err := m.repo.ListAll()
+	if err != nil {
+		return false
+	}
+	clean := strings.ToLower(strings.TrimSpace(provider))
+	for _, k := range keys {
+		if strings.ToLower(k.Provider) == clean {
+			return true
+		}
+	}
+	return false
+}
+
 // NextRetryTimestamp возвращает время освобождения ближайшего ключа для провайдера.
 func (m *Manager) NextRetryTimestamp(provider string) int64 {
 	m.mu.Lock()

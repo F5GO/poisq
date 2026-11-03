@@ -1,0 +1,156 @@
+/*
+ * poisq Studio — Таблицы данных (Tables & Status Badges)
+ * 
+ * Что делает этот код и для чего он нужен:
+ * Стилизует таблицы фонотеки, очереди задач и пула API-ключей:
+ * - Карточный контейнер с мягким скруглением 18 px и деликатной тенью;
+ * - Строки с мягким эффектом наведения (hover) и сбалансированной типографикой;
+ * - Интерактивные статусные бейджи LRC и аудита фонотеки.
+ */
+
+.table-wrapper {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.data-table thead th {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.data-table tbody tr {
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background-color 0.12s ease;
+}
+
+.data-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.data-table tbody tr:hover {
+  background-color: var(--bg-hover);
+}
+
+.data-table td {
+  padding: 12px 16px;
+  vertical-align: middle;
+  color: var(--text-primary);
+}
+
+.col-num {
+  width: 44px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.col-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cell-empty {
+  text-align: center !important;
+  padding: 48px 24px !important;
+  color: var(--text-muted);
+  font-size: 13.5px;
+}
+
+/* Бейджи аудита MusicBrainz */
+.badge-audit-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-emerald-bg);
+  color: var(--color-emerald);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.badge-audit-queued {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-amber-bg);
+  color: var(--color-amber);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.badge-audit-processing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-accent-bg);
+  color: var(--poisq-blue);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+}
+
+/* Интерактивные кликабельные кнопки-бейджи статуса текстов */
+.badge-lyric-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+  font-family: var(--font-sans);
+}
+
+.badge-lyric-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.badge-lyric-btn.synced {
+  background: rgba(37, 99, 235, 0.09);
+  color: var(--poisq-blue);
+  border-color: rgba(37, 99, 235, 0.25);
+}
+
+.badge-lyric-btn.plain {
+  background: rgba(245, 158, 11, 0.1);
+  color: #D97706;
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+.badge-lyric-btn.none {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  border-color: var(--border-subtle);
+}

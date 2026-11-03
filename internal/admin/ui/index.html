@@ -1,19 +1,33 @@
 <!--
-  poisq Studio v0.2.0 — Главный интерфейс веб-панели управления (:4535)
-  Назначение:
-  Минималистичный, функциональный интерфейс для управления фонотекой:
-  1. Фонотека: просмотр всех треков, группировка по исполнителям и альбомам, статус аудита и очереди, drawer подробной информации.
-  2. Караоке и LRC: выбор треков из сайдбара, синхронизированный плеер с реальным аудиопотоком, турнир провайдеров и AI-караоке.
-  3. Staging-буфер: наглядное поштучное сравнение изменений (side-by-side обложки с характеристиками, выделение только измененных тегов без лишних перечеркиваний).
+  poisq Studio — Главный интерфейс веб-панели управления фонотекой (:4535)
+  
+  Что делает этот код и для чего он нужен:
+  Минималистичный, технологичный интерфейс в новом фирменном стиле poisq (Apple-inspired):
+  1. Фонотека: умный поиск треков, группировка по исполнителям и альбомам, статус аудита MusicBrainz и текстов песен.
+  2. Караоке и LRC: выбор треков из сайдбара, синхронизированный телесуфлер текста, плеер с реальным аудиопотоком.
+  3. Staging-буфер Picard: безопасное сравнение изменений тегов и обложек (side-by-side Было/Станет).
   4. Очередь задач: мониторинг фоновых процессов воркера и управление паузой.
-  5. Ключи API: ротация AES-256-GCM ключей без навязчивых подсказок браузера.
+  5. Ключи API: безопасное хранилище токенов с шифрованием AES-256-GCM.
 -->
 <!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>poisq Studio (:4535)</title>
+  <title>poisq — Умный поиск музыки и текстов</title>
+  
+  <!-- Фирменные фавиконы и иконки poisq -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/brand/favicon-32x32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/brand/favicon-16x16.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/brand/apple-touch-icon.png" />
+  <link rel="shortcut icon" href="/favicon.ico" />
+  
+  <!-- Фирменная типографика Plus Jakarta Sans -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Модульная дизайн-система -->
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -21,10 +35,14 @@
   <!-- Верхняя строка навигации -->
   <header class="navbar">
     <div class="nav-container">
-      <div class="nav-brand">
-        <span class="brand-logo">p</span>
-        <span class="brand-name">poisq</span>
-        <span class="brand-sub">studio</span>
+      <div class="nav-brand" id="brand-home-link" title="poisq — Умный поиск музыки и сервис текстов песен для Navidrome">
+        <div class="brand-icon-wrap">
+          <img src="/assets/brand/poisq-mark-192.png" alt="poisq" class="brand-mark-img" width="32" height="32" />
+        </div>
+        <div class="brand-title-wrap">
+          <span class="brand-name">poisq</span>
+          <span class="brand-sub">studio</span>
+        </div>
       </div>
 
       <nav class="nav-links">
@@ -41,9 +59,15 @@
         <button class="nav-tab" data-tab="keys">Ключи API</button>
       </nav>
 
-      <div class="nav-status">
-        <span class="status-dot"></span>
-        <span class="mono">:4534 Subsonic</span>
+      <div class="nav-right-cluster">
+        <div class="nav-status" title="Прокси Subsonic API">
+          <span class="status-dot"></span>
+          <span class="mono">:4534 Subsonic</span>
+        </div>
+        <button type="button" class="theme-toggle-btn" id="btn-toggle-theme" title="Переключить тему оформления (Светлая / Тёмная)">
+          <svg id="theme-icon-sun" class="hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+          <svg id="theme-icon-moon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
+        </button>
       </div>
     </div>
   </header>
@@ -71,7 +95,7 @@
       <!-- Фильтр и счетчик -->
       <div class="filter-row">
         <div class="search-input-wrap">
-          <input type="text" id="track-search-input" placeholder="Поиск по артисту, треку или альбому..." class="search-field" />
+          <input type="text" id="track-search-input" placeholder="Поиск по артисту, треку или альбому..." class="search-field" autocomplete="off" />
           <button type="button" id="btn-clear-track-search" class="search-clear-btn hidden" title="Очистить поиск (Esc)">✕</button>
         </div>
         <span class="meta-label mono" id="tracks-count-label">Показано: 0 треков</span>
@@ -125,7 +149,7 @@
         <!-- Сайдбар списка треков в караоке -->
         <aside class="karaoke-sidebar">
           <div class="sidebar-header">
-            <input type="text" id="karaoke-search-input" placeholder="Поиск песни для караоке..." class="search-field search-compact" />
+            <input type="text" id="karaoke-search-input" placeholder="Поиск песни для караоке..." class="search-field search-compact" autocomplete="off" />
           </div>
           <div class="sidebar-tracks" id="karaoke-tracks-list">
             <div class="cell-empty">Загрузка треков...</div>
@@ -136,7 +160,9 @@
         <div class="karaoke-main">
           <div class="panel-header">
             <div class="track-header-meta">
-              <div class="track-cover-placeholder" id="player-cover">♪</div>
+              <div class="track-cover-placeholder" id="player-cover">
+                <img src="/assets/brand/poisq-mark-192.png" alt="poisq" style="width:28px;height:28px;opacity:0.85;" />
+              </div>
               <div>
                 <h1 class="panel-title" id="player-title">Выберите трек из списка слева</h1>
                 <p class="panel-desc" id="player-artist">Нажмите на любой трек для запуска воспроизведения и текста</p>
@@ -179,7 +205,7 @@
                 <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.334 4zM4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"></path></svg>
               </button>
               
-              <button class="btn-play" id="btn-play">
+              <button class="btn-play" id="btn-play" title="Воспроизвести / Пауза (Пробел)">
                 <svg id="play-icon" class="icon" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>
                 <svg id="pause-icon" class="icon hidden" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path></svg>
               </button>

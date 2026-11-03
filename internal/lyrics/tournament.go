@@ -16,6 +16,7 @@ import (
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/httpclient"
 	"github.com/F5GO/poisq/internal/keypool"
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 // TournamentCandidate описывает найденный вариант текста от одного провайдера вместе с его оценкой.
@@ -105,6 +106,8 @@ func NewTournamentOrchestrator(cacheRepo *db.ProviderCacheRepository, keyPool *k
 // RunTournament параллельно опрашивает все 5 источников, оценивает ответы по шкале CandidateScore (0..100),
 // сохраняет каждый вариант в provider_cache и возвращает лучший результат.
 func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuery) (*TournamentResult, error) {
+	logger.Info("[TOURNAMENT] Старт турнира текстов: «%s — %s» (альбом: %q, хронометраж: %v)", q.Artist, q.Title, q.Album, q.Duration)
+
 	// Если в пуле ключей добавлен OAuth-токен Яндекс Музыки — актуализируем его перед запросом
 	if t.keyPool != nil && t.yandex != nil {
 		if leased, err := t.keyPool.Acquire("yandex"); err == nil && leased != nil {
@@ -119,6 +122,7 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 
 	for _, gp := range t.providers {
 		if !gp.breaker.Allow() {
+			logger.Debug("[TOURNAMENT] [%s] Пропущен (Circuit Breaker активен)", gp.prov.ID())
 			continue
 		}
 
@@ -140,9 +144,11 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 				if err != ErrNotFound && err != context.Canceled {
 					g.breaker.RecordFailure()
 				}
+				logger.Debug("[TOURNAMENT] [%s] Ответ: %v", g.prov.ID(), err)
 				return
 			}
 			if lyr == nil {
+				logger.Debug("[TOURNAMENT] [%s] Текст не найден", g.prov.ID())
 				return
 			}
 			g.breaker.RecordSuccess()
@@ -157,8 +163,11 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 
 			score := ScoreCandidate(q, lyr.Artist, lyr.Title, lyr.Album, lyr.Duration, lyr.Kind, content, t.tolerance)
 			if !score.Accepted {
+				logger.Debug("[TOURNAMENT] [%s] Текст отклонен фильтром соответствия (балл: %.1f)", g.prov.ID(), score.Total)
 				return
 			}
+
+			logger.Info("[TOURNAMENT] [%s] Найден подходящий текст! Формат: %s, оценка: %.1f из 100", g.prov.ID(), lyr.Kind, score.Total)
 
 			// Сохраняем сырой ответ провайдера в SQLite (provider_cache) для переключения в UI
 			if t.cacheRepo != nil && q.TrackID != "" {
@@ -192,6 +201,7 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 	wg.Wait()
 
 	if len(candidates) == 0 {
+		logger.Warn("[TOURNAMENT] Ни один из провайдеров не вернул текст для «%s — %s»", q.Artist, q.Title)
 		return nil, ErrNotFound
 	}
 
@@ -216,6 +226,8 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 	}
 
 	winner := candidates[bestIdx]
+	logger.Info("[TOURNAMENT] Победитель турнира для «%s — %s»: [%s] (формат: %s, итоговый балл: %.1f)",
+		q.Artist, q.Title, winner.ProviderID, winner.Lyrics.Kind, winner.Score.Total)
 	return &TournamentResult{
 		Winner:     &winner,
 		Candidates: candidates,

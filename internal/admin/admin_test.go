@@ -173,4 +173,28 @@ func TestAdminServerEndToEnd(t *testing.T) {
 	if len(tracksAfter) != 0 {
 		t.Fatalf("expected 0 tracks after DB reset, got %d", len(tracksAfter))
 	}
+
+	// 9. Проверка раздачи обновленных брендовых ассетов и модульных стилей
+	staticEndpoints := []struct {
+		url          string
+		expectedCode int
+		containsBody string
+	}{
+		{"/", http.StatusOK, "poisq — Умный поиск музыки и текстов"},
+		{"/styles.css", http.StatusOK, "@import './css/tokens.css'"},
+		{"/css/tokens.css", http.StatusOK, "--poisq-violet: #7C3AED;"},
+		{"/assets/brand/poisq-mark-192.png", http.StatusOK, ""},
+		{"/favicon.png", http.StatusOK, ""},
+	}
+	for _, ep := range staticEndpoints {
+		reqStatic := httptest.NewRequest(http.MethodGet, ep.url, nil)
+		recStatic := httptest.NewRecorder()
+		srv.ServeHTTP(recStatic, reqStatic)
+		if recStatic.Code != ep.expectedCode {
+			t.Errorf("expected %d on %s, got %d", ep.expectedCode, ep.url, recStatic.Code)
+		}
+		if ep.containsBody != "" && !strings.Contains(recStatic.Body.String(), ep.containsBody) {
+			t.Errorf("expected body of %s to contain %q", ep.url, ep.containsBody)
+		}
+	}
 }
