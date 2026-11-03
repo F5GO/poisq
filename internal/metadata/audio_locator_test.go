@@ -46,4 +46,24 @@ func TestFindAudioFileAnywhere(t *testing.T) {
 	if found != realFile {
 		t.Errorf("No-music-prefix audio search failed: got %q, expected %q", found, realFile)
 	}
+
+	// Тест 4: Поиск при наличии суффикса копии в базе Navidrome «Music\u00a0— копия»
+	copyAudioPath := filepath.Join(tmpDir, "Music\u00a0— копия", "Green Day", "Green Day – Boulevard", "01 – Boulevard of Broken Dreams.mp3")
+	found = FindAudioFileAnywhere(tmpDir, copyAudioPath)
+	if found != realFile {
+		t.Errorf("Copy suffix audio search failed: got %q, expected %q", found, realFile)
+	}
+
+	// Тест 5: Поиск, когда musicRoot смонтирован без префикса Music/
+	directRoot := t.TempDir()
+	directAlbumDir := filepath.Join(directRoot, "The Offspring", "The Offspring - Americana")
+	_ = os.MkdirAll(directAlbumDir, 0755)
+	directAudioFile := filepath.Join(directAlbumDir, "05 - The Kids Aren't Alright.flac")
+	_ = os.WriteFile(directAudioFile, []byte("fake-flac"), 0644)
+
+	navPath := "/music/Music\u00a0— копия/The Offspring/The Offspring - Americana/05 - The Kids Aren't Alright.flac"
+	found = FindAudioFileAnywhere(directRoot, navPath)
+	if found != directAudioFile {
+		t.Errorf("Direct mount audio search failed: got %q, expected %q", found, directAudioFile)
+	}
 }
