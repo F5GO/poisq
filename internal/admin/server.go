@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/db"
@@ -102,11 +103,19 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/keys", s.handleKeysAPI)
 	mux.HandleFunc("/api/v1/debug/fs", s.handleDebugFS)
 
-	// Встроенный фронтенд (SPA) через //go:embed
+	// Встроенный фронтенд (SPA) через //go:embed с антикэшированием для динамических скриптов и стилей
 	uiSub, err := fs.Sub(embeddedUI, "ui")
 	if err == nil {
 		fileServer := http.FileServer(http.FS(uiSub))
-		mux.Handle("/", fileServer)
+		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p := r.URL.Path
+			if p == "/" || strings.HasSuffix(p, ".html") || strings.HasSuffix(p, ".js") || strings.HasSuffix(p, ".css") {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				w.Header().Set("Pragma", "no-cache")
+				w.Header().Set("Expires", "0")
+			}
+			fileServer.ServeHTTP(w, r)
+		}))
 	}
 
 	s.handler = security.AdminGuardMiddleware(mux)

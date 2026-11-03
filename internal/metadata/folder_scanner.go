@@ -213,16 +213,21 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 	// Дедупликация: индексируем треки основного каталога
 	seenTracks := make(map[string]bool, len(primaryList)+len(copiesList))
 	finalList := make([]rawNavTrack, 0, len(primaryList)+len(copiesList))
+	dedupCount := 0
 
 	for _, pt := range primaryList {
 		key := TrackDedupKey(pt.artist, pt.title, pt.durationSec)
+		if seenTracks[key] {
+			dedupCount++
+			logger.Debug("[SCANNER] Отсеян повторный трек в основном каталоге: %q (%s — %s)", pt.relOrAbsPath, pt.artist, pt.title)
+			continue
+		}
 		seenTracks[key] = true
 		finalList = append(finalList, pt)
 	}
 
 	// Проверяем треки из каталогов-копий: если такой трек уже есть в основном каталоге — отсеиваем!
 	// Если трек уникален (есть только в копии) — сохраняем его в библиотеку.
-	dedupCount := 0
 	for _, ct := range copiesList {
 		key := TrackDedupKey(ct.artist, ct.title, ct.durationSec)
 		if seenTracks[key] {
@@ -364,6 +369,11 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 
 	if len(batch) > 0 {
 		_ = s.tracksRepo.UpsertTracksBatch(batch)
+	}
+
+	// Финальная интеллектуальная дедупликация базы данных tracks
+	if s.tracksRepo != nil {
+		_, _ = s.tracksRepo.DeduplicateTracks()
 	}
 
 	return count, rows.Err()
