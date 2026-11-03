@@ -61,8 +61,8 @@ func FindCoverAnywhere(musicRoot, targetPath string) string {
 		return ""
 	}
 
-	// Если передано несколько файлов через разделитель (как в Navidrome image_files)
-	for _, sep := range []string{";", ",", "|", "\n"} {
+	// Если передано несколько файлов через разделитель (в Navidrome image_files: \x01, ;, | или \n)
+	for _, sep := range []string{";", "|", "\n", "\x01"} {
 		if strings.Contains(clean, sep) {
 			for _, part := range strings.Split(clean, sep) {
 				if p := strings.TrimSpace(part); p != "" {
@@ -418,18 +418,16 @@ func ResolveFuzzyDirectory(musicRoot, targetPath string) string {
 }
 
 func stripCopySuffix(s string) string {
-	res := s
-	for _, suf := range copySuffixes {
-		res = strings.ReplaceAll(res, normalizeNameForMatch(suf), "")
-	}
-	return strings.TrimSpace(res)
+	return normalizeNameForMatch(StripCopySuffix(s))
 }
 
 func normalizeNameForMatch(s string) string {
-	res := strings.ToLower(strings.TrimSpace(NormalizeNFC(s)))
+	res := strings.ToLower(strings.TrimSpace(NormalizeNFC(NormalizePathSpaces(s))))
 	res = strings.ReplaceAll(res, "–", "-")
 	res = strings.ReplaceAll(res, "—", "-")
 	res = strings.ReplaceAll(res, "_", "-")
-	res = strings.ReplaceAll(res, "  ", " ")
+	for strings.Contains(res, "  ") {
+		res = strings.ReplaceAll(res, "  ", " ")
+	}
 	return res
 }
