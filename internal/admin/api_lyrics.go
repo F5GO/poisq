@@ -219,6 +219,7 @@ func (s *AdminServer) handleJobAction(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID     int64  `json:"id"`
 		Action string `json:"action"` // "pause", "resume", "retry", "delete"
+		Stage  string `json:"stage"`  // "resume" (с последнего этапа) или "restart" (заново с 1 этапа)
 	}
 
 	if r.Method == http.MethodDelete {
@@ -251,11 +252,17 @@ func (s *AdminServer) handleJobAction(w http.ResponseWriter, r *http.Request) {
 		}
 		logger.Info("[API] Задача #%d возобновлена пользователем", req.ID)
 	case "retry":
+		if req.Stage == "restart" {
+			if jobRec, jErr := s.jobRepo.GetByID(req.ID); jErr == nil && jobRec != nil {
+				_ = s.cacheRepo.Delete(jobRec.TrackID, "whisper_raw")
+				logger.Info("[API] Задача #%d: очищен промежуточный кэш whisper_raw для трека %s (перезапуск с 1 этапа)", req.ID, jobRec.TrackID)
+			}
+		}
 		err = s.jobRepo.RetryJob(req.ID)
 		if err == nil && s.worker != nil {
 			s.worker.Wake()
 		}
-		logger.Info("[API] Задача #%d перезапущена пользователем", req.ID)
+		logger.Info("[API] Задача #%d перезапущена пользователем (режим этапа: %s)", req.ID, req.Stage)
 	case "delete":
 		err = s.jobRepo.DeleteJob(req.ID)
 		logger.Info("[API] Задача #%d удалена пользователем", req.ID)

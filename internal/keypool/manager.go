@@ -125,6 +125,19 @@ func (m *Manager) ReportRateLimit429(keyID int64, details string) {
 	_ = m.repo.MarkStatus(keyID, "cooldown", until, msg)
 }
 
+// ReportUnavailable503 переводит ключ в короткий 20-секундный cooldown при перегрузке или временной недоступности (HTTP 503 / 502 / 504), фиксируя ошибку в статистике пула.
+func (m *Manager) ReportUnavailable503(keyID int64, details string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	until := time.Now().Add(20 * time.Second).Unix()
+	msg := "503 Unavailable (высокая нагрузка / high demand)"
+	if details != "" {
+		msg += ": " + details
+	}
+	_ = m.repo.MarkStatus(keyID, "cooldown", until, msg)
+}
+
 // ReportDailyQuotaExhausted переводит ключ в статус exhausted_daily до сброса квоты в полночь по PST (~11:00 МСК).
 func (m *Manager) ReportDailyQuotaExhausted(keyID int64, details string) {
 	m.mu.Lock()
