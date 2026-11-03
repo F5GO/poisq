@@ -102,4 +102,23 @@ func TestFindCoverAnywhere(t *testing.T) {
 	if found != offspringCover {
 		t.Errorf("Offspring copy path resolution failed: got %q, expected %q", found, offspringCover)
 	}
+
+	// Тест 8: Когда в musicRoot смонтирована непосредственно папка Music,
+	// то есть внутри musicRoot лежат сразу папки исполнителей: musicRoot/Radiohead/Radiohead - Kid A/cover.jpg
+	// А путь в базе Navidrome содержит префикс /music/Music\u00a0— копия/... или /music/Music/...
+	directMountRoot := t.TempDir()
+	radioheadDir := filepath.Join(directMountRoot, "Radiohead", "Radiohead - Kid A")
+	_ = os.MkdirAll(radioheadDir, 0755)
+	radioheadCover := filepath.Join(radioheadDir, "cover.jpg")
+	_ = os.WriteFile(radioheadCover, []byte("fake-radiohead"), 0644)
+
+	found = FindCoverAnywhere(directMountRoot, "/music/Music\u00a0— копия/Radiohead/Radiohead - Kid A")
+	if found != radioheadCover {
+		t.Errorf("Direct mount without Music prefix failed: got %q, expected %q", found, radioheadCover)
+	}
+
+	found = FindCoverAnywhere(directMountRoot, "/music/Music/Radiohead/Radiohead - Kid A")
+	if found != radioheadCover {
+		t.Errorf("Direct mount with Music/ prefix failed: got %q, expected %q", found, radioheadCover)
+	}
 }
