@@ -9,6 +9,7 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/F5GO/poisq/internal/logger"
@@ -176,7 +177,14 @@ func (s *AdminServer) handleLyricsEnqueue(w http.ResponseWriter, r *http.Request
 }
 
 func (s *AdminServer) handleJobsList(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
+	if r.Method == http.MethodDelete {
+		idStr := r.URL.Query().Get("id")
+		if idStr != "" {
+			if id, err := strconv.ParseInt(idStr, 10, 64); err == nil && id > 0 {
+				_ = s.jobRepo.DeleteJob(id)
+			}
+		}
+	} else if r.Method == http.MethodPost {
 		var req struct {
 			Paused bool `json:"paused"`
 		}
@@ -194,6 +202,77 @@ func (s *AdminServer) handleJobsList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"jobs":   jobs,
 		"paused": s.worker.IsPaused(),
+	})
+}
+
+// handleJobAction обрабатывает индивидуальные команды над задачами очереди:
+// "pause" — приостановить конкретную задачу;
+// "resume" — возобновить конкретную задачу;
+// "retry" — сбросить счетчики и перезапустить задачу;
+// "delete" — удалить задачу из очереди.
+func (s *AdminServer) handleJobAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		writeJSONError(w, http.StatusMethodNotAllowed, "Разрешены только POST и DELETE")
+		return
+	}
+
+	var req struct {
+		ID     int64  `json:"id"`
+		Action string `json:"action"` // "pause", "resume", "retry", "delete"
+	}
+
+	if r.Method == http.MethodDelete {
+		idStr := r.URL.Query().Get("id")
+		if idStr != "" {
+			req.ID, _ = strconv.ParseInt(idStr, 10, 64)
+			req.Action = "delete"
+		}
+	} else {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Неверный формат JSON запроса")
+			return
+		}
+	}
+
+	if req.ID <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "Не указан корректный ID задачи")
+		return
+	}
+
+	var err error
+	switch req.Action {
+	case "pause":
+		err = s.jobRepo.PauseJob(req.ID)
+		logger.Info("[API] Задача #%d приостановлена пользователем", req.ID)
+	case "resume":
+		err = s.jobRepo.ResumeJob(req.ID)
+		if err == nil && s.worker != nil {
+			s.worker.Wake()
+		}
+		logger.Info("[API] Задача #%d возобновлена пользователем", req.ID)
+	case "retry":
+		err = s.jobRepo.RetryJob(req.ID)
+		if err == nil && s.worker != nil {
+			s.worker.Wake()
+		}
+		logger.Info("[API] Задача #%d перезапущена пользователем", req.ID)
+	case "delete":
+		err = s.jobRepo.DeleteJob(req.ID)
+		logger.Info("[API] Задача #%d удалена пользователем", req.ID)
+	default:
+		writeJSONError(w, http.StatusBadRequest, "Неизвестное действие: "+req.Action)
+		return
+	}
+
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "Ошибка выполнения действия: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"id":     req.ID,
+		"action": req.Action,
 	})
 }
 

@@ -154,3 +154,49 @@
   color: var(--text-muted);
   border-color: var(--border-subtle);
 }
+
+/* Кнопки действий в таблицах */
+.table-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-table-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.btn-table-action:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.btn-table-action.danger {
+  color: var(--color-crimson, #f43f5e);
+}
+
+.btn-table-action.danger:hover {
+  background: rgba(244, 63, 94, 0.1);
+  border-color: rgba(244, 63, 94, 0.3);
+}
+
+.btn-table-action.primary {
+  color: var(--poisq-blue);
+}
+
+.btn-table-action.primary:hover {
+  background: rgba(37, 99, 235, 0.1);
+  border-color: rgba(37, 99, 235, 0.3);
+}
