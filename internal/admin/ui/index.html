@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   
   <!-- Модульная дизайн-система -->
-  <link rel="stylesheet" href="/styles.css?v=2.2.0" />
+  <link rel="stylesheet" href="/styles.css?v=2.3.0" />
 </head>
 <body>
   
@@ -174,6 +174,7 @@
             </div>
 
             <div class="header-actions">
+              <button class="btn btn-primary hidden" id="btn-create-ai-lrc" title="Создать синхронизированный .lrc тайминг через AI (Groq Whisper)">Сгенерировать .lrc</button>
               <button class="btn btn-secondary" id="btn-enqueue-tournament">Найти текст</button>
               <button class="btn btn-secondary" id="btn-toggle-editor">Редактор .lrc</button>
             </div>
@@ -293,10 +294,11 @@
               <th>Попыток</th>
               <th>Результат / Ошибка</th>
               <th>Время создания</th>
+              <th class="col-actions">Действия</th>
             </tr>
           </thead>
           <tbody id="jobs-tbody">
-            <tr><td colspan="7" class="cell-empty">Очередь задач пуста.</td></tr>
+            <tr><td colspan="8" class="cell-empty">Очередь задач пуста.</td></tr>
           </tbody>
         </table>
       </div>
@@ -451,6 +453,6 @@
   <!-- Контейнер Toast-уведомлений -->
   <div id="toast-container" class="toast-container"></div>
 
-  <script src="/app.js?v=2.2.0"></script>
+  <script src="/app.js?v=2.3.0"></script>
 </body>
 </html>

@@ -169,3 +169,42 @@ func (r *JobRepository) ListRecent(limit int) ([]LyricsJobRecord, error) {
 	}
 	return list, rows.Err()
 }
+
+// PauseJob ставит конкретную задачу на паузу (переводит статус в paused).
+func (r *JobRepository) PauseJob(id int64) error {
+	now := time.Now().Unix()
+	_, err := r.db.Exec(`
+		UPDATE lyrics_jobs
+		SET status = 'paused', updated_at = ?
+		WHERE id = ?
+	`, now, id)
+	return err
+}
+
+// ResumeJob возобновляет задачу из паузы (переводит в pending с немедленной готовностью).
+func (r *JobRepository) ResumeJob(id int64) error {
+	now := time.Now().Unix()
+	_, err := r.db.Exec(`
+		UPDATE lyrics_jobs
+		SET status = 'pending', next_retry_at = 0, updated_at = ?
+		WHERE id = ?
+	`, now, id)
+	return err
+}
+
+// RetryJob сбрасывает счетчики и перезапускает задачу с наивысшим приоритетом.
+func (r *JobRepository) RetryJob(id int64) error {
+	now := time.Now().Unix()
+	_, err := r.db.Exec(`
+		UPDATE lyrics_jobs
+		SET status = 'pending', attempt_count = 0, next_retry_at = 0, error_log = '', updated_at = ?
+		WHERE id = ?
+	`, now, id)
+	return err
+}
+
+// DeleteJob удаляет задачу из персистентной таблицы очереди.
+func (r *JobRepository) DeleteJob(id int64) error {
+	_, err := r.db.Exec(`DELETE FROM lyrics_jobs WHERE id = ?`, id)
+	return err
+}

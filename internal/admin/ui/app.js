@@ -232,6 +232,7 @@ function initNavigation() {
   document.getElementById("btn-undo-staging")?.addEventListener("click", undoStaging);
 
   // Караоке действия
+  document.getElementById("btn-create-ai-lrc")?.addEventListener("click", handleCreateAiLrc);
   document.getElementById("btn-enqueue-tournament")?.addEventListener("click", enqueueLrcTournament);
   document.getElementById("btn-cloud-karaoke")?.addEventListener("click", enqueueWhisperKaraoke);
   document.getElementById("btn-toggle-editor")?.addEventListener("click", toggleLrcEditor);
@@ -879,10 +880,12 @@ async function openTrackInKaraoke(trackId) {
   }
 
   // Парсим LRC
+  let hasValidLrcTimestamps = false;
   if (lyricsContent) {
     const parsed = parseLRC(lyricsContent);
     if (parsed.length > 0) {
       state.lyrics = parsed;
+      hasValidLrcTimestamps = true;
     } else {
       // Текст без таймкодов — раскладываем построчно с шагом 5 секунд
       state.lyrics = lyricsContent.split("\n")
@@ -894,17 +897,23 @@ async function openTrackInKaraoke(trackId) {
     state.lyrics = [];
   }
 
-  // Подключаем реальный аудиопоток к плееру
+  // Управление кнопкой генерации AI LRC (показываем, если есть plain-текст, но нет точных таймкодов)
+  const btnCreateAiLrc = document.getElementById("btn-create-ai-lrc");
+  if (btnCreateAiLrc) {
+    const isPlainOnly = (track.lyricsStatus === "plain") || (lyricsContent && !hasValidLrcTimestamps);
+    if (isPlainOnly) {
+      btnCreateAiLrc.classList.remove("hidden");
+    } else {
+      btnCreateAiLrc.classList.add("hidden");
+    }
+  }
+
+  // Подключаем реальный аудиопоток к плееру (БЕЗ автозапуска — воспроизведение только по нажатию Play)
   if (state.audioEl) {
     state.audioEl.src = `/api/v1/tracks/stream?id=${encodeURIComponent(track.id)}`;
     state.audioEl.load();
-    state.audioEl.play().then(() => {
-      state.isPlaying = true;
-      updatePlayIcons();
-    }).catch(() => {
-      state.isPlaying = false;
-      updatePlayIcons();
-    });
+    state.isPlaying = false;
+    updatePlayIcons();
   }
 
   renderLyricsTeleprompter();
@@ -1234,6 +1243,19 @@ async function enqueueLrcTournament() {
   } catch (err) {
     showToast(`Ошибка: ${err.message}`, "error");
   }
+}
+
+async function handleCreateAiLrc() {
+  if (!state.selectedTrack) {
+    showToast("Сначала выберите трек в караоке-плеере", "error");
+    return;
+  }
+  const track = state.selectedTrack;
+  const name = `${track.artist || "Артист"} — ${track.title || "Трек"}`;
+  if (!confirm(`Сгенерировать синхронизированный .lrc тайминг для «${name}» с помощью ИИ (Groq Whisper)?`)) {
+    return;
+  }
+  await enqueueWhisperKaraoke();
 }
 
 async function enqueueWhisperKaraoke() {
@@ -2027,7 +2049,7 @@ async function loadJobsData() {
     if (badgeJobs) badgeJobs.textContent = activeCount;
 
     if (state.jobs.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7" class="cell-empty">Очередь фоновых задач пуста.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" class="cell-empty">Очередь фоновых задач пуста.</td></tr>`;
       return;
     }
 
@@ -2037,6 +2059,7 @@ async function loadJobsData() {
       else if (j.status === "done" || j.status === "completed") statusBadge = `<span class="text-emerald" style="font-weight: 500;">✓ Завершена</span>`;
       else if (j.status === "failed") statusBadge = `<span class="text-crimson" style="color:var(--color-crimson, #f43f5e);">Ошибка</span>`;
       else if (j.status === "waiting_quota") statusBadge = `<span class="text-amber">Ждет квоту API</span>`;
+      else if (j.status === "paused") statusBadge = `<span class="badge-audit-queued" style="background: rgba(148, 163, 184, 0.15); color: var(--text-secondary);">⏸ На паузе</span>`;
 
       let jobTypeLabel = j.jobType;
       if (j.jobType === "tournament") jobTypeLabel = "LRC Турнир";
@@ -2054,6 +2077,21 @@ async function loadJobsData() {
         trackDisplay = `${trackObj.artist || "Неизвестный артист"} — ${trackObj.title || "Без названия"}`;
       }
 
+      // Кнопки управления конкретной задачей
+      let actionBtns = `<div class="table-actions">`;
+      if (j.status === "paused") {
+        actionBtns += `<button class="btn-table-action primary" onclick="event.stopPropagation(); jobAction(${j.id}, 'resume')" title="Возобновить выполнение задачи">▶ Старт</button>`;
+        actionBtns += `<button class="btn-table-action danger" onclick="event.stopPropagation(); jobAction(${j.id}, 'delete')" title="Удалить приостановленную задачу">✕</button>`;
+      } else if (j.status === "pending" || j.status === "waiting_quota") {
+        actionBtns += `<button class="btn-table-action" onclick="event.stopPropagation(); jobAction(${j.id}, 'pause')" title="Приостановить задачу">⏸ Пауза</button>`;
+        actionBtns += `<button class="btn-table-action danger" onclick="event.stopPropagation(); jobAction(${j.id}, 'delete')" title="Удалить задачу">✕</button>`;
+      } else {
+        // running, done, failed
+        actionBtns += `<button class="btn-table-action primary" onclick="event.stopPropagation(); jobAction(${j.id}, 'retry')" title="Перезапустить задачу заново">↻ Повтор</button>`;
+        actionBtns += `<button class="btn-table-action danger" onclick="event.stopPropagation(); jobAction(${j.id}, 'delete')" title="Удалить запись о задаче">✕</button>`;
+      }
+      actionBtns += `</div>`;
+
       return `
         <tr>
           <td class="col-num mono">${j.id}</td>
@@ -2066,11 +2104,27 @@ async function loadJobsData() {
           <td class="mono">${j.attemptCount ?? j.attempts ?? 0}</td>
           <td class="mono text-muted" style="font-size: 11px;">${escapeHtml(j.errorLog || j.lastError || "—")}</td>
           <td class="mono text-muted">${timeStr}</td>
+          <td class="col-actions">${actionBtns}</td>
         </tr>
       `;
     }).join("");
   } catch (err) {
     console.error("Ошибка загрузки задач:", err);
+  }
+}
+
+async function jobAction(jobId, action) {
+  try {
+    await fetchApi("/jobs/action", "POST", { id: Number(jobId), action });
+    let msg = "Действие выполнено";
+    if (action === "pause") msg = `Задача #${jobId} приостановлена`;
+    else if (action === "resume") msg = `Задача #${jobId} возобновлена`;
+    else if (action === "retry") msg = `Задача #${jobId} отправлена на повтор`;
+    else if (action === "delete") msg = `Задача #${jobId} удалена`;
+    showToast(`✓ ${msg}`, "success");
+    await loadJobsData();
+  } catch (err) {
+    showToast(`Ошибка: ${err.message}`, "error");
   }
 }
 

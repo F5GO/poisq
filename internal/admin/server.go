@@ -99,6 +99,7 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/lyrics/save", s.handleLyricsSave)
 	mux.HandleFunc("/api/v1/lyrics/enqueue", s.handleLyricsEnqueue)
 	mux.HandleFunc("/api/v1/jobs", s.handleJobsList)
+	mux.HandleFunc("/api/v1/jobs/action", s.handleJobAction)
 
 	mux.HandleFunc("/api/v1/keys", s.handleKeysAPI)
 	mux.HandleFunc("/api/v1/debug/fs", s.handleDebugFS)
