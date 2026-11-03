@@ -181,13 +181,13 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 }
 
 func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
-	// Список актуальных production моделей Google Gemini API для последовательного фоллбэка
+	// Фоллбэк только между оптимальными быстрыми моделями: gemini-3.8-flash -> gemini-3.6-flash
 	initialModel := g.model
 	if initialModel == "" || initialModel == "gemini-2.0-flash" || initialModel == "gemini-2.5-flash" {
 		initialModel = defaultGeminiModel
 	}
 	modelsToTry := []string{initialModel}
-	candidates := []string{"gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-4-argon"}
+	candidates := []string{"gemini-3.8-flash", "gemini-3.6-flash"}
 	for _, c := range candidates {
 		if c != initialModel {
 			modelsToTry = append(modelsToTry, c)
