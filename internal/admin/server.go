@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"net/http"
 
+	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/keypool"
 	"github.com/F5GO/poisq/internal/lyrics"
@@ -37,6 +38,7 @@ type AdminServer struct {
 	worker      *worker.QueueProcessor
 	guard       *security.PathGuard
 	openNavDB   func() (*sql.DB, error)
+	arbiter     *ai.MetadataArbiter
 	handler     http.Handler
 }
 
@@ -84,6 +86,7 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/tracks/stream", s.handleTrackStream)
 	mux.HandleFunc("/api/v1/covers/local", s.handleLocalCover)
 	mux.HandleFunc("/api/v1/covers/candidates", s.handleCoverCandidates)
+	mux.HandleFunc("/api/v1/covers/ai-resolve", s.handleCoverAIResolve)
 	mux.HandleFunc("/api/v1/lyrics/cache", s.handleLyricsCache)
 	mux.HandleFunc("/api/v1/lyrics/save", s.handleLyricsSave)
 	mux.HandleFunc("/api/v1/lyrics/enqueue", s.handleLyricsEnqueue)

@@ -80,6 +80,7 @@ func main() {
 
 	geminiClient := ai.NewGeminiClient(keyPoolMgr)
 	lyricsCleaner := ai.NewLyricsCleaner(geminiClient)
+	metadataArbiter := ai.NewMetadataArbiter(geminiClient)
 	audioTranscoder := ai.NewAudioTranscoder(pathGuard)
 	groqWhisper := ai.NewGroqWhisperClient(keyPoolMgr)
 	karaokePipeline := ai.NewKaraokePipeline(audioTranscoder, groqWhisper, geminiClient)
@@ -90,6 +91,7 @@ func main() {
 	libraryScanner := metadata.NewLibraryScanner(
 		pathGuard.Root(), trackRepo, stagingRepo, mbClient, acoustIDClient, coverFetcher,
 	)
+	libraryScanner.SetArbiter(metadataArbiter)
 
 	atomicTagger := tagger.NewAtomicTagWriter(pathGuard)
 	stagingService := tagger.NewStagingService(atomicTagger, coverFetcher, trackRepo, stagingRepo)
@@ -142,6 +144,7 @@ func main() {
 		pathGuard,
 		func() (*sql.DB, error) { return db.OpenDatabase(cfg.NavidromeDBPath) },
 	)
+	adminHandler.SetMetadataArbiter(metadataArbiter)
 	adminHTTPServer := &http.Server{
 		Addr:              cfg.AdminListenAddr,
 		Handler:           adminHandler,

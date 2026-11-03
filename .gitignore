@@ -1,6 +1,6 @@
 # Скомпилированные бинарные файлы
-poisq
-proxy
+/poisq
+/proxy
 nd-smart-search
 *.exe
 *.test

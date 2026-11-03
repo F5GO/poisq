@@ -971,12 +971,21 @@ async function loadStagingData() {
       const propArtist = propObj.artist || curObj.artist || (path.split("/").length >= 2 ? path.split("/")[path.split("/").length - 2] : "");
       const propAlbum = propObj.album || curObj.album || (path.split("/").length >= 1 ? path.split("/")[path.split("/").length - 1] : "");
 
+      const hasAi = !!propObj.aiExplanation;
+      const aiBadgeHtml = `
+        <div class="cover-ai-badge ${hasAi ? '' : 'hidden'}" id="ai-badge-${item.id}">
+          <span class="ai-sparkle">✨</span>
+          <span><strong>AI-арбитр (${escapeHtml(propObj.releaseType || "Альбом")}):</strong> Канонический студийный альбом <em>«${escapeHtml(propObj.canonicalAlbum || propObj.album)}»</em>. ${escapeHtml(propObj.aiExplanation || "")}</span>
+        </div>
+      `;
+
       return `
         <div class="staging-card">
           <div class="staging-top">
             <div>
               <div class="staging-issue">Найдена обложка альбома высокого разрешения (Уверенность: ${item.confidence || 95}%)</div>
               <div class="staging-path mono">${escapeHtml(path)}</div>
+              ${aiBadgeHtml}
             </div>
             <div style="display: flex; gap: 8px;">
               <button class="btn btn-secondary" onclick="dismissStaging(${item.id})">Оставить текущую</button>
@@ -1026,14 +1035,22 @@ async function loadStagingData() {
               <div class="cover-side-zoom-hint">🔍 Нажмите для увеличения</div>
               <div class="cover-side-meta" id="prop-cover-meta-${item.id}">${propRes} · ${propSource}</div>
 
-              <!-- Кнопка варианты обложек СПРАВА, под новой обложкой -->
-              <div style="margin-top: 10px; width: 100%;">
+              <!-- Кнопки управления вариантами и AI СПРАВА, под новой обложкой -->
+              <div style="margin-top: 10px; width: 100%; display: flex; flex-direction: column; gap: 8px;">
                 <button 
                   class="cover-candidates-toggle-btn" 
                   id="btn-toggle-cand-${item.id}"
                   onclick="toggleCoverCandidates(${item.id}, '${escapeHtml(propArtist)}', '${escapeHtml(propAlbum)}', '${escapeHtml(path)}')"
                 >
                   📷 Другие варианты обложек <span id="cand-count-${item.id}"></span>
+                </button>
+                <button 
+                  class="cover-ai-resolve-btn" 
+                  id="btn-ai-resolve-${item.id}"
+                  onclick="resolveCoverViaAI(${item.id}, '${escapeHtml(path)}')"
+                  title="Определить канонический студийный альбом через Gemini 2.5 Flash и найти оригинальную обложку"
+                >
+                  ✨ Уточнить альбом через AI
                 </button>
               </div>
             </div>
@@ -1190,31 +1207,137 @@ async function toggleCoverCandidates(itemId, artist, album, path) {
       return;
     }
 
-    const activeUrl = window.selectedCovers[itemId] || (item && JSON.parse(item.proposedJson || "{}").coverUrl);
-
-    container.innerHTML = candidates.map((cand, idx) => {
-      const isSel = cand.url === activeUrl;
-      const resText = cand.width && cand.height ? `${cand.width}×${cand.height} px` : "3000×3000 px";
-      const srcText = cand.source === "itunes" ? "Apple Music" : "Cover Art Archive";
-      return `
-        <div class="cover-cand-card ${isSel ? 'active' : ''}" id="cand-card-${itemId}-${idx}">
-          <div class="cover-cand-thumb-wrap" onclick="openCoverLightboxForCandidate(${itemId}, ${idx})" title="Нажмите для полноэкранного просмотра">
-            <img src="${escapeHtml(cand.url)}" class="cover-cand-thumb" alt="Вариант" loading="lazy" />
-            <span class="cover-cand-zoom-hint">🔍 Увеличить</span>
-          </div>
-          <div class="cover-cand-title" title="${escapeHtml(cand.title || album)}">${escapeHtml(cand.title || album)}</div>
-          <div class="cover-cand-meta">${escapeHtml(cand.artist || artist)}</div>
-          <div class="cover-cand-meta">${resText} · ${srcText}</div>
-          <button class="btn btn-secondary cover-cand-btn" onclick="selectCoverCandidate(${itemId}, ${idx})">${isSel ? '✓ Выбрано' : 'Выбрать'}</button>
-        </div>
-      `;
-    }).join("");
+    renderCoverCandidatesGrid(itemId, candidates, album, artist);
 
     const countBadge = document.getElementById(`cand-count-${itemId}`);
     if (countBadge) countBadge.innerText = `(${candidates.length})`;
 
   } catch (err) {
     container.innerHTML = `<div style="grid-column: 1/-1; padding: 12px; color: var(--accent-danger); font-size: 12px; text-align: center;">Ошибка поиска вариантов: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderCoverCandidatesGrid(itemId, candidates, defaultAlbum = "", defaultArtist = "") {
+  const container = document.getElementById(`candidates-container-${itemId}`);
+  if (!container) return;
+
+  const item = (state.stagingItems || []).find(it => it.id === itemId);
+  let activeUrl = window.selectedCovers[itemId];
+  if (!activeUrl && item && item.proposedJson) {
+    try {
+      activeUrl = JSON.parse(item.proposedJson).coverUrl;
+    } catch (e) {}
+  }
+
+  container.innerHTML = candidates.map((cand, idx) => {
+    const isSel = cand.url === activeUrl;
+    const resText = cand.width && cand.height ? `${cand.width}×${cand.height} px` : "3000×3000 px";
+    const srcText = cand.source === "itunes" ? "Apple Music" : "Cover Art Archive";
+    const title = cand.title || defaultAlbum || "Альбом";
+    const artist = cand.artist || defaultArtist || "";
+
+    return `
+      <div class="cover-cand-card ${isSel ? 'active' : ''}" id="cand-card-${itemId}-${idx}">
+        <div class="cover-cand-thumb-wrap" onclick="openCoverLightboxForCandidate(${itemId}, ${idx})" title="Нажмите для полноэкранного просмотра">
+          <img src="${escapeHtml(cand.url)}" class="cover-cand-thumb" alt="Вариант" loading="lazy" />
+          <span class="cover-cand-zoom-hint">🔍 Увеличить</span>
+        </div>
+        <div class="cover-cand-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
+        <div class="cover-cand-meta">${escapeHtml(artist)}</div>
+        <div class="cover-cand-meta">${resText} · ${srcText}</div>
+        <button class="btn btn-secondary cover-cand-btn" onclick="selectCoverCandidate(${itemId}, ${idx})">${isSel ? '✓ Выбрано' : 'Выбрать'}</button>
+      </div>
+    `;
+  }).join("");
+}
+
+async function resolveCoverViaAI(itemId, folderPath) {
+  const btn = document.getElementById(`btn-ai-resolve-${itemId}`);
+  const origBtnText = btn ? btn.innerHTML : "✨ Уточнить альбом через AI";
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-inline"></span> Анализируем через Gemini...`;
+  }
+
+  try {
+    const res = await fetchApi("/covers/ai-resolve", "POST", {
+      id: itemId,
+      path: folderPath
+    });
+
+    if (!res.success || !res.decision) {
+      throw new Error(res.error || "Не удалось получить решение AI");
+    }
+
+    const dec = res.decision;
+    showToast(`✨ Канонический альбом: ${dec.canonical_album} (${dec.release_type})`, "success");
+
+    // Обновляем бейдж AI в карточке
+    let badge = document.getElementById(`ai-badge-${itemId}`);
+    if (badge) {
+      badge.innerHTML = `
+        <span class="ai-sparkle">✨</span>
+        <span><strong>AI-арбитр (${escapeHtml(dec.release_type || "Альбом")}):</strong> Канонический студийный альбом <em>«${escapeHtml(dec.canonical_album)}»</em>. ${escapeHtml(dec.explanation || "")}</span>
+      `;
+      badge.classList.remove("hidden");
+    }
+
+    // Если есть кандидаты обложек канонического альбома
+    if (res.candidates && res.candidates.length > 0) {
+      const best = res.candidates[0];
+      if (!window.selectedCovers) window.selectedCovers = {};
+      window.selectedCovers[itemId] = best.url;
+
+      // Обновляем превью Станет
+      const propImg = document.getElementById(`prop-cover-img-${itemId}`);
+      if (propImg) {
+        propImg.src = best.url;
+      }
+      const propMeta = document.getElementById(`prop-cover-meta-${itemId}`);
+      if (propMeta) {
+        propMeta.textContent = `${best.width}×${best.height} px · ${best.source === "itunes" ? "Apple Music / iTunes" : "Cover Art Archive"} · ${dec.canonical_album}`;
+      }
+
+      // Кэшируем кандидатов для этого itemId
+      if (!window.coverCandidatesCache) window.coverCandidatesCache = {};
+      window.coverCandidatesCache[itemId] = res.candidates;
+
+      // Перерендерим галерею вариантов, если контейнер открыт
+      const candContainer = document.getElementById(`candidates-container-${itemId}`);
+      if (candContainer && !candContainer.classList.contains("hidden")) {
+        renderCoverCandidatesGrid(itemId, res.candidates, dec.canonical_album, dec.canonical_artist);
+      }
+      const countBadge = document.getElementById(`cand-count-${itemId}`);
+      if (countBadge) countBadge.innerText = `(${res.candidates.length})`;
+    } else {
+      showToast("AI определил альбом, но обложек в каталогах Apple не найдено", "info");
+    }
+
+    // Если на диске была обнаружена обложка, обновляем блок Было
+    if (res.hasLocalCover) {
+      const curImg = document.getElementById(`cur-cover-img-${itemId}`);
+      const curEmpty = document.getElementById(`cur-empty-${itemId}`);
+      const curMeta = document.getElementById(`cur-meta-${itemId}`);
+      if (curEmpty) curEmpty.style.display = "none";
+      if (curImg) {
+        curImg.src = `/api/v1/covers/local?path=${encodeURIComponent(folderPath)}&t=${Date.now()}`;
+        curImg.style.display = "block";
+      }
+      if (curMeta) {
+        curMeta.textContent = `Файл: Найден на диске · ${res.localWidth || 0}×${res.localHeight || 0} px`;
+      }
+    }
+  } catch (err) {
+    console.error("Ошибка при анализе обложки через AI:", err);
+    showToast(`Ошибка AI: ${err.message}`, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `✨ Обновлено через AI`;
+      setTimeout(() => {
+        if (btn) btn.innerHTML = origBtnText;
+      }, 4000);
+    }
   }
 }
 
@@ -1318,18 +1441,6 @@ function openCoverLightbox(itemId, initialIndex) {
       });
     });
   }
-
-  window.lightboxState.slides = slides;
-  window.lightboxState.currentIndex = Math.max(0, Math.min(initialIndex || 0, slides.length - 1));
-
-  renderLightboxSlide();
-
-  const modal = document.getElementById("modal-cover-lightbox");
-  if (modal) {
-    modal.classList.remove("hidden");
-    modal.focus();
-  }
-}
 
   window.lightboxState.slides = slides;
   window.lightboxState.currentIndex = Math.max(0, Math.min(initialIndex || 0, slides.length - 1));
