@@ -10,7 +10,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/db"
+	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/lyrics"
 )
 
@@ -144,8 +144,23 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 		h   int
 	})
 
-	batch := make([]db.TrackRecord, 0, 500)
-	count := 0
+	type rawNavTrack struct {
+		id           string
+		relOrAbsPath string
+		title        string
+		artist       string
+		album        string
+		albumArtist  string
+		trackNum     int
+		year         int
+		durationSec  int
+		navHasCover  bool
+		isCopy       bool
+	}
+
+	var primaryList []rawNavTrack
+	var copiesList []rawNavTrack
+
 	for rows.Next() {
 		rawVals := make([]sql.NullString, len(cols))
 		scanPtrs := make([]any, len(cols))
@@ -172,15 +187,82 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 		trackNum := parseIntDefault(rowMap["track_number"], 0)
 		year := parseIntDefault(rowMap["year"], 0)
 		durationSec := parseFloatIntDefault(rowMap["duration"], 0)
-
 		navHasCover := rowMap["has_cover_art"] == "1" || strings.EqualFold(rowMap["has_cover_art"], "true") || strings.TrimSpace(rowMap["embed_art_path"]) != ""
+
+		t := rawNavTrack{
+			id:           id,
+			relOrAbsPath: relOrAbsPath,
+			title:        title,
+			artist:       artist,
+			album:        album,
+			albumArtist:  albumArtist,
+			trackNum:     trackNum,
+			year:         year,
+			durationSec:  durationSec,
+			navHasCover:  navHasCover,
+			isCopy:       IsCopyPath(relOrAbsPath),
+		}
+
+		if t.isCopy {
+			copiesList = append(copiesList, t)
+		} else {
+			primaryList = append(primaryList, t)
+		}
+	}
+
+	// Дедупликация: индексируем треки основного каталога
+	seenTracks := make(map[string]bool, len(primaryList)+len(copiesList))
+	finalList := make([]rawNavTrack, 0, len(primaryList)+len(copiesList))
+
+	for _, pt := range primaryList {
+		key := TrackDedupKey(pt.artist, pt.title, pt.durationSec)
+		seenTracks[key] = true
+		finalList = append(finalList, pt)
+	}
+
+	// Проверяем треки из каталогов-копий: если такой трек уже есть в основном каталоге — отсеиваем!
+	// Если трек уникален (есть только в копии) — сохраняем его в библиотеку.
+	dedupCount := 0
+	for _, ct := range copiesList {
+		key := TrackDedupKey(ct.artist, ct.title, ct.durationSec)
+		if seenTracks[key] {
+			dedupCount++
+			logger.Debug("[SCANNER] Отсеян дубликат трека из каталога-копии: %q (%s — %s)", ct.relOrAbsPath, ct.artist, ct.title)
+			continue
+		}
+		seenTracks[key] = true
+		finalList = append(finalList, ct)
+	}
+
+	if dedupCount > 0 {
+		logger.Info("[SCANNER] Дедупликация каталогов: отсеяно дубликатов треков: %d", dedupCount)
+	}
+
+	batch := make([]db.TrackRecord, 0, 500)
+	count := 0
+
+	for _, item := range finalList {
+		id := item.id
+		relOrAbsPath := item.relOrAbsPath
+		title := item.title
+		artist := item.artist
+		album := item.album
+		albumArtist := item.albumArtist
+		trackNum := item.trackNum
+		year := item.year
+		durationSec := item.durationSec
+		navHasCover := item.navHasCover
 
 		fullPath := s.resolveMusicPathWithRoot(libRoot, relOrAbsPath)
 		folderPath := filepath.Dir(fullPath)
 
 		cov, ok := folderCoverCache[folderPath]
 		if !ok {
-			has, w, h, _ := s.coverFetch.InspectFolderCover(folderPath)
+			var has bool
+			var w, h int
+			if s.coverFetch != nil {
+				has, w, h, _ = s.coverFetch.InspectFolderCover(folderPath)
+			}
 			if !has && navHasCover {
 				has = true
 				w = 600
@@ -312,6 +394,13 @@ func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (in
 		if limitFolders > 0 && foldersProcessed >= limitFolders {
 			break
 		}
+
+		// Исключаем каталоги-дубликаты из аудита
+		if IsCopyPath(folderPath) {
+			logger.Debug("[AUDIT] Пропуск папки-дубликата: %s", folderPath)
+			continue
+		}
+
 		foldersProcessed++
 
 		consensus := ComputeFolderAlbumLock(folderTracks)
@@ -401,9 +490,9 @@ func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (in
 			}
 		}
 
-		// 2. Проверка обложки папки (если нет качественной cover.jpg >= 500x500 — ищем в Cover Art Archive / iTunes 3000x3000)
+		// 2. Проверка обложки папки (если нет качественной cover.jpg >= 1200x1200 — ищем в Cover Art Archive / iTunes 3000x3000)
 		hasCov, w, h, existingFile := s.coverFetch.InspectFolderCover(folderPath)
-		if !hasCov || w < 500 || h < 500 {
+		if !hasCov || w < 1200 || h < 1200 {
 			var cand *CoverCandidate
 			var aiExplanation, canonicalAlbum, releaseType string
 
@@ -488,7 +577,7 @@ func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (in
 		}
 	}
 
-	log.Printf("[INFO] [SCANNER] Глубокий аудит завершен: проверено папок %d, создано предложений в Staging: %d", foldersProcessed, proposalsCreated)
+	logger.Info("[SCANNER] Глубокий аудит завершен: проверено папок %d, создано предложений в Staging: %d", foldersProcessed, proposalsCreated)
 	return proposalsCreated, nil
 }
 

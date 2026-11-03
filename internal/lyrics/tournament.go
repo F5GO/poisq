@@ -195,10 +195,22 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 		return nil, ErrNotFound
 	}
 
-	// Выбираем победителя с максимальным баллом CandidateScore
+	// Выбираем победителя: синхронизированный LRC (KindLRC или валидные таймкоды)
+	// всегда имеет абсолютный приоритет перед обычным Plain-текстом (KindPlain).
+	// Если оба синхронизированы или оба plain — побеждает кандидат с высшим баллом.
 	bestIdx := 0
 	for i := 1; i < len(candidates); i++ {
-		if candidates[i].Score.Total > candidates[bestIdx].Score.Total {
+		cur := candidates[i]
+		best := candidates[bestIdx]
+
+		curSynced := isCandidateSynced(cur)
+		bestSynced := isCandidateSynced(best)
+
+		if curSynced && !bestSynced {
+			bestIdx = i
+		} else if !curSynced && bestSynced {
+			continue
+		} else if cur.Score.Total > best.Score.Total {
 			bestIdx = i
 		}
 	}
@@ -208,4 +220,14 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 		Winner:     &winner,
 		Candidates: candidates,
 	}, nil
+}
+
+func isCandidateSynced(c TournamentCandidate) bool {
+	if c.Lyrics == nil {
+		return false
+	}
+	if c.Lyrics.Kind == KindLRC || c.Lyrics.Kind == KindInstrumental {
+		return true
+	}
+	return len(ParseLRC(c.Lyrics.SyncedLyrics)) > 0
 }

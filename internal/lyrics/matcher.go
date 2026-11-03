@@ -630,7 +630,7 @@ func ScoreCandidate(
 	if kind == KindLRC || kind == KindInstrumental {
 		score.SyncBonus = 1.0
 	} else {
-		score.SyncBonus = 0.45
+		score.SyncBonus = 0.25 // Существенный отрыв в пользу синхронизированного караоке
 	}
 
 	// 7. Обнаружение цензуры

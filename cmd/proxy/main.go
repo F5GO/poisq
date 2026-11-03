@@ -94,6 +94,7 @@ func main() {
 	keyPoolMgr := keypool.NewManager(keyRepo, keyCipher)
 	tournament := lyrics.NewTournamentOrchestrator(cacheRepo, keyPoolMgr)
 	lrcWriter := lyrics.NewAtomicLRCWriter(pathGuard)
+	lrcWriter.SetResolver(metadata.FindAudioFileAnywhere)
 
 	geminiClient := ai.NewGeminiClient(keyPoolMgr)
 	lyricsCleaner := ai.NewLyricsCleaner(geminiClient)

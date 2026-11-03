@@ -75,6 +75,9 @@ func NewCoverFetcher(guard *security.PathGuard) *CoverFetcher {
 // Поддерживает регистронезависимый поиск (Cover.JPG, Folder.png, album.jpg и др.).
 // Если в папке уже есть обложка размером >= 500x500, сервис ее не трогает.
 func (cf *CoverFetcher) InspectFolderCover(folderPath string) (hasCover bool, width int, height int, existingFile string) {
+	if cf == nil {
+		return false, 0, 0, ""
+	}
 	root := ""
 	if cf.guard != nil {
 		root = cf.guard.Root()
@@ -247,11 +250,30 @@ func (cf *CoverFetcher) FindCoverCandidates(ctx context.Context, releaseMBID, ar
 
 // DownloadAndSaveAtomically скачивает обложку по URL, проверяет через image.DecodeConfig или
 // DetectImageDimensions, что это реальное изображение, и атомарно записывает cover.jpg в папку альбома.
+// Если folderPath расходится с реальной структурой каталогов (например, префикс Music/, суффикс « — копия»),
+// путь автоматически резолвится к физическому каталогу на диске через ResolveFuzzyDirectory.
 func (cf *CoverFetcher) DownloadAndSaveAtomically(ctx context.Context, folderPath string, imageURL string) (int, int, error) {
-	targetCover := filepath.Join(folderPath, "cover.jpg")
+	root := ""
+	if cf.guard != nil {
+		root = cf.guard.Root()
+	}
+
+	targetDir := folderPath
+	if resolved := ResolveFuzzyDirectory(root, folderPath); resolved != "" {
+		targetDir = resolved
+	} else if root != "" && !filepath.IsAbs(targetDir) {
+		targetDir = filepath.Join(root, targetDir)
+	}
+
+	targetCover := filepath.Join(targetDir, "cover.jpg")
 	safeTarget, err := cf.guard.ValidateTarget(targetCover, true)
 	if err != nil {
 		return 0, 0, err
+	}
+
+	dir := filepath.Dir(safeTarget)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return 0, 0, fmt.Errorf("ошибка создания директории альбома: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
@@ -282,15 +304,15 @@ func (cf *CoverFetcher) DownloadAndSaveAtomically(ctx context.Context, folderPat
 		w, h = 3000, 3000 // Оптимальный дефолт для 3000x3000bb
 	}
 
-	tmpPath := filepath.Join(filepath.Dir(safeTarget), ".poisq_tmp_cover.jpg")
+	tmpPath := filepath.Join(dir, ".poisq_tmp_cover.jpg")
 	if err := os.WriteFile(tmpPath, imgBytes, 0644); err != nil {
 		_ = os.Remove(tmpPath)
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("ошибка записи временного файла обложки: %w", err)
 	}
 
 	if err := os.Rename(tmpPath, safeTarget); err != nil {
 		_ = os.Remove(tmpPath)
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("ошибка сохранения файла обложки: %w", err)
 	}
 
 	return w, h, nil

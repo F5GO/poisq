@@ -568,6 +568,96 @@ body {
   color: var(--text-muted);
 }
 
+/* Регулятор громкости в плеере */
+.volume-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.volume-slider {
+  width: 75px;
+  height: 4px;
+  -webkit-appearance: none;
+  background: var(--border-subtle);
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+.volume-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+/* Баннер фоновой задачи в караоке */
+.karaoke-job-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 4px 10px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 6px;
+  font-size: 11px;
+  color: #38bdf8;
+  transition: all 0.2s ease;
+}
+.spinner-small {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(56, 189, 248, 0.3);
+  border-top-color: #38bdf8;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+}
+
+/* Интерактивные кликабельные бейджи текста в таблице медиатеки */
+.badge-lyric-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.badge-lyric-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.15);
+}
+.badge-lyric-btn.synced, .badge-lyric-btn.verified {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+.badge-lyric-btn.plain {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+.badge-lyric-btn.none {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  border: 1px dashed var(--border-subtle);
+}
+.badge-lyric-btn.none:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
 /* --------------------------------------------------------------------------
    Staging Карточки (Picard буфер)
    -------------------------------------------------------------------------- */

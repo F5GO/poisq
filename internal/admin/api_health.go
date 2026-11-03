@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 func (s *AdminServer) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +78,13 @@ func (s *AdminServer) handleScanAudit(w http.ResponseWriter, r *http.Request) {
 	go func(limit int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		_, _ = s.scanner.RunDeepAudit(ctx, limit)
+		logger.Info("[AUDIT] Запуск глубокого аудита для %d папок...", limit)
+		created, err := s.scanner.RunDeepAudit(ctx, limit)
+		if err != nil {
+			logger.Warn("[AUDIT] Ошибка при выполнении аудита: %v", err)
+		} else {
+			logger.Info("[AUDIT] Глубокий аудит завершен. Создано новых предложений: %d", created)
+		}
 	}(req.LimitFolders)
 
 	writeJSON(w, http.StatusAccepted, map[string]any{

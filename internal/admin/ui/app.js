@@ -373,7 +373,6 @@ function renderTracksTable(container, tracks) {
             <th>Длительность</th>
             <th>Текст</th>
             <th>Аудит</th>
-            <th class="col-actions">Действие</th>
           </tr>
         </thead>
         <tbody id="tracks-tbody"></tbody>
@@ -385,23 +384,27 @@ function renderTracksTable(container, tracks) {
   tbody.innerHTML = tracks.map((t, idx) => {
     const num = (idx + 1 < 10 ? "0" : "") + (idx + 1);
 
-    // Статус текста песни
-    let statusBadge = `<span class="text-muted">Нет текста</span>`;
+    // Интерактивный статус текста песни (клик сразу открывает караоке-плеер)
+    let statusBadge = `<span class="badge-lyric-btn none" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">+ Найти текст</span>`;
     if (t.lyricsStatus === "verified") {
-      statusBadge = `<span class="text-emerald">✓ Проверен</span>`;
+      statusBadge = `<span class="badge-lyric-btn verified" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">🎤 Проверен</span>`;
     } else if (t.lyricsStatus === "synced") {
-      statusBadge = `<span class="text-emerald">Синхронный</span>`;
+      statusBadge = `<span class="badge-lyric-btn synced" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">🎤 Синхронный</span>`;
     } else if (t.lyricsStatus === "plain") {
-      statusBadge = `<span class="text-secondary">Обычный</span>`;
+      statusBadge = `<span class="badge-lyric-btn plain" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">🎤 Обычный</span>`;
     }
 
-    // Статус аудита / очереди
+    // Честный статус аудита медиатеки
     let auditBadge = `<span class="badge-audit-ok">✓ Готов</span>`;
     let rowClass = "";
     if (t.isMojibake) {
-      auditBadge = `<span class="badge-audit-queued">Mojibake</span>`;
+      auditBadge = `<span class="badge-audit-queued">⚠️ Mojibake</span>`;
     } else if (!t.hasCover || (t.coverWidth > 0 && t.coverWidth < 500)) {
-      auditBadge = `<span class="badge-audit-queued">Без обложки</span>`;
+      auditBadge = `<span class="badge-audit-queued">🖼 Нужна обложка</span>`;
+    } else if (t.lyricsStatus === "none" || !t.lyricsStatus) {
+      auditBadge = `<span class="badge-audit-queued">📝 Нужен текст</span>`;
+    } else if (t.lyricsStatus === "plain") {
+      auditBadge = `<span class="badge-audit-queued">⏱ Нужен LRC</span>`;
     }
 
     return `
@@ -415,9 +418,6 @@ function renderTracksTable(container, tracks) {
         <td class="mono" style="color: var(--text-muted);">${formatDuration(t.duration || 0)}</td>
         <td>${statusBadge}</td>
         <td>${auditBadge}</td>
-        <td class="col-actions">
-          <button class="btn btn-secondary" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">Караоке</button>
-        </td>
       </tr>
     `;
   }).join("");
@@ -647,13 +647,71 @@ async function enqueueSingleGroq(trackId) {
 }
 
 // -----------------------------------------------------------------------------
-// 4. Караоке и LRC Плеер (Реальное аудио + Синхронизация)
+// 4. Караоке и LRC Плеер (Реальное аудио + Синхронизация + Громкость)
 // -----------------------------------------------------------------------------
 function initPlayerControls() {
   document.getElementById("btn-play")?.addEventListener("click", togglePlay);
   document.getElementById("btn-step-back")?.addEventListener("click", () => seekDelta(-10));
   document.getElementById("btn-step-forward")?.addEventListener("click", () => seekDelta(10));
   document.getElementById("scrub-bar")?.addEventListener("click", handleScrub);
+
+  // Регулятор громкости
+  const volSlider = document.getElementById("player-volume-slider");
+  const volMuteBtn = document.getElementById("btn-volume-mute");
+  const iconVolOn = document.getElementById("icon-vol-on");
+  const iconVolMuted = document.getElementById("icon-vol-mute");
+
+  let savedVol = parseFloat(localStorage.getItem("poisq_player_volume") || "1.0");
+  if (isNaN(savedVol) || savedVol < 0 || savedVol > 1) savedVol = 1.0;
+
+  if (state.audioEl) {
+    state.audioEl.volume = savedVol;
+  }
+  if (volSlider) {
+    volSlider.value = savedVol;
+    volSlider.addEventListener("input", (e) => {
+      const val = parseFloat(e.target.value);
+      if (state.audioEl) state.audioEl.volume = val;
+      localStorage.setItem("poisq_player_volume", val);
+      updateVolumeIcons(val);
+    });
+  }
+
+  function updateVolumeIcons(val) {
+    if (val <= 0.01) {
+      iconVolOn?.classList.add("hidden");
+      iconVolMuted?.classList.remove("hidden");
+    } else {
+      iconVolOn?.classList.remove("hidden");
+      iconVolMuted?.classList.add("hidden");
+    }
+  }
+  updateVolumeIcons(savedVol);
+
+  volMuteBtn?.addEventListener("click", () => {
+    if (!state.audioEl) return;
+    if (state.audioEl.volume > 0.01) {
+      state.previousVolume = state.audioEl.volume;
+      state.audioEl.volume = 0;
+      if (volSlider) volSlider.value = 0;
+      updateVolumeIcons(0);
+    } else {
+      const restoreVol = state.previousVolume || 0.8;
+      state.audioEl.volume = restoreVol;
+      if (volSlider) volSlider.value = restoreVol;
+      localStorage.setItem("poisq_player_volume", restoreVol);
+      updateVolumeIcons(restoreVol);
+    }
+  });
+
+  // Модальное окно подтверждения AI Whisper для создания караоке
+  document.getElementById("btn-whisper-offer-cancel")?.addEventListener("click", () => {
+    document.getElementById("modal-whisper-offer")?.classList.add("hidden");
+  });
+  document.getElementById("btn-whisper-offer-confirm")?.addEventListener("click", () => {
+    document.getElementById("modal-whisper-offer")?.classList.add("hidden");
+    enqueueWhisperKaraoke();
+  });
 
   if (state.audioEl) {
     state.audioEl.addEventListener("timeupdate", () => {
@@ -817,7 +875,7 @@ function renderLyricsTeleprompter() {
     container.innerHTML = `
       <div class="lyric-line inactive" style="font-size: 16px; opacity: 0.7;">
         Текст для этой песни еще не найден.<br>
-        Нажмите «Найти текст (LRC Турнир)» или «AI Караоке (Groq)» в шапке.
+        Нажмите «Найти текст» в шапке.
       </div>
     `;
     return;
@@ -987,18 +1045,145 @@ async function saveRawLrc() {
   }
 }
 
+let karaokeJobPollTimer = null;
+
+function showKaraokeJobBanner(text) {
+  const banner = document.getElementById("karaoke-job-banner");
+  const txt = document.getElementById("karaoke-job-text");
+  if (banner && txt) {
+    txt.textContent = text;
+    banner.classList.remove("hidden");
+  }
+}
+
+function hideKaraokeJobBanner() {
+  const banner = document.getElementById("karaoke-job-banner");
+  if (banner) banner.classList.add("hidden");
+}
+
+function startPollingKaraokeJob(trackId, initialText) {
+  if (karaokeJobPollTimer) {
+    clearInterval(karaokeJobPollTimer);
+    karaokeJobPollTimer = null;
+  }
+
+  showKaraokeJobBanner(initialText);
+
+  let attempts = 0;
+  karaokeJobPollTimer = setInterval(async () => {
+    attempts++;
+    if (attempts > 60) {
+      clearInterval(karaokeJobPollTimer);
+      karaokeJobPollTimer = null;
+      hideKaraokeJobBanner();
+      return;
+    }
+
+    try {
+      const res = await fetchApi("/jobs");
+      const jobs = res.jobs || [];
+      const job = jobs.find(j => j.trackId === trackId);
+
+      if (!job) return;
+
+      if (job.status === "running") {
+        showKaraokeJobBanner(job.jobType === "whisper_karaoke" 
+          ? "Генерация таймкодов караоке через AI Whisper..."
+          : "Сравнение текстов в турнире (LRCLIB, Yandex, Genius)...");
+      } else if (job.status === "done") {
+        clearInterval(karaokeJobPollTimer);
+        karaokeJobPollTimer = null;
+        showKaraokeJobBanner("✓ Текст успешно обновлен!");
+
+        await refreshCurrentKaraokeTrack(trackId);
+
+        setTimeout(() => {
+          hideKaraokeJobBanner();
+        }, 2500);
+      } else if (job.status === "failed") {
+        clearInterval(karaokeJobPollTimer);
+        karaokeJobPollTimer = null;
+        showKaraokeJobBanner("Текст не найден или ошибка провайдера");
+        setTimeout(() => {
+          hideKaraokeJobBanner();
+        }, 3000);
+      }
+    } catch (err) {
+      console.warn("Ошибка опроса статуса задачи:", err);
+    }
+  }, 1500);
+}
+
+async function refreshCurrentKaraokeTrack(trackId) {
+  try {
+    const res = await fetchApi(`/lyrics/cache?trackId=${encodeURIComponent(trackId)}`);
+    if (res.track) {
+      const updatedTrack = res.track;
+      const idx = state.tracks.findIndex(t => t.id === trackId);
+      if (idx !== -1) {
+        state.tracks[idx] = updatedTrack;
+      }
+      if (state.selectedTrack && state.selectedTrack.id === trackId) {
+        state.selectedTrack = updatedTrack;
+        const lyricsContent = (updatedTrack.activeLyrics || updatedTrack.lyricsBody || "").trim();
+        const rawTextarea = document.getElementById("raw-lrc-textarea");
+        if (rawTextarea) rawTextarea.value = lyricsContent;
+
+        const providerLabel = document.getElementById("provider-info-label");
+        if (providerLabel) {
+          const src = updatedTrack.activeSource || updatedTrack.lyricsSource;
+          providerLabel.textContent = src ? `Источник: ${src.toUpperCase()}` : (lyricsContent ? "Синхронизирован" : "Нет текста");
+        }
+
+        if (lyricsContent) {
+          const parsed = parseLRC(lyricsContent);
+          if (parsed.length > 0) {
+            state.lyrics = parsed;
+          } else {
+            state.lyrics = lyricsContent.split("\n")
+              .map(l => l.trim())
+              .filter(l => l.length > 0)
+              .map((text, i) => ({ sec: i * 5, text }));
+          }
+        } else {
+          state.lyrics = [];
+        }
+
+        renderLyricsTeleprompter();
+        updatePlayerUI();
+        renderKaraokeSidebar();
+        loadTracks();
+        loadJobsData();
+
+        // Если найден только обычный plain текст (без таймкодов) — сразу предлагаем создать караоке через AI Whisper
+        if (updatedTrack.lyricsStatus === "plain" || (lyricsContent && state.lyrics.length > 0 && !lyricsContent.includes("["))) {
+          const descEl = document.getElementById("whisper-offer-desc");
+          if (descEl) {
+            descEl.textContent = `Для песни «${updatedTrack.artist} — ${updatedTrack.title}» найден обычный текст без таймкодов. Хотите автоматически сгенерировать синхронный .lrc файл караоке при помощи AI Whisper?`;
+          }
+          document.getElementById("modal-whisper-offer")?.classList.remove("hidden");
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Ошибка обновления данных трека:", err);
+  }
+}
+
 async function enqueueLrcTournament() {
   if (!state.selectedTrack) {
-    showToast("Сначала выберите трек в медиатеке", "error");
+    showToast("Сначала выберите трек в караоке-плеере", "error");
     return;
   }
 
+  const trackId = state.selectedTrack.id;
   try {
     await fetchApi("/lyrics/enqueue", "POST", {
-      trackId: state.selectedTrack.id,
+      trackId,
       jobType: "tournament"
     });
-    showToast("✓ Задача турнира (LRCLIB, Genius, Yandex) поставлена в очередь воркера", "success");
+    showToast("✓ Поиск текста запущен", "info");
+    startPollingKaraokeJob(trackId, "Поиск текста в LRCLIB, Яндекс Музыке, Genius...");
     loadJobsData();
   } catch (err) {
     showToast(`Ошибка: ${err.message}`, "error");
@@ -1007,16 +1192,18 @@ async function enqueueLrcTournament() {
 
 async function enqueueWhisperKaraoke() {
   if (!state.selectedTrack) {
-    showToast("Сначала выберите трек в медиатеке", "error");
+    showToast("Сначала выберите трек в караоке-плеере", "error");
     return;
   }
 
+  const trackId = state.selectedTrack.id;
   try {
     await fetchApi("/lyrics/enqueue", "POST", {
-      trackId: state.selectedTrack.id,
+      trackId,
       jobType: "whisper_karaoke"
     });
-    showToast("✓ Задача AI Караоке (Groq Whisper Large v3 + Gemini) поставлена в очередь", "success");
+    showToast("✓ Задача AI Караоке (Groq Whisper Large v3) запущена", "info");
+    startPollingKaraokeJob(trackId, "Создание синхронного караоке через AI Whisper...");
     loadJobsData();
   } catch (err) {
     showToast(`Ошибка: ${err.message}`, "error");
@@ -1791,11 +1978,11 @@ async function loadJobsData() {
       return;
     }
 
-    tbody.innerHTML = state.jobs.map((j, idx) => {
+    tbody.innerHTML = state.jobs.map((j) => {
       let statusBadge = `<span class="badge-audit-queued">Ожидание</span>`;
       if (j.status === "running") statusBadge = `<span class="badge-audit-processing">Выполняется...</span>`;
-      else if (j.status === "completed") statusBadge = `<span class="text-emerald">Завершена</span>`;
-      else if (j.status === "failed") statusBadge = `<span class="text-crimson" style="color:var(--color-crimson);">Ошибка</span>`;
+      else if (j.status === "done" || j.status === "completed") statusBadge = `<span class="text-emerald" style="font-weight: 500;">✓ Завершена</span>`;
+      else if (j.status === "failed") statusBadge = `<span class="text-crimson" style="color:var(--color-crimson, #f43f5e);">Ошибка</span>`;
       else if (j.status === "waiting_quota") statusBadge = `<span class="text-amber">Ждет квоту API</span>`;
 
       let jobTypeLabel = j.jobType;
@@ -1803,16 +1990,28 @@ async function loadJobsData() {
       else if (j.jobType === "whisper_karaoke") jobTypeLabel = "AI Караоке (Groq)";
       else if (j.jobType === "full_pipeline") jobTypeLabel = "Полный конвейер";
 
-      const timeStr = j.createdAt ? new Date(j.createdAt * 1000).toLocaleTimeString() : "—";
+      const timeUnix = j.updatedAt || j.createdAt || 0;
+      const timeStr = timeUnix ? new Date(timeUnix * 1000).toLocaleTimeString() : "—";
+
+      // Подтягиваем читаемое название трека (Артист — Название) вместо пустого или сырого UUID
+      const trackId = j.trackId || j.targetId || "";
+      const trackObj = (state.tracks || []).find(t => t.id === trackId);
+      let trackDisplay = trackId || "—";
+      if (trackObj) {
+        trackDisplay = `${trackObj.artist || "Неизвестный артист"} — ${trackObj.title || "Без названия"}`;
+      }
 
       return `
         <tr>
           <td class="col-num mono">${j.id}</td>
-          <td><span class="mono" style="font-size: 12px; color: #ffffff;">${escapeHtml(j.targetId)}</span></td>
+          <td>
+            <div style="font-weight: 500; color: #ffffff;">${escapeHtml(trackDisplay)}</div>
+            ${trackObj && trackId ? `<div class="mono text-muted" style="font-size: 10px;">${escapeHtml(trackId)}</div>` : ""}
+          </td>
           <td>${escapeHtml(jobTypeLabel)}</td>
           <td>${statusBadge}</td>
-          <td class="mono">${j.attempts || 0}</td>
-          <td class="mono text-muted" style="font-size: 11px;">${escapeHtml(j.lastError || "—")}</td>
+          <td class="mono">${j.attemptCount ?? j.attempts ?? 0}</td>
+          <td class="mono text-muted" style="font-size: 11px;">${escapeHtml(j.errorLog || j.lastError || "—")}</td>
           <td class="mono text-muted">${timeStr}</td>
         </tr>
       `;
