@@ -37,6 +37,9 @@ const state = {
   stagingItems: [],
   keys: [],
   jobs: [],
+  jobLogs: {},
+  expandedJobIds: new Set(),
+  jobsPollTimer: null,
   workerPaused: false,
   lastAppliedStagingId: null,
 
@@ -236,6 +239,11 @@ function initNavigation() {
   document.getElementById("btn-enqueue-tournament")?.addEventListener("click", enqueueLrcTournament);
   document.getElementById("btn-cloud-karaoke")?.addEventListener("click", enqueueWhisperKaraoke);
   document.getElementById("btn-toggle-editor")?.addEventListener("click", toggleLrcEditor);
+  document.getElementById("btn-delete-lyrics")?.addEventListener("click", () => {
+    if (state.selectedTrack) {
+      deleteTrackLyrics(state.selectedTrack.id);
+    }
+  });
   document.getElementById("btn-save-raw-lrc")?.addEventListener("click", saveRawLrc);
 
   // Фоновые задачи
@@ -256,12 +264,24 @@ function switchTab(tabName) {
     panel.classList.toggle("active", panel.id === `panel-${tabName}`);
   });
 
+  if (state.jobsPollTimer) {
+    clearInterval(state.jobsPollTimer);
+    state.jobsPollTimer = null;
+  }
+
   if (tabName === "library") loadLibraryData();
   if (tabName === "karaoke") {
     renderKaraokeSidebar();
   }
   if (tabName === "staging") loadStagingData();
-  if (tabName === "jobs") loadJobsData();
+  if (tabName === "jobs") {
+    loadJobsData();
+    state.jobsPollTimer = setInterval(() => {
+      if (state.activeTab === "jobs") {
+        loadJobsData();
+      }
+    }, 2500);
+  }
   if (tabName === "keys") loadKeysData();
 }
 
@@ -634,7 +654,7 @@ async function openTrackDrawer(trackId) {
       </div>
       <div class="drawer-meta-row">
         <span class="drawer-meta-label">Источник</span>
-        <span class="drawer-meta-val mono">${escapeHtml(track.activeSource || "—")}</span>
+        <span class="drawer-meta-val mono">${escapeHtml(formatLyricsSource(track.activeSource || track.lyricsSource) || "—")}</span>
       </div>
       <div class="drawer-meta-row">
         <span class="drawer-meta-label">Файл</span>
@@ -654,6 +674,11 @@ async function openTrackDrawer(trackId) {
           AI Караоке (Groq)
         </button>
       </div>
+      ${(content || (track.lyricsStatus && track.lyricsStatus !== "none")) ? `
+        <button class="btn btn-danger-outline" onclick="deleteTrackLyrics('${escapeHtml(track.id)}')" style="margin-top: 4px;">
+          🗑 Удалить текст и .lrc файл
+        </button>
+      ` : ""}
     </div>
 
     ${content ? `
@@ -667,6 +692,51 @@ async function openTrackDrawer(trackId) {
   drawer?.classList.remove("hidden");
 }
 
+function formatLyricsSource(src) {
+  if (!src) return "";
+  const lower = String(src).toLowerCase();
+  if (lower === "poisq" || lower === "whisper_gemini" || lower === "gemini_consensus") {
+    return "poisq";
+  }
+  return String(src).toUpperCase();
+}
+
+async function deleteTrackLyrics(trackId) {
+  if (!trackId) return;
+  const track = state.tracks.find(t => t.id === trackId) || state.selectedTrack;
+  const titleName = track ? `«${track.artist || ""} — ${track.title || ""}»` : trackId;
+
+  if (!confirm(`Удалить текст песни и файл .lrc с диска для трека ${titleName}?`)) {
+    return;
+  }
+
+  try {
+    await fetchApi("/lyrics/delete", "POST", { trackId });
+    showToast("✓ Текст песни и файл .lrc успешно удалены", "success");
+
+    if (state.selectedTrack && state.selectedTrack.id === trackId) {
+      state.selectedTrack.activeLyrics = "";
+      state.selectedTrack.lyricsBody = "";
+      state.selectedTrack.lyricsStatus = "none";
+      state.selectedTrack.activeSource = "";
+      state.lyrics = [];
+      const rawTextarea = document.getElementById("raw-lrc-textarea");
+      if (rawTextarea) rawTextarea.value = "";
+      const providerLabel = document.getElementById("provider-info-label");
+      if (providerLabel) providerLabel.textContent = "Нет текста";
+      document.getElementById("btn-delete-lyrics")?.classList.add("hidden");
+      document.getElementById("btn-create-ai-lrc")?.classList.remove("hidden");
+      renderLyricsTeleprompter();
+      updatePlayerUI();
+    }
+
+    document.getElementById("drawer-track-detail")?.classList.add("hidden");
+    await loadTracks();
+  } catch (err) {
+    showToast(`Ошибка удаления текста: ${err.message}`, "error");
+  }
+}
+
 async function enqueueSingleTournament(trackId) {
   try {
     await fetchApi("/lyrics/enqueue", "POST", { trackId, jobType: "tournament" });
@@ -678,13 +748,12 @@ async function enqueueSingleTournament(trackId) {
 }
 
 async function enqueueSingleGroq(trackId) {
-  try {
-    await fetchApi("/lyrics/enqueue", "POST", { trackId, jobType: "whisper_karaoke" });
-    showToast("✓ Задача AI Караоке (Groq Whisper) поставлена в очередь", "success");
-    loadJobsData();
-  } catch (err) {
-    showToast(`Ошибка: ${err.message}`, "error");
+  const track = state.tracks.find(t => t.id === trackId);
+  if (track) {
+    state.selectedTrack = track;
   }
+  document.getElementById("drawer-track-detail")?.classList.add("hidden");
+  handleCreateAiLrc();
 }
 
 // -----------------------------------------------------------------------------
@@ -873,7 +942,7 @@ async function openTrackInKaraoke(trackId) {
   if (providerLabel) {
     const src = track.activeSource || track.lyricsSource;
     if (src) {
-      providerLabel.textContent = `Источник: ${src.toUpperCase()}`;
+      providerLabel.textContent = `Источник: ${formatLyricsSource(src)}`;
     } else {
       providerLabel.textContent = lyricsContent ? "Синхронизирован" : "Нет текста";
     }
@@ -897,15 +966,17 @@ async function openTrackInKaraoke(trackId) {
     state.lyrics = [];
   }
 
-  // Управление кнопкой генерации AI LRC (показываем, если есть plain-текст, но нет точных таймкодов)
+  // Управление кнопками генерации и удаления LRC
   const btnCreateAiLrc = document.getElementById("btn-create-ai-lrc");
   if (btnCreateAiLrc) {
-    const isPlainOnly = (track.lyricsStatus === "plain") || (lyricsContent && !hasValidLrcTimestamps);
-    if (isPlainOnly) {
-      btnCreateAiLrc.classList.remove("hidden");
-    } else {
-      btnCreateAiLrc.classList.add("hidden");
-    }
+    const needsAiSync = !hasValidLrcTimestamps;
+    btnCreateAiLrc.classList.toggle("hidden", !needsAiSync);
+  }
+
+  const btnDeleteLyrics = document.getElementById("btn-delete-lyrics");
+  if (btnDeleteLyrics) {
+    const hasLyrics = Boolean(lyricsContent) || (track.lyricsStatus && track.lyricsStatus !== "none");
+    btnDeleteLyrics.classList.toggle("hidden", !hasLyrics);
   }
 
   // Подключаем реальный аудиопоток к плееру (БЕЗ автозапуска — воспроизведение только по нажатию Play)
@@ -1090,6 +1161,7 @@ async function saveRawLrc() {
     state.selectedTrack.lyricsBody = content;
     state.selectedTrack.lyricsStatus = res.status || "verified";
     state.lyrics = parseLRC(content);
+    document.getElementById("btn-delete-lyrics")?.classList.remove("hidden");
 
     renderLyricsTeleprompter();
     updatePlayerUI();
@@ -1142,13 +1214,14 @@ function startPollingKaraokeJob(trackId, initialText) {
       if (!job) return;
 
       if (job.status === "running") {
-        showKaraokeJobBanner(job.jobType === "whisper_karaoke" 
-          ? "Генерация таймкодов караоке через AI Whisper..."
+        const liveMsg = job.errorLog || (job.jobType === "whisper_karaoke"
+          ? "Генерация пословных таймкодов караоке через AI Whisper..."
           : "Сравнение текстов в турнире (LRCLIB, Yandex, Genius)...");
+        showKaraokeJobBanner(liveMsg);
       } else if (job.status === "done") {
         clearInterval(karaokeJobPollTimer);
         karaokeJobPollTimer = null;
-        showKaraokeJobBanner("✓ Текст успешно обновлен!");
+        showKaraokeJobBanner("✓ Текст успешно обновлен (Источник: poisq)!");
 
         await refreshCurrentKaraokeTrack(trackId);
 
@@ -1187,13 +1260,15 @@ async function refreshCurrentKaraokeTrack(trackId) {
         const providerLabel = document.getElementById("provider-info-label");
         if (providerLabel) {
           const src = updatedTrack.activeSource || updatedTrack.lyricsSource;
-          providerLabel.textContent = src ? `Источник: ${src.toUpperCase()}` : (lyricsContent ? "Синхронизирован" : "Нет текста");
+          providerLabel.textContent = src ? `Источник: ${formatLyricsSource(src)}` : (lyricsContent ? "Синхронизирован" : "Нет текста");
         }
 
+        let hasValidLrcTimestamps = false;
         if (lyricsContent) {
           const parsed = parseLRC(lyricsContent);
           if (parsed.length > 0) {
             state.lyrics = parsed;
+            hasValidLrcTimestamps = true;
           } else {
             state.lyrics = lyricsContent.split("\n")
               .map(l => l.trim())
@@ -1202,6 +1277,16 @@ async function refreshCurrentKaraokeTrack(trackId) {
           }
         } else {
           state.lyrics = [];
+        }
+
+        const btnCreateAiLrc = document.getElementById("btn-create-ai-lrc");
+        if (btnCreateAiLrc) {
+          btnCreateAiLrc.classList.toggle("hidden", hasValidLrcTimestamps);
+        }
+        const btnDeleteLyrics = document.getElementById("btn-delete-lyrics");
+        if (btnDeleteLyrics) {
+          const hasLyrics = Boolean(lyricsContent) || (updatedTrack.lyricsStatus && updatedTrack.lyricsStatus !== "none");
+          btnDeleteLyrics.classList.toggle("hidden", !hasLyrics);
         }
 
         renderLyricsTeleprompter();
@@ -2060,6 +2145,7 @@ async function loadJobsData() {
   try {
     const res = await fetchApi("/jobs");
     state.jobs = res.jobs || [];
+    state.jobLogs = res.jobLogs || {};
     state.workerPaused = !!res.paused;
 
     if (pauseBtn) {
@@ -2077,6 +2163,7 @@ async function loadJobsData() {
     }
 
     tbody.innerHTML = state.jobs.map((j) => {
+      const isExpanded = state.expandedJobIds.has(j.id);
       let statusBadge = `<span class="badge-audit-queued">Ожидание</span>`;
       if (j.status === "running") statusBadge = `<span class="badge-audit-processing">Выполняется...</span>`;
       else if (j.status === "done" || j.status === "completed") statusBadge = `<span class="text-emerald" style="font-weight: 500;">✓ Завершена</span>`;
@@ -2086,7 +2173,7 @@ async function loadJobsData() {
 
       let jobTypeLabel = j.jobType;
       if (j.jobType === "tournament") jobTypeLabel = "LRC Турнир";
-      else if (j.jobType === "whisper_karaoke") jobTypeLabel = "AI Караоке (Groq)";
+      else if (j.jobType === "whisper_karaoke") jobTypeLabel = "AI Караоке (Groq + Gemini)";
       else if (j.jobType === "full_pipeline") jobTypeLabel = "Полный конвейер";
 
       const timeUnix = j.updatedAt || j.createdAt || 0;
@@ -2098,6 +2185,17 @@ async function loadJobsData() {
       let trackDisplay = trackId || "—";
       if (trackObj) {
         trackDisplay = `${trackObj.artist || "Неизвестный артист"} — ${trackObj.title || "Без названия"}`;
+      }
+
+      // Формируем отображение текущего этапа или результата
+      const rawStepOrErr = j.errorLog || j.lastError || "";
+      let stepSummaryHtml = `<span class="text-muted">—</span>`;
+      if (j.status === "done" || j.status === "completed") {
+        stepSummaryHtml = `<span class="text-emerald">✓ Текст сохранен (.lrc · poisq)</span>`;
+      } else if (j.status === "running") {
+        stepSummaryHtml = `<span style="color: var(--color-primary, #38bdf8); font-weight: 500;">⚡ ${escapeHtml(rawStepOrErr || "Обработка этапа...")}</span>`;
+      } else if (rawStepOrErr) {
+        stepSummaryHtml = `<span class="${j.status === 'failed' ? 'text-crimson' : 'text-muted'}">${escapeHtml(rawStepOrErr)}</span>`;
       }
 
       // Кнопки управления конкретной задачей
@@ -2115,9 +2213,9 @@ async function loadJobsData() {
       }
       actionBtns += `</div>`;
 
-      return `
-        <tr>
-          <td class="col-num mono">${j.id}</td>
+      const mainRow = `
+        <tr class="job-row ${isExpanded ? "expanded" : ""}" onclick="toggleJobDetails(${j.id})" style="cursor: pointer;" title="Нажмите, чтобы раскрыть подробный лог выполнения задачи">
+          <td class="col-num mono"><span class="job-expand-chevron">${isExpanded ? "▾" : "▸"}</span> ${j.id}</td>
           <td>
             <div style="font-weight: 600; color: var(--text-primary);">${escapeHtml(trackDisplay)}</div>
             ${trackObj && trackId ? `<div class="mono text-muted" style="font-size: 10px;">${escapeHtml(trackId)}</div>` : ""}
@@ -2125,15 +2223,126 @@ async function loadJobsData() {
           <td>${escapeHtml(jobTypeLabel)}</td>
           <td>${statusBadge}</td>
           <td class="mono">${j.attemptCount ?? j.attempts ?? 0}</td>
-          <td class="mono text-muted" style="font-size: 11px;">${escapeHtml(j.errorLog || j.lastError || "—")}</td>
+          <td class="mono" style="font-size: 11px; max-width: 340px;">${stepSummaryHtml}</td>
           <td class="mono text-muted">${timeStr}</td>
           <td class="col-actions">${actionBtns}</td>
         </tr>
       `;
+
+      if (!isExpanded) {
+        return mainRow;
+      }
+
+      return mainRow + buildJobDetailsRowHtml(j, trackObj);
     }).join("");
   } catch (err) {
     console.error("Ошибка загрузки задач:", err);
   }
+}
+
+function toggleJobDetails(jobId) {
+  const id = Number(jobId);
+  if (state.expandedJobIds.has(id)) {
+    state.expandedJobIds.delete(id);
+  } else {
+    state.expandedJobIds.add(id);
+  }
+  loadJobsData();
+}
+
+function buildJobDetailsRowHtml(j, trackObj) {
+  const logs = state.jobLogs[j.id] || state.jobLogs[String(j.id)] || [];
+  const rawStep = j.errorLog || j.lastError || "";
+  const isDone = j.status === "done" || j.status === "completed";
+  const isFailed = j.status === "failed";
+  const isRunning = j.status === "running";
+
+  // Определяем активный шаг визуального конвейера
+  let activeStageIdx = 0;
+  const joinedLogs = (logs.join(" ") + " " + rawStep).toLowerCase();
+  if (isDone) {
+    activeStageIdx = 4;
+  } else if (joinedLogs.includes("этап 4") || joinedLogs.includes("запись")) {
+    activeStageIdx = 3;
+  } else if (joinedLogs.includes("этап 3") || joinedLogs.includes("gemini") || joinedLogs.includes("forced alignment")) {
+    activeStageIdx = 2;
+  } else if (joinedLogs.includes("этап 2") || joinedLogs.includes("whisper") || joinedLogs.includes("opus")) {
+    activeStageIdx = 1;
+  } else {
+    activeStageIdx = 0;
+  }
+
+  const stages = j.jobType === "tournament"
+    ? [
+        { title: "1. Опрос 5 LRC-баз", desc: "LRCLIB, NetEase, QQMusic, Musixmatch, Genius" },
+        { title: "2. Запись .lrc", desc: "Атомарное сохранение рядом с аудиофайлом" }
+      ]
+    : [
+        { title: "1. Турнир источников", desc: "Поиск эталонного текста в 5 базах" },
+        { title: "2. FFmpeg + Groq Whisper", desc: "Сжатие моно-Opus 16kHz и пословные DTW-таймкоды" },
+        { title: "3. Gemini 3.8 Alignment", desc: "Математические якоря + пословная синхронизация" },
+        { title: "4. Сохранение .lrc", desc: "Запись на диск (Источник: poisq)" }
+      ];
+
+  const pipelineHtml = stages.map((st, idx) => {
+    let cls = "pending";
+    let icon = "○";
+    if (isDone || idx < activeStageIdx) {
+      cls = "done";
+      icon = "✓";
+    } else if (idx === activeStageIdx) {
+      if (isFailed) {
+        cls = "failed";
+        icon = "✕";
+      } else if (isRunning) {
+        cls = "running";
+        icon = "⚡";
+      }
+    }
+    return `
+      <div class="job-stage-card ${cls}">
+        <div class="job-stage-title"><span class="job-stage-icon">${icon}</span> ${escapeHtml(st.title)}</div>
+        <div class="job-stage-desc">${escapeHtml(st.desc)}</div>
+      </div>
+    `;
+  }).join("");
+
+  let logLinesHtml = "";
+  if (logs.length > 0) {
+    logLinesHtml = logs.map(line => `<div class="job-log-line">${escapeHtml(line)}</div>`).join("");
+  } else if (rawStep) {
+    logLinesHtml = `<div class="job-log-line">${escapeHtml(rawStep)}</div>`;
+  } else if (isDone) {
+    logLinesHtml = `<div class="job-log-line text-emerald">✓ Задача успешно выполнена. Синхронный .lrc файл записан рядом с треком.</div>`;
+  } else {
+    logLinesHtml = `<div class="job-log-line text-muted">Ожидание захвата задачи фоновым воркером...</div>`;
+  }
+
+  const filePath = trackObj?.filePath || "—";
+  const createdStr = j.createdAt ? new Date(j.createdAt * 1000).toLocaleString() : "—";
+  const updatedStr = j.updatedAt ? new Date(j.updatedAt * 1000).toLocaleString() : "—";
+
+  return `
+    <tr class="job-details-row">
+      <td colspan="8">
+        <div class="job-details-box">
+          <div class="job-stages-grid">
+            ${pipelineHtml}
+          </div>
+          <div class="job-meta-bar mono">
+            <span><strong>Файл:</strong> ${escapeHtml(filePath)}</span>
+            <span><strong>Создана:</strong> ${escapeHtml(createdStr)}</span>
+            <span><strong>Обновлена:</strong> ${escapeHtml(updatedStr)}</span>
+            ${trackObj ? `<button class="btn-table-action primary" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(trackObj.id)}')">🎤 Открыть в Караоке</button>` : ""}
+          </div>
+          <div class="job-console">
+            <div class="job-console-header mono">Живой журнал выполнения под капотом (Задача #${j.id})</div>
+            <div class="job-console-body mono">${logLinesHtml}</div>
+          </div>
+        </div>
+      </td>
+    </tr>
+  `;
 }
 
 function promptJobRetry(jobId) {

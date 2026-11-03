@@ -109,6 +109,16 @@ func (r *JobRepository) MarkDone(id int64) error {
 	return err
 }
 
+// UpdateProgress обновляет описание текущего активного этапа задачи во время выполнения.
+func (r *JobRepository) UpdateProgress(id int64, stepMsg string) error {
+	_, err := r.db.Exec(`
+		UPDATE lyrics_jobs
+		SET error_log = ?, updated_at = ?
+		WHERE id = ?
+	`, stepMsg, time.Now().Unix(), id)
+	return err
+}
+
 // MarkWaitingQuota переводит задачу в режим ожидания свободной квоты API-ключей без увеличения счетчика фатальных ошибок.
 func (r *JobRepository) MarkWaitingQuota(id int64, retryAtUnix int64, reason string) error {
 	_, err := r.db.Exec(`

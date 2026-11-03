@@ -97,6 +97,7 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/navidrome/album-cover", s.handleNavidromeAlbumCover)
 	mux.HandleFunc("/api/v1/lyrics/cache", s.handleLyricsCache)
 	mux.HandleFunc("/api/v1/lyrics/save", s.handleLyricsSave)
+	mux.HandleFunc("/api/v1/lyrics/delete", s.handleLyricsDelete)
 	mux.HandleFunc("/api/v1/lyrics/enqueue", s.handleLyricsEnqueue)
 	mux.HandleFunc("/api/v1/jobs", s.handleJobsList)
 	mux.HandleFunc("/api/v1/jobs/action", s.handleJobAction)

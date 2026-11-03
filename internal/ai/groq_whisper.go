@@ -67,8 +67,19 @@ func NewGroqWhisperClient(keyPool *keypool.Manager) *GroqWhisperClient {
 }
 
 // TranscribeAudio отправляет Ogg Opus буфер в Groq (whisper-large-v3-turbo) и возвращает пословные и посегментные таймкоды.
-func (gw *GroqWhisperClient) TranscribeAudio(ctx context.Context, opusData []byte, langHint string) (*WhisperTranscriptionResult, error) {
+// Опциональный параметр promptHint передает первые строки текста песни для предотвращения галлюцинаций на музыке.
+func (gw *GroqWhisperClient) TranscribeAudio(ctx context.Context, opusData []byte, langHint string, promptHint ...string) (*WhisperTranscriptionResult, error) {
 	const maxKeySwitches = 5
+
+	hintText := ""
+	if len(promptHint) > 0 {
+		hintText = strings.TrimSpace(promptHint[0])
+		// Ограничиваем длину подсказки по стандарту Whisper (~224 токена / 500 рун)
+		runes := []rune(hintText)
+		if len(runes) > 500 {
+			hintText = string(runes[:500])
+		}
+	}
 
 	var lastErr error
 	for attempt := 1; attempt <= maxKeySwitches; attempt++ {
@@ -80,7 +91,7 @@ func (gw *GroqWhisperClient) TranscribeAudio(ctx context.Context, opusData []byt
 			return nil, err
 		}
 
-		res, status, err := gw.callOnce(ctx, leased.PlainKey, opusData, langHint)
+		res, status, err := gw.callOnce(ctx, leased.PlainKey, opusData, langHint, hintText)
 		if err == nil {
 			gw.keyPool.ReportSuccess(leased.ID)
 			return res, nil
@@ -109,7 +120,7 @@ func (gw *GroqWhisperClient) TranscribeAudio(ctx context.Context, opusData []byt
 	return nil, lastErr
 }
 
-func (gw *GroqWhisperClient) callOnce(ctx context.Context, apiKey string, opusData []byte, langHint string) (*WhisperTranscriptionResult, int, error) {
+func (gw *GroqWhisperClient) callOnce(ctx context.Context, apiKey string, opusData []byte, langHint string, promptHint string) (*WhisperTranscriptionResult, int, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -123,10 +134,14 @@ func (gw *GroqWhisperClient) callOnce(ctx context.Context, apiKey string, opusDa
 
 	_ = writer.WriteField("model", groqWhisperModel)
 	_ = writer.WriteField("response_format", "verbose_json")
+	_ = writer.WriteField("temperature", "0")
 	_ = writer.WriteField("timestamp_granularities[]", "word")
 	_ = writer.WriteField("timestamp_granularities[]", "segment")
 	if len(langHint) == 2 {
 		_ = writer.WriteField("language", strings.ToLower(langHint))
+	}
+	if promptHint != "" {
+		_ = writer.WriteField("prompt", promptHint)
 	}
 
 	if err := writer.Close(); err != nil {

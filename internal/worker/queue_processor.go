@@ -30,6 +30,7 @@ type QueueProcessor struct {
 	cleaner    *ai.LyricsCleaner
 	karaoke    *ai.KaraokePipeline
 	lrcWriter  *lyrics.AtomicLRCWriter
+	tracker    *JobTelemetryTracker
 
 	mu       sync.RWMutex
 	isPaused bool
@@ -56,8 +57,34 @@ func NewQueueProcessor(
 		cleaner:    cleaner,
 		karaoke:    karaoke,
 		lrcWriter:  lrcWriter,
+		tracker:    NewJobTelemetryTracker(),
 		wakeCh:     make(chan struct{}, 1),
 	}
+}
+
+// GetJobLogs возвращает форматированные строки лога выполнения для конкретной задачи.
+func (qp *QueueProcessor) GetJobLogs(jobID int64) []string {
+	if qp.tracker == nil {
+		return nil
+	}
+	return qp.tracker.FormatLogLines(jobID)
+}
+
+// ClearJobLogs очищает журнал выполнения задачи при полном перезапуске.
+func (qp *QueueProcessor) ClearJobLogs(jobID int64) {
+	if qp.tracker != nil {
+		qp.tracker.ClearJob(jobID)
+	}
+}
+
+func (qp *QueueProcessor) reportStep(jobID int64, stage string, msg string) {
+	if qp.tracker != nil {
+		qp.tracker.RecordStep(jobID, stage, msg)
+	}
+	if qp.jobRepo != nil {
+		_ = qp.jobRepo.UpdateProgress(jobID, msg)
+	}
+	logger.Info("[WORKER] [Задача #%d] %s", jobID, msg)
 }
 
 // Wake сигнализирует воркеру о появлении новой задачи в очереди.
@@ -124,7 +151,9 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 		if err := qp.executeJob(ctx, job); err != nil {
 			if errors.Is(err, db.ErrNoAvailableKeys) {
 				if job.JobType == "whisper_karaoke" && (qp.keyPool == nil || !qp.keyPool.HasKeys("groq")) {
-					_ = qp.jobRepo.MarkRetryOrFailed(job.ID, 3, 3, "Отсутствует ключ Groq Cloud в пуле. Добавьте его во вкладке «Ключи API».")
+					msg := "Отсутствует ключ Groq Cloud в пуле. Добавьте его во вкладке «Ключи API»."
+					qp.tracker.RecordStep(job.ID, "error", "✖ "+msg)
+					_ = qp.jobRepo.MarkRetryOrFailed(job.ID, 3, 3, msg)
 					logger.Warn("[WORKER] Задача #%d отклонена: в пуле нет ключа Groq Cloud для AI Whisper караоке", job.ID)
 					return
 				}
@@ -133,18 +162,22 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 				if groqRetry > retryAt {
 					retryAt = groqRetry
 				}
-				_ = qp.jobRepo.MarkWaitingQuota(job.ID, retryAt, "Ожидание освобождения API-ключей: "+err.Error())
+				waitMsg := "Ожидание освобождения API-ключей: " + err.Error()
+				qp.tracker.RecordStep(job.ID, "waiting", "⏳ "+waitMsg)
+				_ = qp.jobRepo.MarkWaitingQuota(job.ID, retryAt, waitMsg)
 				logger.Info("[WORKER] Ключи в кулдауне. Задача #%d переведена в ожидание до %v",
 					job.ID, time.Unix(retryAt, 0).Format(time.RFC3339))
 				return
 			}
 
+			qp.tracker.RecordStep(job.ID, "error", "✖ Ошибка: "+err.Error())
 			_ = qp.jobRepo.MarkRetryOrFailed(job.ID, job.AttemptCount, 3, err.Error())
 			logger.Warn("[WORKER] Задача #%d (трек %s) завершилась ошибкой (попытка %d): %v",
 				job.ID, job.TrackID, job.AttemptCount, err)
 			continue
 		}
 
+		qp.tracker.RecordStep(job.ID, "done", "✓ Задача успешно завершена! Текст синхронизирован и сохранен на диск (.lrc).")
 		_ = qp.jobRepo.MarkDone(job.ID)
 		logger.Info("[WORKER] Задача #%d успешно завершена!", job.ID)
 	}
@@ -158,6 +191,7 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 	}
 
 	logger.Info("[WORKER] [Задача #%d] Старт обработки: «%s — %s» (тип задачи: %s)", job.ID, track.Artist, track.Title, job.JobType)
+	qp.reportStep(job.ID, "init", "Старт задачи для «"+track.Artist+" — "+track.Title+"» (режим: "+job.JobType+")")
 
 	q := lyrics.SearchQuery{
 		TrackID:  track.ID,
@@ -168,9 +202,16 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 	}
 
 	// Шаг 1: Запуск параллельного LRC-турнира по 5 источникам
+	qp.reportStep(job.ID, "tournament", "Этап 1: Параллельный опрос 5 внешних провайдеров (LRCLIB, NetEase, QQMusic, Musixmatch, Genius)...")
 	tRes, err := qp.tournament.RunTournament(ctx, q)
 	if err != nil && !errors.Is(err, lyrics.ErrNotFound) {
 		return err
+	}
+
+	if tRes != nil && tRes.Winner != nil {
+		qp.reportStep(job.ID, "tournament", "Победитель турнира: "+tRes.Winner.ProviderID+" (тип: "+string(tRes.Winner.Lyrics.Kind)+")")
+	} else {
+		qp.reportStep(job.ID, "tournament", "Внешние базы не вернули готовый LRC-тайминг")
 	}
 
 	// Если нужен только быстрый турнир без облачного AI
@@ -185,39 +226,41 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 			selectBestText(tRes.Winner.Lyrics), track.LangCode, false)
 	}
 
-	// Шаг 2: Если найден синхронизированный LRC — проводим мультиязычную очистку и AI-консенсус через Gemini
-	if tRes != nil && tRes.Winner != nil && tRes.Winner.Lyrics.Kind == lyrics.KindLRC {
+	// Шаг 2: Если найден синхронизированный LRC (и это не принудительный запуск whisper_karaoke) — проводим очистку и AI-консенсус
+	if job.JobType != "whisper_karaoke" && tRes != nil && tRes.Winner != nil && tRes.Winner.Lyrics.Kind == lyrics.KindLRC {
 		cleanedLocal := ai.FastCleanStructuralTags(tRes.Winner.Lyrics.SyncedLyrics)
-		// Сохраняем промежуточный быстрый синхрон, чтобы трек сразу имел LRC
 		_ = qp.saveWinningLyrics(track, tRes.Winner.ProviderID, lyrics.KindLRC, cleanedLocal, track.LangCode, false)
 
 		if qp.cleaner != nil {
+			qp.reportStep(job.ID, "consensus", "Этап 2: Валидация и очистка LRC-таймкодов через Google Gemini...")
 			logger.Info("[WORKER] [Задача #%d] Запуск AI-консенсуса и валидации текста через Gemini...", job.ID)
 			consensus, aiErr := qp.cleaner.BuildConsensus(ctx, track.Artist, track.Title, tRes.Candidates)
 			if aiErr != nil {
 				if errors.Is(aiErr, db.ErrNoAvailableKeys) && job.JobType == "ai_consensus" {
 					return aiErr
 				}
-				// Если ключи Gemini не заданы, оставляем чистый локально очищенный LRC
 				return nil
 			}
 			_ = qp.cacheRepo.Upsert(db.ProviderCacheRecord{
 				TrackID:   track.ID,
-				Provider:  "gemini_consensus",
+				Provider:  "poisq",
 				Kind:      "lrc",
 				Score:     99.5,
 				RawLyrics: consensus.CleanedLyrics,
 			})
-			return qp.saveWinningLyrics(track, "gemini_consensus", lyrics.KindLRC, consensus.CleanedLyrics, consensus.LangCode, true)
+			return qp.saveWinningLyrics(track, "poisq", lyrics.KindLRC, consensus.CleanedLyrics, consensus.LangCode, true)
 		}
 		return nil
 	}
 
-	// Шаг 3: Если точных таймкодов нигде нет (только Plain-текст или пусто) -> запускаем облачное караоке Groq Whisper + Gemini!
+	// Шаг 3: Если точных таймкодов нет или запущен whisper_karaoke -> запускаем облачное караоке Groq Whisper + Gemini!
 	var refPlain string
 	if tRes != nil && tRes.Winner != nil {
 		refPlain = ai.FastCleanStructuralTags(tRes.Winner.Lyrics.PlainLyrics)
-		if refPlain != "" {
+		if refPlain == "" {
+			refPlain = ai.FastCleanStructuralTags(tRes.Winner.Lyrics.SyncedLyrics)
+		}
+		if refPlain != "" && job.JobType != "whisper_karaoke" {
 			_ = qp.saveWinningLyrics(track, tRes.Winner.ProviderID, lyrics.KindPlain, refPlain, track.LangCode, false)
 		}
 	}
@@ -231,47 +274,56 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 	if qp.karaoke != nil && (job.JobType == "whisper_karaoke" || job.JobType == "full_pipeline") {
 		logger.Info("[WORKER] [Задача #%d] Старт караоке-пайплайна (Groq Whisper + Gemini) для «%s — %s»...", job.ID, track.Artist, track.Title)
 
-		// Проверяем наличие кэшированного результата Whisper для пошагового продолжения
+		// Проверяем наличие кэшированного пословного результата Whisper v2 для пошагового продолжения
 		var acousticJSON string
 		if cachedList, err := qp.cacheRepo.ListByTrack(track.ID); err == nil {
 			for _, c := range cachedList {
-				if c.Provider == "whisper_raw" && strings.TrimSpace(c.RawLyrics) != "" {
+				if c.Provider == "whisper_words_v2" && strings.TrimSpace(c.RawLyrics) != "" {
 					acousticJSON = c.RawLyrics
-					logger.Info("[WORKER] [Задача #%d] Обнаружен кэш этапа Whisper — пропускаем аудио-транскрибацию и запускаем сразу этап Gemini Merge!", job.ID)
+					qp.reportStep(job.ID, "whisper_cached", "Этап 2: Найден кэш пословной транскрибации Whisper DTW — переход сразу к выравниванию Gemini")
+					logger.Info("[WORKER] [Задача #%d] Обнаружен кэш пословной транскрибации Whisper v2 — пропускаем аудио-транскрибацию!", job.ID)
 					break
 				}
 			}
 		}
 
 		if acousticJSON == "" {
-			logger.Info("[WORKER] [Задача #%d] Этап 1-2: Сжатие Opus и распознавание через Groq Whisper...", job.ID)
-			rawJSON, wErr := qp.karaoke.TranscribeToSegments(ctx, track.FilePath, track.LangCode)
+			qp.reportStep(job.ID, "whisper", "Этап 2: Сжатие аудио в моно-Opus (16 kHz) и пословная DTW-транскрибация через Groq Whisper...")
+			logger.Info("[WORKER] [Задача #%d] Этап 1-2: Сжатие Opus и пословное распознавание через Groq Whisper...", job.ID)
+			promptHint := track.Artist + " - " + track.Title
+			if refPlain != "" {
+				promptHint += "\n" + refPlain
+			}
+			rawJSON, wErr := qp.karaoke.TranscribeToSegments(ctx, track.FilePath, track.LangCode, promptHint)
 			if wErr != nil {
 				return wErr
 			}
 			acousticJSON = rawJSON
 			_ = qp.cacheRepo.Upsert(db.ProviderCacheRecord{
 				TrackID:   track.ID,
-				Provider:  "whisper_raw",
+				Provider:  "whisper_words_v2",
 				Kind:      "acoustic_json",
 				Score:     50.0,
 				RawLyrics: acousticJSON,
 			})
+			qp.reportStep(job.ID, "whisper_done", "Этап 2 завершен: получены пословные акустические таймкоды от Groq Whisper")
 		}
 
-		logger.Info("[WORKER] [Задача #%d] Этап 3: Высокоточный мердж и синхронизация строк через Google Gemini...", job.ID)
+		qp.reportStep(job.ID, "gemini", "Этап 3: Математическая привязка якорей (Forced Alignment) и пословная синхронизация через Google Gemini 3.8 Flash...")
+		logger.Info("[WORKER] [Задача #%d] Этап 3: Высокоточный пословный мердж и синхронизация строк через Google Gemini...", job.ID)
 		karaokeOut, kErr := qp.karaoke.MergeSegmentsWithReference(ctx, acousticJSON, track.Artist, track.Title, refPlain)
 		if kErr != nil {
 			return kErr
 		}
+		qp.reportStep(job.ID, "saving", "Этап 4: Запись синхронизированного .lrc файла на диск (Источник: poisq)...")
 		_ = qp.cacheRepo.Upsert(db.ProviderCacheRecord{
 			TrackID:   track.ID,
-			Provider:  "whisper_gemini",
+			Provider:  "poisq",
 			Kind:      "lrc",
 			Score:     100.0,
 			RawLyrics: karaokeOut.CleanedLyrics,
 		})
-		return qp.saveWinningLyrics(track, "whisper_gemini", lyrics.KindLRC, karaokeOut.CleanedLyrics, karaokeOut.LangCode, true)
+		return qp.saveWinningLyrics(track, "poisq", lyrics.KindLRC, karaokeOut.CleanedLyrics, karaokeOut.LangCode, true)
 	}
 
 	if refPlain != "" {
