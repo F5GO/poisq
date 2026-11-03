@@ -56,9 +56,7 @@ func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) 
 						cur["height"] = dim.Height
 						if updatedBytes, err := json.Marshal(cur); err == nil {
 							item.CurrentJSON = string(updatedBytes)
-							_ = s.stagingRepo.UpdateProposedJSON(item.ID, item.ProposedJSON)
-							// Обновляем current_json в БД
-							_, _ = s.stagingRepo.CreateProposal(item)
+							_ = s.stagingRepo.UpdateCurrentJSON(item.ID, string(updatedBytes))
 						}
 					}
 				}
@@ -203,4 +201,45 @@ func (s *AdminServer) handleStagingUndo(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "reverted"})
+}
+
+// handleStagingClearCovers сбрасывает все незавершенные предложения обложек в Staging,
+// позволяя запустить повторный аудит обложек с чистого листа.
+func (s *AdminServer) handleStagingClearCovers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	deleted, err := s.stagingRepo.ClearPendingCoverProposals()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "cleared",
+		"deleted": deleted,
+		"message": "Очередь предложений обложек успешно очищена",
+	})
+}
+
+// handleStagingClearAll полностью очищает очередь pending-предложений в Staging.
+func (s *AdminServer) handleStagingClearAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	deleted, err := s.stagingRepo.ClearAllPending()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "cleared",
+		"deleted": deleted,
+		"message": "Вся очередь Staging очищена",
+	})
 }

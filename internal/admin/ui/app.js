@@ -185,6 +185,8 @@ function initNavigation() {
   document.getElementById("btn-run-audit")?.addEventListener("click", runMusicBrainzAudit);
 
   // Staging действия
+  document.getElementById("btn-clear-covers-staging")?.addEventListener("click", clearCoversStaging);
+  document.getElementById("btn-rescan-audit")?.addEventListener("click", rescanStagingAudit);
   document.getElementById("btn-apply-all-staging")?.addEventListener("click", applyAllStaging);
   document.getElementById("btn-discard-all-staging")?.addEventListener("click", discardAllStaging);
   document.getElementById("btn-undo-staging")?.addEventListener("click", undoStaging);
@@ -433,8 +435,18 @@ function renderArtistsGrid(container, tracks) {
     <div class="artist-grid">
       ${artists.map(([name, count]) => `
         <div class="artist-card" onclick="filterByArtist('${escapeHtml(name)}')">
-          <div class="group-title">${escapeHtml(name)}</div>
-          <div class="group-desc">${count} треков в медиатеке</div>
+          <div class="artist-avatar-wrap">
+            <img 
+              src="/api/v1/navidrome/artist-image?artist=${encodeURIComponent(name)}" 
+              class="artist-avatar-img" 
+              alt="${escapeHtml(name)}" 
+              loading="lazy" 
+              onerror="this.style.display='none'; const p = this.nextElementSibling; if(p) p.style.display='flex';"
+            />
+            <div class="artist-avatar-placeholder" style="display:none;">👤</div>
+          </div>
+          <div class="group-title" style="text-align: center;">${escapeHtml(name)}</div>
+          <div class="group-desc" style="text-align: center;">${count} треков в медиатеке</div>
         </div>
       `).join("")}
     </div>
@@ -475,12 +487,17 @@ function renderAlbumsGrid(container, tracks) {
   container.innerHTML = `
     <div class="album-grid">
       ${albums.map(alb => {
-        const coverSrc = alb.folderPath
-          ? `/api/v1/covers/local?path=${encodeURIComponent(alb.folderPath)}`
-          : "";
+        const coverSrc = `/api/v1/navidrome/album-cover?album=${encodeURIComponent(alb.album)}&artist=${encodeURIComponent(alb.artist)}&path=${encodeURIComponent(alb.folderPath || "")}`;
         return `
           <div class="album-card" onclick="filterByAlbum('${escapeHtml(alb.album)}')">
-            ${coverSrc ? `<img src="${coverSrc}" class="album-cover-img" alt="Обложка" loading="lazy" onerror="this.style.display='none'"/>` : `<div class="album-cover-img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:24px;">♪</div>`}
+            <img 
+              src="${coverSrc}" 
+              class="album-cover-img" 
+              alt="Обложка" 
+              loading="lazy" 
+              onerror="this.style.display='none'; const p = this.nextElementSibling; if(p) p.style.display='flex';"
+            />
+            <div class="album-cover-img" style="display:none;align-items:center;justify-content:center;color:var(--text-muted);font-size:24px;">♪</div>
             <div class="group-title">${escapeHtml(alb.album)}</div>
             <div class="group-desc">${escapeHtml(alb.artist)} · ${alb.count} треков</div>
           </div>
@@ -721,6 +738,19 @@ async function openTrackInKaraoke(trackId) {
   state.currentSec = 0;
   state.activeLyricIndex = -1;
 
+  // Обновляем обложку альбома в шапке караоке-плеера
+  const playerCover = document.getElementById("player-cover");
+  if (playerCover) {
+    const coverUrl = track.folderPath
+      ? `/api/v1/navidrome/album-cover?album=${encodeURIComponent(track.album || "")}&artist=${encodeURIComponent(track.artist || "")}&path=${encodeURIComponent(track.folderPath)}`
+      : "";
+    if (coverUrl) {
+      playerCover.innerHTML = `<img src="${coverUrl}" class="player-cover-img" alt="Обложка" onerror="this.parentElement.innerHTML='♪'"/>`;
+    } else {
+      playerCover.innerHTML = "♪";
+    }
+  }
+
   document.getElementById("player-title").textContent = track.title || "Без названия";
   document.getElementById("player-artist").textContent = `${track.artist || "Неизвестный артист"} — ${track.album || "Без альбома"}`;
   document.getElementById("time-total").textContent = formatDuration(state.totalSec);
@@ -883,7 +913,18 @@ function updatePlayerUI() {
       if (i === activeIdx) {
         line.classList.add("active");
         line.classList.remove("inactive");
-        line.scrollIntoView({ behavior: "smooth", block: "center" });
+        
+        // Скроллим исключительно контейнер телесуфлера, не двигая страницу и плеер
+        const viewport = document.getElementById("view-karaoke");
+        if (viewport) {
+          const lineTop = line.offsetTop;
+          const lineH = line.offsetHeight;
+          const vpH = viewport.clientHeight;
+          viewport.scrollTo({
+            top: lineTop - (vpH / 2) + (lineH / 2),
+            behavior: "smooth"
+          });
+        }
       } else {
         line.classList.remove("active");
         line.classList.add("inactive");
@@ -1645,6 +1686,33 @@ async function applyAllStaging() {
     await loadLibraryData();
   } catch (err) {
     showToast(`Ошибка применения: ${err.message}`, "error");
+  }
+}
+
+async function clearCoversStaging() {
+  if (!confirm("Очистить все не примененные предложения обложек в базе? Это позволит запустить чистый аудит обложек заново.")) {
+    return;
+  }
+  try {
+    const res = await fetchApi("/staging/clear-covers", "POST");
+    showToast(`✓ Очищено устаревших предложений обложек: ${res.deleted || 0}`, "success");
+    await loadStagingData();
+    await loadHealthStats();
+  } catch (err) {
+    showToast(`Ошибка очистки обложек: ${err.message}`, "error");
+  }
+}
+
+async function rescanStagingAudit() {
+  try {
+    showToast("Запущен глубокий аудит обложек и тегов...", "info");
+    await fetchApi("/scan/audit", "POST", { limitFolders: 50 });
+    setTimeout(async () => {
+      await loadStagingData();
+      await loadHealthStats();
+    }, 2000);
+  } catch (err) {
+    showToast(`Ошибка запуска аудита: ${err.message}`, "error");
   }
 }
 
