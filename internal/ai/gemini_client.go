@@ -71,14 +71,14 @@ type GeminiClient struct {
 // NewGeminiClient создает новый экземпляр клиента Gemini.
 func NewGeminiClient(keyPool *keypool.Manager) *GeminiClient {
 	model := strings.TrimSpace(os.Getenv("GEMINI_MODEL"))
-	if model == "" {
+	if model == "" || model == "gemini-3.8-flash" {
 		model = defaultGeminiModel
 	}
 	return &GeminiClient{
 		keyPool: keyPool,
 		model:   model,
 		client: &http.Client{
-			Timeout: 45 * time.Second,
+			Timeout: 90 * time.Second,
 		},
 	}
 }
@@ -117,9 +117,10 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 			continue // Мгновенно переключаемся на следующий активный ключ!
 		}
 
-		// Временная перегрузка или недоступность Google (HTTP 503 UNAVAILABLE / 502 / 504)
+		// Временная перегрузка или недоступность Google (HTTP 503 UNAVAILABLE / 502 / 504) или сетевой таймаут
 		if status == http.StatusServiceUnavailable || status == http.StatusBadGateway || status == http.StatusGatewayTimeout ||
-			strings.Contains(errLower, "high demand") || strings.Contains(errLower, "unavailable") {
+			strings.Contains(errLower, "high demand") || strings.Contains(errLower, "unavailable") ||
+			strings.Contains(errLower, "timeout") || strings.Contains(errLower, "deadline exceeded") {
 			g.keyPool.ReportUnavailable503(leased.ID, err.Error())
 			time.Sleep(1 * time.Second)
 			continue // Мгновенно переключаемся на следующий ключ в пуле!
@@ -141,11 +142,15 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 }
 
 func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
-	// Список моделей для последовательной проверки при 404 (недоступна) или 503 (перегружена)
-	modelsToTry := []string{g.model}
-	candidates := []string{"gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.8-flash"}
+	// Список моделей для последовательной проверки при 404, 503 или таймауте
+	initialModel := g.model
+	if initialModel == "" || initialModel == "gemini-3.8-flash" {
+		initialModel = defaultGeminiModel
+	}
+	modelsToTry := []string{initialModel}
+	candidates := []string{"gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"}
 	for _, c := range candidates {
-		if c != g.model {
+		if c != initialModel {
 			modelsToTry = append(modelsToTry, c)
 		}
 	}
@@ -167,9 +172,10 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 		lastApiStatus = apiStatus
 		lastErr = err
 
-		// Пробуем следующую модель если Google вернул 404 (Not Found) ИЛИ 503 (модель перегружена/high demand)
+		// Пробуем следующую модель если Google вернул 404 (Not Found), 503 (high demand) или таймаут
 		errLower := strings.ToLower(err.Error() + " " + apiStatus)
-		if status == http.StatusNotFound || status == http.StatusServiceUnavailable || strings.Contains(errLower, "high demand") {
+		if status == http.StatusNotFound || status == http.StatusServiceUnavailable ||
+			strings.Contains(errLower, "high demand") || strings.Contains(errLower, "timeout") || strings.Contains(errLower, "deadline exceeded") {
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
