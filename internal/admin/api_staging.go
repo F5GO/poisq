@@ -38,7 +38,7 @@ func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) 
 	var cleanItems []db.StagingChangeRecord
 	for _, item := range items {
 		if item.ChangeType == "cover" && item.FolderPath != "" {
-			// 1. Проверка локальной обложки на диске
+			// 1. Проверка локальной обложки на диске (или встроенной в теги аудиофайла)
 			var cur map[string]any
 			if err := json.Unmarshal([]byte(item.CurrentJSON), &cur); err == nil {
 				hasCov, _ := cur["hasCover"].(bool)
@@ -57,6 +57,19 @@ func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) 
 						if updatedBytes, err := json.Marshal(cur); err == nil {
 							item.CurrentJSON = string(updatedBytes)
 							_ = s.stagingRepo.UpdateCurrentJSON(item.ID, string(updatedBytes))
+						}
+					} else {
+						targetDir := metadata.ResolveFuzzyDirectory(root, item.FolderPath)
+						if targetDir == "" {
+							targetDir = item.FolderPath
+						}
+						if imgBytes, _ := metadata.ExtractCoverFromAudioOrDir(targetDir); len(imgBytes) > 0 {
+							cur["hasCover"] = true
+							cur["existingFile"] = targetDir
+							if updatedBytes, err := json.Marshal(cur); err == nil {
+								item.CurrentJSON = string(updatedBytes)
+								_ = s.stagingRepo.UpdateCurrentJSON(item.ID, string(updatedBytes))
+							}
 						}
 					}
 				}

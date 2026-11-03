@@ -554,9 +554,7 @@ async function openTrackDrawer(trackId) {
 
   if (titleEl) titleEl.textContent = track.title || "Без названия";
 
-  const coverUrl = track.folderPath
-    ? `/api/v1/covers/local?path=${encodeURIComponent(track.folderPath)}`
-    : "";
+  const coverUrl = `/api/v1/navidrome/album-cover?album=${encodeURIComponent(track.album || "")}&artist=${encodeURIComponent(track.artist || "")}&path=${encodeURIComponent(track.folderPath || "")}&trackId=${encodeURIComponent(track.id || "")}`;
 
   let lyricsStatusDesc = "Отсутствует";
   if (track.lyricsStatus === "verified") lyricsStatusDesc = "✓ Проверен";
@@ -1061,8 +1059,8 @@ async function loadStagingData() {
       const curHasCover = curObj.hasCover;
       const curRes = curHasCover && curObj.width > 0 ? `${curObj.width}×${curObj.height} px` : (curHasCover ? "Найден" : "Поиск на диске...");
       const curCoverSrc = curObj.existingFile
-        ? `/api/v1/covers/local?path=${encodeURIComponent(curObj.existingFile)}`
-        : (path ? `/api/v1/covers/local?path=${encodeURIComponent(path)}` : "");
+        ? `/api/v1/covers/local?path=${encodeURIComponent(curObj.existingFile)}&album=${encodeURIComponent(curObj.album || propObj.album || "")}&artist=${encodeURIComponent(curObj.artist || propObj.artist || "")}`
+        : (path ? `/api/v1/covers/local?path=${encodeURIComponent(path)}&album=${encodeURIComponent(curObj.album || propObj.album || "")}&artist=${encodeURIComponent(curObj.artist || propObj.artist || "")}` : "");
 
       const chosenCover = window.selectedCovers?.[item.id] || propObj.coverUrl;
       const propRes = propObj.width && propObj.height ? `${propObj.width}×${propObj.height} px` : "3000×3000 px HD";
@@ -1713,7 +1711,6 @@ async function resetFullDatabase() {
     showToast(`✓ База успешно сброшена! Синхронизировано треков: ${res.syncedTracks || 0}`, "success");
     await loadStagingData();
     await loadLibraryData();
-    await loadHealthStats();
   } catch (err) {
     showToast(`Ошибка сброса базы: ${err.message}`, "error");
   } finally {
@@ -1730,7 +1727,7 @@ async function rescanStagingAudit() {
     await fetchApi("/scan/audit", "POST", { limitFolders: 50 });
     setTimeout(async () => {
       await loadStagingData();
-      await loadHealthStats();
+      await loadLibraryData();
     }, 2000);
   } catch (err) {
     showToast(`Ошибка запуска аудита: ${err.message}`, "error");

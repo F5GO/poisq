@@ -146,7 +146,22 @@ func TestAdminServerEndToEnd(t *testing.T) {
 		t.Fatalf("expected 200 OK on /api/v1/covers/candidates, got %d", recCand.Code)
 	}
 
-	// 7. Проверка полного сброса БД (/api/v1/db/reset)
+	// 7. Проверка получения обложки альбома и фото исполнителя (включая кириллицу и подпапки)
+	reqAlbCover := httptest.NewRequest(http.MethodGet, "/api/v1/navidrome/album-cover?album=%D0%93%D1%80%D1%83%D0%BF%D0%BF%D0%B0+%D0%BA%D1%80%D0%BE%D0%B2%D0%B8&artist=%D0%9A%D0%B8%D0%BD%D0%BE", nil)
+	recAlbCover := httptest.NewRecorder()
+	srv.ServeHTTP(recAlbCover, reqAlbCover)
+	if recAlbCover.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on /api/v1/navidrome/album-cover, got %d: %s", recAlbCover.Code, recAlbCover.Body.String())
+	}
+
+	reqArtImg := httptest.NewRequest(http.MethodGet, "/api/v1/navidrome/artist-image?artist=%D0%9A%D0%B8%D0%BD%D0%BE", nil)
+	recArtImg := httptest.NewRecorder()
+	srv.ServeHTTP(recArtImg, reqArtImg)
+	if recArtImg.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on /api/v1/navidrome/artist-image, got %d: %s", recArtImg.Code, recArtImg.Body.String())
+	}
+
+	// 8. Проверка полного сброса БД (/api/v1/db/reset)
 	srv.SetPoisqDB(poisqDB)
 	reqReset := httptest.NewRequest(http.MethodPost, "/api/v1/db/reset", strings.NewReader(`{"keepKeys":true}`))
 	recReset := httptest.NewRecorder()

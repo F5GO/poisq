@@ -136,6 +136,9 @@ func main() {
 	)
 	adminHandler.SetMetadataArbiter(metadataArbiter)
 	adminHandler.SetPoisqDB(poisqDB)
+	if cfg.NavidromeURL != nil {
+		adminHandler.SetNavidromeURL(cfg.NavidromeURL.String())
+	}
 	adminHTTPServer := &http.Server{
 		Addr:              cfg.AdminListenAddr,
 		Handler:           adminHandler,
