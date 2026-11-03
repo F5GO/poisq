@@ -135,6 +135,7 @@ func main() {
 		func() (*sql.DB, error) { return db.OpenDatabase(cfg.NavidromeDBPath) },
 	)
 	adminHandler.SetMetadataArbiter(metadataArbiter)
+	adminHandler.SetPoisqDB(poisqDB)
 	adminHTTPServer := &http.Server{
 		Addr:              cfg.AdminListenAddr,
 		Handler:           adminHandler,

@@ -134,3 +134,38 @@ func initPoisqSchema(sqliteDB *sql.DB) error {
 	_, err := sqliteDB.Exec(schema)
 	return err
 }
+
+// ResetDatabase выполняет полный сброс базы данных poisq.db:
+// очищает таблицы staging_changes, tracks, lyrics_jobs и provider_cache.
+// Если keepAPIKeys == true, сохраняет настроенные ключи Gemini/Groq.
+func ResetDatabase(db *sql.DB, keepAPIKeys bool) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	tables := []string{"staging_changes", "tracks", "lyrics_jobs", "provider_cache"}
+	if !keepAPIKeys {
+		tables = append(tables, "api_keys")
+	}
+
+	for _, tbl := range tables {
+		if _, err := tx.Exec("DELETE FROM " + tbl); err != nil {
+			return fmt.Errorf("ошибка очистки таблицы %s: %w", tbl, err)
+		}
+	}
+
+	// Сброс автоинкрементов в sqlite_sequence
+	for _, tbl := range tables {
+		_, _ = tx.Exec("DELETE FROM sqlite_sequence WHERE name = ?", tbl)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Сжимаем страницы SQLite
+	_, _ = db.Exec("VACUUM;")
+	return nil
+}
