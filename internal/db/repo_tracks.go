@@ -120,6 +120,78 @@ func (r *TrackRepository) UpsertTrack(t TrackRecord) error {
 	return err
 }
 
+// UpsertTracksBatch пакетно сохраняет срез записей треков внутри единой транзакции SQLite,
+// предотвращая зависание и снижая нагрузку на диск в десятки раз при первичной синхронизации.
+func (r *TrackRepository) UpsertTracksBatch(tracks []TrackRecord) error {
+	if len(tracks) == 0 {
+		return nil
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO tracks (
+			id, file_path, folder_path, artist, album, album_artist, title,
+			track_number, year, duration, lang_code, has_cover, cover_width, cover_height,
+			is_mojibake, lyrics_status, active_source, active_lyrics, lrc_file_synced, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			file_path = excluded.file_path,
+			folder_path = excluded.folder_path,
+			artist = excluded.artist,
+			album = excluded.album,
+			album_artist = excluded.album_artist,
+			title = excluded.title,
+			track_number = excluded.track_number,
+			year = excluded.year,
+			duration = excluded.duration,
+			has_cover = CASE WHEN excluded.has_cover = 1 THEN 1 ELSE tracks.has_cover END,
+			cover_width = CASE WHEN excluded.cover_width > 0 THEN excluded.cover_width ELSE tracks.cover_width END,
+			cover_height = CASE WHEN excluded.cover_height > 0 THEN excluded.cover_height ELSE tracks.cover_height END,
+			is_mojibake = excluded.is_mojibake,
+			updated_at = excluded.updated_at
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	now := time.Now().Unix()
+	for _, t := range tracks {
+		hasCoverInt := 0
+		if t.HasCover {
+			hasCoverInt = 1
+		}
+		mojibakeInt := 0
+		if t.IsMojibake {
+			mojibakeInt = 1
+		}
+		lrcSyncedInt := 0
+		if t.LrcFileSynced {
+			lrcSyncedInt = 1
+		}
+		status := t.LyricsStatus
+		if status == "" {
+			status = "none"
+		}
+
+		_, err := stmt.Exec(
+			t.ID, t.FilePath, t.FolderPath, t.Artist, t.Album, t.AlbumArtist, t.Title,
+			t.TrackNumber, t.Year, t.Duration, t.LangCode, hasCoverInt, t.CoverWidth, t.CoverHeight,
+			mojibakeInt, status, t.ActiveSource, t.ActiveLyrics, lrcSyncedInt, now,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
 // UpdateLyrics обновляет статус, источник и содержимое текста для трека.
 func (r *TrackRepository) UpdateLyrics(trackID, status, source, content, langCode string, lrcWritten bool) error {
 	now := time.Now().Unix()

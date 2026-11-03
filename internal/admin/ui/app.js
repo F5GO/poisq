@@ -57,21 +57,35 @@ const state = {
 // Вспомогательные утилиты и Toast-уведомления
 // -----------------------------------------------------------------------------
 
-async function fetchApi(endpoint, method = "GET", payload = null) {
+async function fetchApi(endpoint, method = "GET", payload = null, timeoutMs = 20000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   const options = {
     method,
-    headers: { "Content-Type": "application/json" }
+    headers: { "Content-Type": "application/json" },
+    signal: controller.signal
   };
   if (payload !== null) {
     options.body = JSON.stringify(payload);
   }
-  const res = await fetch("/api/v1" + endpoint, options);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const errorMsg = data.error || `HTTP ${res.status}: ${res.statusText || "Ошибка сервера"}`;
-    throw new Error(errorMsg);
+
+  try {
+    const res = await fetch("/api/v1" + endpoint, options);
+    clearTimeout(timer);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const errorMsg = data.error || `HTTP ${res.status}: ${res.statusText || "Ошибка сервера"}`;
+      throw new Error(errorMsg);
+    }
+    return data;
+  } catch (err) {
+    clearTimeout(timer);
+    if (err.name === "AbortError") {
+      throw new Error("Таймаут запроса к серверу (сервер занят обработкой)");
+    }
+    throw err;
   }
-  return data;
 }
 
 function showToast(message, type = "info") {
@@ -483,9 +497,9 @@ async function openTrackDrawer(trackId) {
     : "";
 
   let lyricsStatusDesc = "Отсутствует";
-  if (t.lyricsStatus === "verified") lyricsStatusDesc = "✓ Проверен";
-  else if (t.lyricsStatus === "synced") lyricsStatusDesc = "Синхронизирован (.lrc)";
-  else if (t.lyricsStatus === "plain") lyricsStatusDesc = "Обычный текст (без таймкодов)";
+  if (track.lyricsStatus === "verified") lyricsStatusDesc = "✓ Проверен";
+  else if (track.lyricsStatus === "synced") lyricsStatusDesc = "Синхронизирован (.lrc)";
+  else if (track.lyricsStatus === "plain") lyricsStatusDesc = "Обычный текст (без таймкодов)";
 
   const content = track.activeLyrics || track.lyricsBody || "";
 

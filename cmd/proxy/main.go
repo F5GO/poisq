@@ -100,28 +100,18 @@ func main() {
 		jobRepo, trackRepo, cacheRepo, keyPoolMgr, tournament, lyricsCleaner, karaokePipeline, lrcWriter,
 	)
 
-	// 5. Подключение к SQLite Navidrome и первичная синхронизация
-	sqliteDB, err := db.OpenDatabase(cfg.NavidromeDBPath)
-	if err != nil {
-		log.Printf("[WARN] База данных Navidrome недоступна на старте: %v. Поиск будет работать в базовом режиме до появления БД", err)
-	} else {
-		enricher := db.NewEnricher(sqliteDB, cfg.EnrichSQLiteFullText)
-		if err := enricher.InitSchema(); err != nil {
-			log.Printf("[WARN] Не удалось инициализировать схему обогатителя: %v", err)
+	// 5. Быстрая загрузка поискового словаря из SQLite Navidrome (без блокировки старта серверов)
+	if sqliteDB, err := db.OpenDatabase(cfg.NavidromeDBPath); err == nil {
+		if items, err := db.LoadLibraryVocabulary(sqliteDB); err == nil {
+			dict.Rebuild(items)
+			log.Printf("[INFO] Поисковый словарь загружен на старте (%d уникальных слов)", dict.TotalWords())
 		}
-		syncData(sqliteDB, dict, enricher, libraryScanner, cfg)
 		_ = sqliteDB.Close()
+	} else {
+		log.Printf("[WARN] База данных Navidrome недоступна на старте: %v. Поиск будет работать в базовом режиме до появления БД", err)
 	}
 
-	// 6. Запуск фоновых процессов (воркер очереди LRC/Karaoke, синхронизация словаря и алиасов)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	queueWorker.Start(ctx)
-	go runBackgroundSync(ctx, cfg, dict, libraryScanner)
-	aliasMgr.StartDailySync(ctx)
-
-	// 7. Запуск Публичного HTTP Reverse Proxy (:4534 — ТОЛЬКО умный поиск, lyrics отдает сам Navidrome)
+	// 6. Запуск Публичного HTTP Reverse Proxy (:4534 — ТОЛЬКО умный поиск)
 	proxyServer := proxy.NewServer(cfg.NavidromeURL, engine, dict, aliasMgr, cfg.EnableDebugAPI)
 	publicHTTPServer := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -137,7 +127,7 @@ func main() {
 		}
 	}()
 
-	// 8. Запуск Внутреннего HTTP-сервера панели управления (:4535)
+	// 7. Мгновенный запуск Внутреннего HTTP-сервера панели управления (:4535)
 	adminHandler := admin.NewAdminServer(
 		trackRepo, stagingRepo, jobRepo, cacheRepo, keyPoolMgr,
 		libraryScanner, stagingService, lrcWriter, queueWorker,
@@ -157,6 +147,26 @@ func main() {
 		if err := adminHTTPServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("[FATAL] Ошибка административного HTTP-сервера: %v", err)
 		}
+	}()
+
+	// 8. Запуск фоновых процессов (воркер очереди LRC/Karaoke, асинхронная синхронизация каталога и алиасов)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	queueWorker.Start(ctx)
+	aliasMgr.StartDailySync(ctx)
+
+	// Первичная фоновая синхронизация и периодический цикл обновления
+	go func() {
+		if sqliteDB, err := db.OpenDatabase(cfg.NavidromeDBPath); err == nil {
+			enricher := db.NewEnricher(sqliteDB, cfg.EnrichSQLiteFullText)
+			if err := enricher.InitSchema(); err != nil {
+				log.Printf("[WARN] Не удалось инициализировать схему обогатителя: %v", err)
+			}
+			syncData(sqliteDB, dict, enricher, libraryScanner, cfg)
+			_ = sqliteDB.Close()
+		}
+		runBackgroundSync(ctx, cfg, dict, libraryScanner)
 	}()
 
 	// 9. Ожидание сигнала завершения работы
