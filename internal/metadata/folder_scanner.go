@@ -131,6 +131,7 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 		h   int
 	})
 
+	batch := make([]db.TrackRecord, 0, 500)
 	count := 0
 	for rows.Next() {
 		var id, relOrAbsPath, title, artist, album, albumArtist string
@@ -200,8 +201,12 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 			LrcFileSynced: lrcSynced,
 		}
 
-		if err := s.tracksRepo.UpsertTrack(rec); err == nil {
-			count++
+		batch = append(batch, rec)
+		count++
+
+		if len(batch) >= 500 {
+			_ = s.tracksRepo.UpsertTracksBatch(batch)
+			batch = batch[:0]
 		}
 
 		// Если обнаружена битая кодировка CP1251 — сразу формируем предложение в Staging!
@@ -230,6 +235,10 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 				ProposedJSON: string(propBytes),
 			})
 		}
+	}
+
+	if len(batch) > 0 {
+		_ = s.tracksRepo.UpsertTracksBatch(batch)
 	}
 
 	return count, rows.Err()
