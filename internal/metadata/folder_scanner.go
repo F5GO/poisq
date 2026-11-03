@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/lyrics"
 )
@@ -86,6 +87,7 @@ type LibraryScanner struct {
 	mbClient    *MusicBrainzClient
 	acoustID    *AcoustIDClient
 	coverFetch  *CoverFetcher
+	arbiter     *ai.MetadataArbiter
 }
 
 // NewLibraryScanner создает новый экземпляр сканера медиатеки.
@@ -350,7 +352,40 @@ func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (in
 		// 2. Проверка обложки папки (если нет качественной cover.jpg >= 500x500 — ищем в Cover Art Archive / iTunes 3000x3000)
 		hasCov, w, h, existingFile := s.coverFetch.InspectFolderCover(folderPath)
 		if !hasCov || w < 500 || h < 500 {
-			if cand, err := s.coverFetch.FindHighResCover(ctx, releaseMBID, consensus.DominantArtist, consensus.DominantAlbum); err == nil && cand != nil {
+			var cand *CoverCandidate
+			var aiExplanation, canonicalAlbum, releaseType string
+
+			isDisputed := IsSuspectedSingleOrDisputed(folderPath, folderTracks)
+			if isDisputed && s.arbiter != nil {
+				// Если это сингл или имя папки содержит дефис/тире — сразу привлекаем контекстный AI-арбитраж
+				if aiCand, decision, err := s.ResolveFolderCoverWithAI(ctx, folderPath, folderTracks, releaseMBID); err == nil && aiCand != nil {
+					cand = aiCand
+					if decision != nil {
+						aiExplanation = decision.Explanation
+						canonicalAlbum = decision.CanonicalAlbum
+						releaseType = decision.ReleaseType
+					}
+				}
+			}
+
+			// Если AI не привлекался или не нашел кандидата — стандартный поиск
+			if cand == nil {
+				cand, _ = s.coverFetch.FindHighResCover(ctx, releaseMBID, consensus.DominantArtist, consensus.DominantAlbum)
+			}
+
+			// Если стандартный поиск не дал результатов, пробуем AI как фоллбэк
+			if cand == nil && !isDisputed && s.arbiter != nil {
+				if aiCand, decision, err := s.ResolveFolderCoverWithAI(ctx, folderPath, folderTracks, releaseMBID); err == nil && aiCand != nil {
+					cand = aiCand
+					if decision != nil {
+						aiExplanation = decision.Explanation
+						canonicalAlbum = decision.CanonicalAlbum
+						releaseType = decision.ReleaseType
+					}
+				}
+			}
+
+			if cand != nil {
 				// Защита: если существующая обложка уже больше или равна по разрешению, не меняем на худшую
 				if hasCov && cand.Width <= w && cand.Height <= h {
 					continue
@@ -363,15 +398,24 @@ func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (in
 					"artist":       consensus.DominantArtist,
 					"album":        consensus.DominantAlbum,
 				})
+
+				reason := "Обложка высокого разрешения (" + cand.Source + ")"
+				if aiExplanation != "" {
+					reason = "Подобрано через AI: " + canonicalAlbum + " (" + aiExplanation + ")"
+				}
+
 				propCovJSON, _ := json.Marshal(map[string]any{
-					"coverUrl":     cand.URL,
-					"source":       cand.Source,
-					"width":        cand.Width,
-					"height":       cand.Height,
-					"artist":       consensus.DominantArtist,
-					"album":        consensus.DominantAlbum,
-					"reason":       "Обложка высокого разрешения (" + cand.Source + ")",
-					"alternatives": cand.Alternatives,
+					"coverUrl":       cand.URL,
+					"source":         cand.Source,
+					"width":          cand.Width,
+					"height":         cand.Height,
+					"artist":         consensus.DominantArtist,
+					"album":          consensus.DominantAlbum,
+					"canonicalAlbum": canonicalAlbum,
+					"releaseType":    releaseType,
+					"aiExplanation":  aiExplanation,
+					"reason":         reason,
+					"alternatives":   cand.Alternatives,
 				})
 				conf := cand.Score
 				if conf <= 0 {
