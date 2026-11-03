@@ -43,8 +43,12 @@ func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) 
 			if err := json.Unmarshal([]byte(item.CurrentJSON), &cur); err == nil {
 				hasCov, _ := cur["hasCover"].(bool)
 				existingFile, _ := cur["existingFile"].(string)
+				root := ""
+				if s.guard != nil {
+					root = s.guard.Root()
+				}
 				if !hasCov || existingFile == "" {
-					if foundFile := metadata.FindLocalCoverFile(item.FolderPath); foundFile != "" {
+					if foundFile := metadata.FindCoverAnywhere(root, item.FolderPath); foundFile != "" {
 						cur["hasCover"] = true
 						cur["existingFile"] = foundFile
 						dim := metadata.DetectImageDimensions(foundFile)
@@ -52,6 +56,9 @@ func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) 
 						cur["height"] = dim.Height
 						if updatedBytes, err := json.Marshal(cur); err == nil {
 							item.CurrentJSON = string(updatedBytes)
+							_ = s.stagingRepo.UpdateProposedJSON(item.ID, item.ProposedJSON)
+							// Обновляем current_json в БД
+							_, _ = s.stagingRepo.CreateProposal(item)
 						}
 					}
 				}

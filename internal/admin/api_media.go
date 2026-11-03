@@ -7,7 +7,6 @@ package admin
 
 import (
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -66,31 +65,26 @@ func (s *AdminServer) handleLocalCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	root := s.guard.Root()
 	safePath, err := s.guard.ValidateTarget(coverPath, false)
+	searchTarget := safePath
 	if err != nil {
-		writeJSONError(w, http.StatusForbidden, "access denied: "+err.Error())
+		searchTarget = filepath.Join(root, strings.TrimPrefix(coverPath, "/"))
+	}
+
+	found := metadata.FindCoverAnywhere(root, searchTarget)
+	if found == "" && searchTarget != coverPath {
+		found = metadata.FindCoverAnywhere(root, coverPath)
+	}
+
+	if found != "" {
+		if validated, err := s.guard.ValidateTarget(found, false); err == nil {
+			found = validated
+		}
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		http.ServeFile(w, r, found)
 		return
 	}
 
-	// Если передан путь к папке альбома, автоматически ищем файл обложки внутри
-	if fi, err := os.Stat(safePath); err == nil && fi.IsDir() {
-		found := metadata.FindLocalCoverFile(safePath)
-		if found != "" {
-			http.ServeFile(w, r, found)
-			return
-		}
-		writeJSONError(w, http.StatusNotFound, "cover not found in folder")
-		return
-	} else if err != nil {
-		// Если файла по указанному пути нет, проверяем папку на наличие других обложек (folder.jpg, cover.png)
-		dir := filepath.Dir(safePath)
-		if found := metadata.FindLocalCoverFile(dir); found != "" {
-			http.ServeFile(w, r, found)
-			return
-		}
-		writeJSONError(w, http.StatusNotFound, "cover file not found")
-		return
-	}
-
-	http.ServeFile(w, r, safePath)
+	writeJSONError(w, http.StatusNotFound, "cover file not found")
 }
