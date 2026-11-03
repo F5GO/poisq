@@ -91,6 +91,11 @@ func main() {
 	jobRepo := db.NewJobRepository(poisqDB)
 	cacheRepo := db.NewProviderCacheRepository(poisqDB)
 
+	// Автоматическая дедупликация базы фонотеки при запуске
+	if del, err := trackRepo.DeduplicateTracks(); err == nil && del > 0 {
+		log.Printf("[INFO] [DEDUP] Выполнена дедупликация базы фонотеки: удалено %d дубликатов", del)
+	}
+
 	keyPoolMgr := keypool.NewManager(keyRepo, keyCipher)
 	tournament := lyrics.NewTournamentOrchestrator(cacheRepo, keyPoolMgr)
 	lrcWriter := lyrics.NewAtomicLRCWriter(pathGuard)

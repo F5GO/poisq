@@ -61,15 +61,15 @@ func IsCopyPath(pathStr string) bool {
 	return false
 }
 
-// TrackDedupKey строит нормализованный ключ трека для выявления дубликатов с погрешностью длительности 2 секунды.
+// TrackDedupKey строит нормализованный ключ трека для выявления дубликатов с допуском хронометража.
 func TrackDedupKey(artist, title string, durationSec int) string {
 	a := strings.ToLower(strings.TrimSpace(NormalizeNFC(NormalizePathSpaces(artist))))
 	t := strings.ToLower(strings.TrimSpace(NormalizeNFC(NormalizePathSpaces(title))))
 	durBucket := 0
 	if durationSec > 0 {
-		durBucket = durationSec / 2
+		durBucket = (durationSec + 1) / 4
 	}
-	return a + "|" + t + "|" + strings.TrimSpace(string(rune('0'+durBucket%10))) + fmt.Sprintf("|%d", durBucket)
+	return a + "|" + t + fmt.Sprintf("|%d", durBucket)
 }
 
 // GeneratePathVariants создает упорядоченный список потенциальных путей к папке на диске,
