@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/metadata"
@@ -41,6 +42,12 @@ func NewStagingService(
 // ApplyProposal применяет выбранное пользователем Staging-предложение (обновление тегов или скачивание обложки)
 // и сохраняет слепок исходного состояния для кнопки «Откатить (Undo)».
 func (s *StagingService) ApplyProposal(ctx context.Context, proposalID int64) error {
+	return s.ApplyProposalWithCustomCover(ctx, proposalID, "")
+}
+
+// ApplyProposalWithCustomCover применяет предложение, позволяя переопределить URL обложки
+// на альтернативный вариант, выбранный пользователем в веб-интерфейсе.
+func (s *StagingService) ApplyProposalWithCustomCover(ctx context.Context, proposalID int64, customCoverURL string) error {
 	rec, err := s.stagingRepo.GetByID(proposalID)
 	if err != nil {
 		return fmt.Errorf("предложение #%d не найдено: %w", proposalID, err)
@@ -51,14 +58,18 @@ func (s *StagingService) ApplyProposal(ctx context.Context, proposalID int64) er
 
 	// Кейс 1: Скачивание и установка обложки альбома (scope = folder, change_type = cover)
 	if rec.ChangeType == "cover" {
-		var prop struct {
-			CoverURL string `json:"coverUrl"`
-		}
-		if err := json.Unmarshal([]byte(rec.ProposedJSON), &prop); err != nil || prop.CoverURL == "" {
-			return fmt.Errorf("некорректный URL обложки в предложении #%d", proposalID)
+		targetURL := strings.TrimSpace(customCoverURL)
+		if targetURL == "" {
+			var prop struct {
+				CoverURL string `json:"coverUrl"`
+			}
+			if err := json.Unmarshal([]byte(rec.ProposedJSON), &prop); err != nil || prop.CoverURL == "" {
+				return fmt.Errorf("некорректный URL обложки в предложении #%d", proposalID)
+			}
+			targetURL = prop.CoverURL
 		}
 
-		w, h, err := s.coverFetch.DownloadAndSaveAtomically(ctx, rec.FolderPath, prop.CoverURL)
+		w, h, err := s.coverFetch.DownloadAndSaveAtomically(ctx, rec.FolderPath, targetURL)
 		if err != nil {
 			return err
 		}

@@ -184,6 +184,9 @@ function initNavigation() {
   // Фоновые задачи
   document.getElementById("btn-toggle-worker-pause")?.addEventListener("click", toggleWorkerPause);
   document.getElementById("btn-refresh-jobs")?.addEventListener("click", loadJobsData);
+
+  // Инициализация Lightbox для обложек
+  initCoverLightboxEvents();
 }
 
 function switchTab(tabName) {
@@ -959,8 +962,9 @@ async function loadStagingData() {
       const curRes = curHasCover && curObj.width > 0 ? `${curObj.width}×${curObj.height} px` : "Отсутствует";
       const curCoverSrc = curObj.existingFile
         ? `/api/v1/covers/local?path=${encodeURIComponent(curObj.existingFile)}`
-        : "";
+        : (path ? `/api/v1/covers/local?path=${encodeURIComponent(path)}` : "");
 
+      const chosenCover = window.selectedCovers?.[item.id] || propObj.coverUrl;
       const propRes = propObj.width && propObj.height ? `${propObj.width}×${propObj.height} px` : "3000×3000 px HD";
       const propSource = propObj.source === "itunes" ? "Apple Music / iTunes" : "Cover Art Archive";
 
@@ -981,20 +985,52 @@ async function loadStagingData() {
             <div class="cover-side-card">
               <div class="cover-side-title">Было (В папке альбома)</div>
               ${curCoverSrc 
-                ? `<img src="${curCoverSrc}" class="cover-side-img" alt="Текущая" onerror="this.style.display='none'"/>` 
-                : `<div class="cover-side-img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);">Нет файла</div>`
+                ? `
+                  <img 
+                    src="${curCoverSrc}" 
+                    id="cur-cover-img-${item.id}"
+                    class="cover-side-img" 
+                    alt="Текущая" 
+                    title="Нажмите для полноэкранного просмотра"
+                    onclick="openCoverLightbox(${item.id}, 0)"
+                    onload="const m = document.getElementById('cur-meta-${item.id}'); if (m && this.naturalWidth) m.innerText = 'Файл: Найден на диске · ' + this.naturalWidth + '×' + this.naturalHeight + ' px';"
+                    onerror="this.style.display='none'; const emp = document.getElementById('cur-empty-${item.id}'); if (emp) emp.style.display='flex';"
+                  />
+                  <div id="cur-empty-${item.id}" class="cover-side-img" style="display:none;align-items:center;justify-content:center;color:var(--text-muted);" onclick="openCoverLightbox(${item.id}, 0)">Нет файла</div>
+                ` 
+                : `<div class="cover-side-img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);" onclick="openCoverLightbox(${item.id}, 0)">Нет файла</div>`
               }
-              <div class="cover-side-meta">Файл: ${curHasCover ? "Найден" : "Отсутствует"} · ${curRes}</div>
+              <div class="cover-side-zoom-hint">🔍 Нажмите для увеличения</div>
+              <div class="cover-side-meta" id="cur-meta-${item.id}">Файл: ${curHasCover ? "Найден" : "Отсутствует"} · ${curRes}</div>
             </div>
 
             <div class="cover-side-card" style="border-color: rgba(16, 185, 129, 0.4);">
               <div class="cover-side-title text-emerald">Станет (Новый cover.jpg)</div>
-              ${propObj.coverUrl 
-                ? `<img src="${escapeHtml(propObj.coverUrl)}" class="cover-side-img" alt="Новая" loading="lazy"/>` 
+              ${chosenCover 
+                ? `
+                  <img 
+                    src="${escapeHtml(chosenCover)}" 
+                    id="prop-cover-img-${item.id}" 
+                    class="cover-side-img" 
+                    alt="Новая" 
+                    title="Нажмите для полноэкранного просмотра"
+                    loading="lazy" 
+                    onclick="openCoverLightbox(${item.id}, 1)"
+                  />
+                ` 
                 : `<div class="cover-side-img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);">♪</div>`
               }
-              <div class="cover-side-meta">${propRes} · ${propSource}</div>
+              <div class="cover-side-zoom-hint">🔍 Нажмите для увеличения</div>
+              <div class="cover-side-meta" id="prop-cover-meta-${item.id}">${propRes} · ${propSource}</div>
             </div>
+          </div>
+
+          <!-- Альтернативные варианты обложек -->
+          <div class="cover-candidates-section">
+            <button class="cover-candidates-toggle-btn" onclick="toggleCoverCandidates(${item.id}, '${escapeHtml(propObj.artist || "")}', '${escapeHtml(propObj.album || "")}')">
+              📷 Другие варианты обложек <span id="cand-count-${item.id}"></span>
+            </button>
+            <div id="candidates-container-${item.id}" class="cover-candidates-grid hidden"></div>
           </div>
 
           <div style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
@@ -1080,13 +1116,309 @@ async function loadStagingData() {
 
 async function applyStaging(id) {
   try {
-    await fetchApi("/staging/apply", "POST", { id });
+    const payload = { id };
+    if (window.selectedCovers && window.selectedCovers[id]) {
+      payload.coverUrl = window.selectedCovers[id];
+    }
+    await fetchApi("/staging/apply", "POST", payload);
     state.lastAppliedStagingId = id;
     showToast("✓ Изменения успешно применены в файл", "success");
     await loadStagingData();
   } catch (err) {
     showToast(`Ошибка применения: ${err.message}`, "error");
   }
+}
+
+// -----------------------------------------------------------------------------
+// Выбор альтернативных вариантов обложек
+// -----------------------------------------------------------------------------
+window.selectedCovers = window.selectedCovers || {};
+window.coverCandidatesCache = window.coverCandidatesCache || {};
+
+async function toggleCoverCandidates(itemId, artist, album) {
+  const container = document.getElementById(`candidates-container-${itemId}`);
+  if (!container) return;
+
+  if (!container.classList.contains("hidden")) {
+    container.classList.add("hidden");
+    return;
+  }
+
+  container.classList.remove("hidden");
+  if (container.children.length > 0) return;
+
+  container.innerHTML = `<div style="grid-column: 1/-1; padding: 12px; color: var(--text-muted); font-size: 12px; text-align: center;">Поиск доступных обложек в Apple Music и Cover Art Archive...</div>`;
+
+  try {
+    const item = (state.stagingItems || []).find(it => it.id === itemId);
+    let candidates = [];
+
+    // 1. Проверяем, были ли кандидаты уже прикреплены в proposedJson
+    if (item && item.proposedJson) {
+      try {
+        const prop = JSON.parse(item.proposedJson);
+        if (Array.isArray(prop.alternatives) && prop.alternatives.length > 0) {
+          candidates = [
+            { url: prop.coverUrl, source: prop.source, width: prop.width, height: prop.height, title: prop.album || album, artist: prop.artist || artist },
+            ...prop.alternatives
+          ];
+        }
+      } catch (e) {}
+    }
+
+    // 2. Если кандидатов нет в слепке, выполняем динамический запрос к /api/v1/covers/candidates
+    if (candidates.length <= 1) {
+      const resp = await fetchApi(`/covers/candidates?artist=${encodeURIComponent(artist)}&album=${encodeURIComponent(album)}`);
+      if (resp && Array.isArray(resp.candidates) && resp.candidates.length > 0) {
+        candidates = resp.candidates;
+      }
+    }
+
+    window.coverCandidatesCache[itemId] = candidates;
+
+    if (!candidates || candidates.length === 0) {
+      container.innerHTML = `<div style="grid-column: 1/-1; padding: 12px; color: var(--text-muted); font-size: 12px; text-align: center;">Других вариантов обложек не найдено.</div>`;
+      return;
+    }
+
+    const activeUrl = window.selectedCovers[itemId] || (item && JSON.parse(item.proposedJson || "{}").coverUrl);
+
+    container.innerHTML = candidates.map((cand, idx) => {
+      const isSel = cand.url === activeUrl;
+      const resText = cand.width && cand.height ? `${cand.width}×${cand.height} px` : "3000×3000 px";
+      const srcText = cand.source === "itunes" ? "Apple Music" : "Cover Art Archive";
+      return `
+        <div class="cover-cand-card ${isSel ? 'active' : ''}" id="cand-card-${itemId}-${idx}" onclick="selectCoverCandidate(${itemId}, ${idx})">
+          <img src="${escapeHtml(cand.url)}" class="cover-cand-thumb" alt="Вариант" loading="lazy" />
+          <div class="cover-cand-title" title="${escapeHtml(cand.title || album)}">${escapeHtml(cand.title || album)}</div>
+          <div class="cover-cand-meta">${escapeHtml(cand.artist || artist)}</div>
+          <div class="cover-cand-meta">${resText} · ${srcText}</div>
+          <button class="btn btn-secondary cover-cand-btn" style="pointer-events:none;">${isSel ? '✓ Выбрано' : 'Выбрать'}</button>
+        </div>
+      `;
+    }).join("");
+
+    const countBadge = document.getElementById(`cand-count-${itemId}`);
+    if (countBadge) countBadge.innerText = `(${candidates.length})`;
+
+  } catch (err) {
+    container.innerHTML = `<div style="grid-column: 1/-1; padding: 12px; color: var(--accent-danger); font-size: 12px; text-align: center;">Ошибка поиска вариантов: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function selectCoverCandidate(itemId, candIndex) {
+  const candidates = window.coverCandidatesCache[itemId];
+  if (!candidates || !candidates[candIndex]) return;
+
+  const cand = candidates[candIndex];
+  window.selectedCovers[itemId] = cand.url;
+
+  // Обновляем подсветку карточек вариантов
+  candidates.forEach((_, idx) => {
+    const el = document.getElementById(`cand-card-${itemId}-${idx}`);
+    if (el) {
+      if (idx === candIndex) {
+        el.classList.add("active");
+        const btn = el.querySelector(".cover-cand-btn");
+        if (btn) btn.innerText = "✓ Выбрано";
+      } else {
+        el.classList.remove("active");
+        const btn = el.querySelector(".cover-cand-btn");
+        if (btn) btn.innerText = "Выбрать";
+      }
+    }
+  });
+
+  // Мгновенно обновляем превью в карточке Staging
+  const propImg = document.getElementById(`prop-cover-img-${itemId}`);
+  if (propImg) propImg.src = cand.url;
+  const propMeta = document.getElementById(`prop-cover-meta-${itemId}`);
+  if (propMeta) {
+    const resText = cand.width && cand.height ? `${cand.width}×${cand.height} px` : "3000×3000 px HD";
+    const srcText = cand.source === "itunes" ? "Apple Music / iTunes" : "Cover Art Archive";
+    propMeta.innerText = `${resText} · ${srcText}`;
+  }
+
+  showToast(`Выбрана обложка: ${cand.title || "Альбом"}`, "info");
+}
+
+// -----------------------------------------------------------------------------
+// Полноэкранный Lightbox для просмотра и перелистывания обложек
+// -----------------------------------------------------------------------------
+window.lightboxState = {
+  slides: [],
+  currentIndex: 0,
+};
+
+function openCoverLightbox(itemId, initialIndex) {
+  const item = (state.stagingItems || []).find(it => it.id === itemId);
+  if (!item) return;
+
+  let curObj = {};
+  let propObj = {};
+  try { curObj = JSON.parse(item.currentJson || "{}"); } catch (e) {}
+  try { propObj = JSON.parse(item.proposedJson || "{}"); } catch (e) {}
+
+  const path = item.folderPath || item.targetId || "";
+  const curSrc = curObj.existingFile
+    ? `/api/v1/covers/local?path=${encodeURIComponent(curObj.existingFile)}`
+    : (path ? `/api/v1/covers/local?path=${encodeURIComponent(path)}` : "");
+  const curRes = curObj.width > 0 ? `${curObj.width}×${curObj.height} px` : "Локальный файл";
+
+  const chosenUrl = window.selectedCovers[itemId] || propObj.coverUrl;
+  const propRes = propObj.width > 0 ? `${propObj.width}×${propObj.height} px` : "3000×3000 px HD";
+  const propSource = propObj.source === "itunes" ? "Apple Music / iTunes" : "Cover Art Archive";
+
+  const slides = [
+    {
+      type: "current",
+      badgeTitle: "Было (В папке альбома)",
+      badgeClass: "badge-current",
+      res: curRes,
+      src: curSrc,
+      tabTitle: "Было",
+    },
+    {
+      type: "proposed",
+      badgeTitle: "Станет (Новый cover.jpg)",
+      badgeClass: "badge-proposed",
+      res: `${propRes} · ${propSource}`,
+      src: chosenUrl,
+      tabTitle: "Станет",
+    }
+  ];
+
+  // Добавляем альтернативные варианты в слайды, если они были найдены
+  const candidates = window.coverCandidatesCache[itemId];
+  if (candidates && candidates.length > 0) {
+    candidates.forEach((cand, idx) => {
+      if (cand.url !== chosenUrl) {
+        slides.push({
+          type: "candidate",
+          badgeTitle: `Вариант ${idx + 1} (${cand.title || 'Альбом'})`,
+          badgeClass: "badge-proposed",
+          res: `${cand.width}×${cand.height} px · ${cand.source === 'itunes' ? 'Apple Music' : 'Cover Art Archive'}`,
+          src: cand.url,
+          tabTitle: `Вариант ${idx + 1}`,
+        });
+      }
+    });
+  }
+
+  window.lightboxState.slides = slides;
+  window.lightboxState.currentIndex = Math.max(0, Math.min(initialIndex || 0, slides.length - 1));
+
+  renderLightboxSlide();
+
+  const modal = document.getElementById("modal-cover-lightbox");
+  if (modal) {
+    modal.classList.remove("hidden");
+    modal.focus();
+  }
+}
+
+function renderLightboxSlide() {
+  const { slides, currentIndex } = window.lightboxState;
+  if (!slides || slides.length === 0) return;
+
+  const slide = slides[currentIndex];
+  const typeBadge = document.getElementById("lightbox-badge-type");
+  const resBadge = document.getElementById("lightbox-badge-res");
+  const counter = document.getElementById("lightbox-counter");
+  const img = document.getElementById("lightbox-img");
+  const emptyState = document.getElementById("lightbox-empty-state");
+  const tabsContainer = document.getElementById("lightbox-tabs");
+
+  if (typeBadge) {
+    typeBadge.innerText = slide.badgeTitle;
+    typeBadge.className = `lightbox-badge ${slide.badgeClass || ''}`;
+  }
+  if (resBadge) resBadge.innerText = slide.res;
+  if (counter) counter.innerText = `${currentIndex + 1} / ${slides.length}`;
+
+  if (slide.src) {
+    img.style.display = "block";
+    img.src = slide.src;
+    img.onerror = () => {
+      img.style.display = "none";
+      if (emptyState) emptyState.classList.remove("hidden");
+    };
+    img.onload = () => {
+      if (emptyState) emptyState.classList.add("hidden");
+      if (img.naturalWidth && img.naturalHeight && resBadge) {
+        const parts = slide.res.split('·');
+        const srcPart = parts.length > 1 ? ` · ${parts[1].trim()}` : '';
+        resBadge.innerText = `${img.naturalWidth}×${img.naturalHeight} px${srcPart}`;
+      }
+    };
+    if (emptyState) emptyState.classList.add("hidden");
+  } else {
+    img.style.display = "none";
+    if (emptyState) emptyState.classList.remove("hidden");
+  }
+
+  // Обновляем нижние переключатели
+  if (tabsContainer) {
+    tabsContainer.innerHTML = slides.map((s, idx) => `
+      <button class="lightbox-tab ${idx === currentIndex ? 'active' : ''}" onclick="setCoverLightboxIndex(${idx})">
+        ${escapeHtml(s.tabTitle)}
+      </button>
+    `).join("");
+  }
+}
+
+function nextCoverLightbox() {
+  const { slides, currentIndex } = window.lightboxState;
+  if (!slides || slides.length === 0) return;
+  window.lightboxState.currentIndex = (currentIndex + 1) % slides.length;
+  renderLightboxSlide();
+}
+
+function prevCoverLightbox() {
+  const { slides, currentIndex } = window.lightboxState;
+  if (!slides || slides.length === 0) return;
+  window.lightboxState.currentIndex = (currentIndex - 1 + slides.length) % slides.length;
+  renderLightboxSlide();
+}
+
+function setCoverLightboxIndex(idx) {
+  const { slides } = window.lightboxState;
+  if (!slides || idx < 0 || idx >= slides.length) return;
+  window.lightboxState.currentIndex = idx;
+  renderLightboxSlide();
+}
+
+function closeCoverLightbox() {
+  const modal = document.getElementById("modal-cover-lightbox");
+  if (modal) {
+    modal.classList.add("hidden");
+  }
+}
+
+function initCoverLightboxEvents() {
+  document.getElementById("lightbox-btn-close")?.addEventListener("click", closeCoverLightbox);
+  document.getElementById("lightbox-btn-next")?.addEventListener("click", nextCoverLightbox);
+  document.getElementById("lightbox-btn-prev")?.addEventListener("click", prevCoverLightbox);
+  document.getElementById("lightbox-nav-left")?.addEventListener("click", prevCoverLightbox);
+  document.getElementById("lightbox-nav-right")?.addEventListener("click", nextCoverLightbox);
+
+  const modal = document.getElementById("modal-cover-lightbox");
+  modal?.addEventListener("click", (e) => {
+    if (e.target === modal || e.target.classList?.contains("lightbox-container") || e.target.classList?.contains("lightbox-body")) {
+      closeCoverLightbox();
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (!modal || modal.classList.contains("hidden")) return;
+    if (e.key === "Escape") {
+      closeCoverLightbox();
+    } else if (e.key === "ArrowRight") {
+      nextCoverLightbox();
+    } else if (e.key === "ArrowLeft") {
+      prevCoverLightbox();
+    }
+  });
 }
 
 async function dismissStaging(id) {

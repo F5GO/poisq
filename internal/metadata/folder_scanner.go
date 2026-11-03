@@ -364,20 +364,25 @@ func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (in
 					"album":        consensus.DominantAlbum,
 				})
 				propCovJSON, _ := json.Marshal(map[string]any{
-					"coverUrl": cand.URL,
-					"source":   cand.Source,
-					"width":    cand.Width,
-					"height":   cand.Height,
-					"artist":   consensus.DominantArtist,
-					"album":    consensus.DominantAlbum,
-					"reason":   "Обложка высокого разрешения (" + cand.Source + ")",
+					"coverUrl":     cand.URL,
+					"source":       cand.Source,
+					"width":        cand.Width,
+					"height":       cand.Height,
+					"artist":       consensus.DominantArtist,
+					"album":        consensus.DominantAlbum,
+					"reason":       "Обложка высокого разрешения (" + cand.Source + ")",
+					"alternatives": cand.Alternatives,
 				})
+				conf := cand.Score
+				if conf <= 0 {
+					conf = 95
+				}
 				if _, err := s.stagingRepo.CreateProposal(db.StagingChangeRecord{
 					Scope:        "folder",
 					TargetID:     folderPath,
 					FolderPath:   folderPath,
 					ChangeType:   "cover",
-					Confidence:   95,
+					Confidence:   conf,
 					CurrentJSON:  string(curCovJSON),
 					ProposedJSON: string(propCovJSON),
 				}); err == nil {

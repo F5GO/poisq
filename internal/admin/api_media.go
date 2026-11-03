@@ -7,7 +7,11 @@ package admin
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/F5GO/poisq/internal/metadata"
 )
 
 // handleTrackStream безопасно отдает аудиофайл браузеру с поддержкой Range-запросов
@@ -65,6 +69,26 @@ func (s *AdminServer) handleLocalCover(w http.ResponseWriter, r *http.Request) {
 	safePath, err := s.guard.ValidateTarget(coverPath, false)
 	if err != nil {
 		writeJSONError(w, http.StatusForbidden, "access denied: "+err.Error())
+		return
+	}
+
+	// Если передан путь к папке альбома, автоматически ищем файл обложки внутри
+	if fi, err := os.Stat(safePath); err == nil && fi.IsDir() {
+		found := metadata.FindLocalCoverFile(safePath)
+		if found != "" {
+			http.ServeFile(w, r, found)
+			return
+		}
+		writeJSONError(w, http.StatusNotFound, "cover not found in folder")
+		return
+	} else if err != nil {
+		// Если файла по указанному пути нет, проверяем папку на наличие других обложек (folder.jpg, cover.png)
+		dir := filepath.Dir(safePath)
+		if found := metadata.FindLocalCoverFile(dir); found != "" {
+			http.ServeFile(w, r, found)
+			return
+		}
+		writeJSONError(w, http.StatusNotFound, "cover file not found")
 		return
 	}
 
