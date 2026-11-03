@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	groqWhisperEndpoint = "https://api.groq.com/openai/v1/audio/transcriptions"
-	groqWhisperModel    = "whisper-large-v3-turbo"
+	groqWhisperEndpoint      = "https://api.groq.com/openai/v1/audio/transcriptions"
+	groqWhisperPrimaryModel  = "whisper-large-v3"
+	groqWhisperFallbackModel = "whisper-large-v3-turbo"
 )
 
 // WhisperWord содержит таймкод отдельного распознанного слова.
@@ -66,18 +67,28 @@ func NewGroqWhisperClient(keyPool *keypool.Manager) *GroqWhisperClient {
 	}
 }
 
-// TranscribeAudio отправляет Ogg Opus буфер в Groq (whisper-large-v3-turbo) и возвращает пословные и посегментные таймкоды.
-// Опциональный параметр promptHint передает первые строки текста песни для предотвращения галлюцинаций на музыке.
+// TranscribeAudio отправляет Ogg Opus буфер в Groq (whisper-large-v3 с фоллбэком на whisper-large-v3-turbo)
+// и возвращает пословные и посегментные DTW-таймкоды.
+// ВАЖНО: В Whisper поле prompt является контекстом предыдущего аудио-окна (prev_tokens).
+// Передача туда строк самой песни заставляет декодер считать, что первый куплет уже прозвучал до 00:00,
+// поэтому в prompt передается только нейтральный заголовок метаданных (Артист — Название) без строк песни.
 func (gw *GroqWhisperClient) TranscribeAudio(ctx context.Context, opusData []byte, langHint string, promptHint ...string) (*WhisperTranscriptionResult, error) {
 	const maxKeySwitches = 5
 
 	hintText := ""
 	if len(promptHint) > 0 {
-		hintText = strings.TrimSpace(promptHint[0])
-		// Ограничиваем длину подсказки по стандарту Whisper (~224 токена / 500 рун)
-		runes := []rune(hintText)
-		if len(runes) > 500 {
-			hintText = string(runes[:500])
+		rawHint := strings.TrimSpace(promptHint[0])
+		// Берем только первую строку (Артист — Название), категорически исключая строки текста песни,
+		// чтобы Whisper не посчитал первый куплет уже прозвучавшим в предыдущем 30-сек окне!
+		if idx := strings.IndexByte(rawHint, '\n'); idx != -1 {
+			rawHint = strings.TrimSpace(rawHint[:idx])
+		}
+		runes := []rune(rawHint)
+		if len(runes) > 90 {
+			rawHint = string(runes[:90])
+		}
+		if rawHint != "" {
+			hintText = rawHint
 		}
 	}
 
@@ -91,7 +102,7 @@ func (gw *GroqWhisperClient) TranscribeAudio(ctx context.Context, opusData []byt
 			return nil, err
 		}
 
-		res, status, err := gw.callOnce(ctx, leased.PlainKey, opusData, langHint, hintText)
+		res, status, err := gw.callWithModelFallback(ctx, leased.PlainKey, opusData, langHint, hintText)
 		if err == nil {
 			gw.keyPool.ReportSuccess(leased.ID)
 			return res, nil
@@ -120,7 +131,20 @@ func (gw *GroqWhisperClient) TranscribeAudio(ctx context.Context, opusData []byt
 	return nil, lastErr
 }
 
-func (gw *GroqWhisperClient) callOnce(ctx context.Context, apiKey string, opusData []byte, langHint string, promptHint string) (*WhisperTranscriptionResult, int, error) {
+func (gw *GroqWhisperClient) callWithModelFallback(ctx context.Context, apiKey string, opusData []byte, langHint string, promptHint string) (*WhisperTranscriptionResult, int, error) {
+	// В первую очередь вызываем полную 32-слойную модель whisper-large-v3 (максимальная точность DTW на музыке)
+	res, status, err := gw.callOnce(ctx, groqWhisperPrimaryModel, apiKey, opusData, langHint, promptHint)
+	if err == nil {
+		return res, status, nil
+	}
+	// При недоступности полной модели или 503 переключаемся на whisper-large-v3-turbo
+	if status == http.StatusNotFound || status == http.StatusServiceUnavailable || status == http.StatusBadRequest {
+		return gw.callOnce(ctx, groqWhisperFallbackModel, apiKey, opusData, langHint, promptHint)
+	}
+	return nil, status, err
+}
+
+func (gw *GroqWhisperClient) callOnce(ctx context.Context, modelName string, apiKey string, opusData []byte, langHint string, promptHint string) (*WhisperTranscriptionResult, int, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -132,7 +156,7 @@ func (gw *GroqWhisperClient) callOnce(ctx context.Context, apiKey string, opusDa
 		return nil, 0, err
 	}
 
-	_ = writer.WriteField("model", groqWhisperModel)
+	_ = writer.WriteField("model", modelName)
 	_ = writer.WriteField("response_format", "verbose_json")
 	_ = writer.WriteField("temperature", "0")
 	_ = writer.WriteField("timestamp_granularities[]", "word")

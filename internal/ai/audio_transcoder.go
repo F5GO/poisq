@@ -42,12 +42,15 @@ func (t *AudioTranscoder) TranscodeToOpusMono16k(ctx context.Context, audioFileP
 	tCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 
-	// Прямой вызов ffmpeg без shell (Zero Shell Execution) с выводом в stdout (pipe:1)
+	// Прямой вызов ffmpeg без shell (Zero Shell Execution) с выводом в stdout (pipe:1).
+	// Фильтр highpass=f=100,lowpass=f=7500 отсекает саб-бас бочки (<100 Гц), который сбивает
+	// детектор начала слов (DTW/VAD) в Whisper на музыкальных вступлениях, сохраняя всю полосу вокала.
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "error",
 		"-i", safePath,
 		"-vn",
+		"-af", "highpass=f=100,lowpass=f=7500",
 		"-ac", "1",
 		"-ar", "16000",
 		"-c:a", "libopus",

@@ -123,18 +123,37 @@ func NewGeminiClient(keyPool *keypool.Manager) *GeminiClient {
 }
 
 // GenerateText выполняет запрос к Gemini с системной инструкцией и пользовательским промптом.
-// При ошибке 429 или исчерпании дневной квоты автоматически помечает текущий ключ и переключается на следующий.
+// При ошибке 503 (High Demand) выполняет серию аккуратных повторов с экспоненциальной паузой прямо на месте,
+// не сбрасывая выполнение текущей задачи воркера.
 func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPrompt, responseMimeType string) (string, error) {
-	const maxKeySwitches = 5
+	const maxAttempts = 8
 
 	var lastErr error
-	for attempt := 1; attempt <= maxKeySwitches; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+
 		leased, err := g.keyPool.Acquire("gemini")
 		if err != nil {
-			if lastErr != nil {
-				return "", fmt.Errorf("%w (последняя ошибка API: %v)", err, lastErr)
+			// Если все ключи в кратковременном 503-кулдауне (до 20 сек) — ждем освобождения прямо внутри этапа Gemini, не прерывая задачу!
+			nextTs := g.keyPool.NextRetryTimestamp("gemini")
+			waitSec := nextTs - time.Now().Unix()
+			if waitSec > 0 && waitSec <= 25 && attempt < maxAttempts {
+				sleepDur := time.Duration(waitSec+1) * time.Second
+				select {
+				case <-time.After(sleepDur):
+					leased, err = g.keyPool.Acquire("gemini")
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
 			}
-			return "", err
+			if err != nil {
+				if lastErr != nil {
+					return "", fmt.Errorf("%w (последняя ошибка API: %v)", err, lastErr)
+				}
+				return "", err
+			}
 		}
 
 		resText, status, apiStatus, err := g.callOnce(ctx, leased.PlainKey, systemPrompt, userPrompt, responseMimeType)
@@ -161,8 +180,17 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 			strings.Contains(errLower, "high demand") || strings.Contains(errLower, "unavailable") ||
 			strings.Contains(errLower, "timeout") || strings.Contains(errLower, "deadline exceeded") {
 			g.keyPool.ReportUnavailable503(leased.ID, err.Error())
-			time.Sleep(1 * time.Second)
-			continue // Мгновенно переключаемся на следующий ключ в пуле!
+			// Аккуратная прогрессивная пауза (2с, 4с, 6с...) прямо внутри этапа без перезапуска задачи с нуля
+			backoff := time.Duration(attempt*2) * time.Second
+			if backoff > 12*time.Second {
+				backoff = 12 * time.Second
+			}
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			continue
 		}
 
 		if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden {
@@ -199,8 +227,11 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 	var lastErr error
 
 	for _, m := range modelsToTry {
-		// Попытка вызова модели с возможностью 1 быстрого повтора при 503 (кратковременный всплеск нагрузки в Google)
-		for retry := 0; retry < 2; retry++ {
+		// До 3 попыток на каждой модели при кратковременной перегрузке 503 (High Demand) с паузами 2с и 4с
+		for retry := 0; retry < 3; retry++ {
+			if ctx.Err() != nil {
+				return "", 0, "", ctx.Err()
+			}
 			resText, status, apiStatus, err := g.callSingleModel(ctx, m, apiKey, systemPrompt, userPrompt, responseMimeType)
 			if err == nil {
 				if m != g.model {
@@ -220,9 +251,14 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 				strings.Contains(errLower, "timeout") ||
 				strings.Contains(errLower, "deadline exceeded")
 
-			// Если это 503/таймаут и это первая попытка — делаем короткую паузу 1 сек и повторяем на этой же модели
-			if isTransient && retry == 0 {
-				time.Sleep(1 * time.Second)
+			// Если это 503/таймаут — делаем паузу (2с, 4с) и повторяем запрос к этой же модели
+			if isTransient && retry < 2 {
+				sleepDur := time.Duration((retry+1)*2) * time.Second
+				select {
+				case <-time.After(sleepDur):
+				case <-ctx.Done():
+					return "", lastStatus, lastApiStatus, ctx.Err()
+				}
 				continue
 			}
 
@@ -231,7 +267,7 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 				return "", lastStatus, lastApiStatus, lastErr
 			}
 
-			// Если повтор на текущей модели не удался или статус 404 — переходим к следующей модели (например с 3.8 на 3.6 или 4-argon)
+			// Если повторы на текущей модели не удались или статус 404 — переходим к следующей модели (3.6-flash)
 			break
 		}
 	}

@@ -3,10 +3,13 @@
 // и двухэтапную генерацию синхронизированного караоке через Groq Whisper + Gemini.
 //
 // Что делает этот код и для чего он нужен:
-// Данный файл lyrics_aligner.go реализует высокоточное пословное выравнивание (Forced Alignment)
-// для генерации караоке (.lrc). Он упаковывает пословные DTW-таймкоды Whisper (words) в компактную
-// временную шкалу [mm:ss.xx]слово, исключает ложные срабатывания на инструментальных интро/проигрышах
-// и вычисляет математические якорные таймкоды для каждой строки эталонного текста.
+// Данный файл lyrics_aligner.go реализует калибровку пословных DTW-таймкодов Whisper:
+// 1. Очищает транскрипцию от галлюцинаций Whisper на тишине (субтитры, копирайты).
+// 2. Устраняет классический дефект DTW в Whisper на музыке (Word Duration Clamping из stable-ts):
+//    когда первое слово после инструментального интро или проигрыша растягивает свой Start
+//    назад к началу музыки (например, start=0.00, end=15.40), алгоритм вычисляет истинный момент
+//    вступления голоса от точной правой границы слова (end - naturalDuration).
+// 3. Группирует откалиброванные слова в естественные вокальные фразы караоке с точными таймкодами.
 package ai
 
 import (
@@ -17,13 +20,24 @@ import (
 	"unicode"
 )
 
-// AcousticTimelineData хранит пословные и посегментные акустические данные трека.
+// AcousticPhrase представляет одну реально пропетую вокальную строчку (фразу),
+// собранную из откалиброванных слов и сегментов Whisper.
+type AcousticPhrase struct {
+	Index int           `json:"index"`
+	Start float64       `json:"start"`
+	End   float64       `json:"end"`
+	Text  string        `json:"text"`
+	Words []WhisperWord `json:"words,omitempty"`
+}
+
+// AcousticTimelineData хранит откалиброванные пословные и посегментные акустические данные трека.
 type AcousticTimelineData struct {
 	Language       string           `json:"language"`
 	Duration       float64          `json:"duration"`
 	FirstWordStart float64          `json:"firstWordStart"`
 	Words          []WhisperWord    `json:"words,omitempty"`
 	Segments       []WhisperSegment `json:"segments,omitempty"`
+	Phrases        []AcousticPhrase `json:"phrases,omitempty"`
 }
 
 // FormatLRCTimestamp переводит секунды (float64) в стандартный тег LRC [mm:ss.xx].
@@ -39,27 +53,255 @@ func FormatLRCTimestamp(sec float64) string {
 	return fmt.Sprintf("[%02d:%02d.%02d]", mins, secs, centis)
 }
 
-// BuildAcousticPayload упаковывает результат Groq Whisper в структуру с сохранением всех пословных таймкодов.
+// isWhisperHallucination фильтрует известные паразитные фразы Whisper на инструменталах и тишине.
+func isWhisperHallucination(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return true
+	}
+	hallucinations := []string{
+		"субтитры сделал",
+		"субтитры создавал",
+		"редактор субтитров",
+		"корректор",
+		"dimatorzok",
+		"продолжение следует",
+		"amara.org",
+		"подпишись на канал",
+		"ставьте лайки",
+		"thank you for watching",
+		"subtitles by",
+	}
+	for _, h := range hallucinations {
+		if strings.Contains(lower, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// naturalWordDuration оценивает естественную длительность пропевания одного слова по числу букв.
+func naturalWordDuration(word string) (natDur float64, maxDur float64) {
+	runeLen := len([]rune(normalizeWordForAlign(word)))
+	if runeLen <= 0 {
+		runeLen = 2
+	}
+	natDur = float64(runeLen) * 0.085
+	if natDur < 0.28 {
+		natDur = 0.28
+	}
+	if natDur > 0.75 {
+		natDur = 0.75
+	}
+
+	maxDur = float64(runeLen) * 0.14
+	if maxDur < 0.55 {
+		maxDur = 0.55
+	}
+	if maxDur > 1.35 {
+		maxDur = 1.35
+	}
+	return natDur, maxDur
+}
+
+// SanitizeWhisperTimeline очищает и калибрует сырой ответ Whisper:
+// удаляет галлюцинации и исправляет растянутые назад таймкоды Start у слов после интро и проигрышей.
+func SanitizeWhisperTimeline(res *WhisperTranscriptionResult) *AcousticTimelineData {
+	if res == nil {
+		return &AcousticTimelineData{}
+	}
+
+	// 1. Очищаем сегменты от галлюцинаций тишины
+	cleanSegments := make([]WhisperSegment, 0, len(res.Segments))
+	for _, seg := range res.Segments {
+		txt := strings.TrimSpace(seg.Text)
+		if isWhisperHallucination(txt) {
+			continue
+		}
+		cleanSegments = append(cleanSegments, WhisperSegment{
+			ID:    seg.ID,
+			Start: seg.Start,
+			End:   seg.End,
+			Text:  txt,
+		})
+	}
+
+	// 2. Очищаем и калибруем слова (Word Duration Clamping)
+	cleanWords := make([]WhisperWord, 0, len(res.Words))
+	prevEnd := 0.0
+
+	for i, w := range res.Words {
+		wText := strings.TrimSpace(w.Word)
+		if wText == "" || isWhisperHallucination(wText) {
+			continue
+		}
+		// Пропускаем чисто пунктуационные токены без букв/цифр
+		if normalizeWordForAlign(wText) == "" {
+			continue
+		}
+
+		start := w.Start
+		end := w.End
+		if end < start {
+			end = start
+		}
+
+		natDur, maxDur := naturalWordDuration(wText)
+
+		// Проверяем, есть ли сразу после этого слова следующее слово впритык
+		if i+1 < len(res.Words) && res.Words[i+1].Start > start && res.Words[i+1].Start < end {
+			end = res.Words[i+1].Start
+		}
+
+		// КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ (stable-ts clamping):
+		// Если длительность слова (end - start) превышает maxDur (например, start=0.00, end=15.20 на интро),
+		// значит DTW-матрица Whisper притянула start к началу инструментального проигрыша!
+		// Истинное начало слова отсчитывается назад от точной правой границы end.
+		if end-start > maxDur {
+			clampedStart := end - natDur
+			if clampedStart < prevEnd {
+				clampedStart = prevEnd
+			}
+			start = clampedStart
+		}
+
+		if start < prevEnd {
+			start = prevEnd
+		}
+		if end <= start {
+			end = start + 0.18
+		}
+
+		cleanWords = append(cleanWords, WhisperWord{
+			Word:  wText,
+			Start: math.Round(start*100) / 100,
+			End:   math.Round(end*100) / 100,
+		})
+		prevEnd = end
+	}
+
+	// 3. Синхронизируем Start каждого сегмента с первым калиброванным словом внутри него
+	if len(cleanWords) > 0 && len(cleanSegments) > 0 {
+		for si := range cleanSegments {
+			seg := &cleanSegments[si]
+			for _, w := range cleanWords {
+				if w.End > seg.Start+0.05 && w.Start < seg.End+0.5 {
+					if w.Start > seg.Start {
+						seg.Start = w.Start
+					}
+					break
+				}
+			}
+		}
+	}
+
+	firstStart := 0.0
+	if len(cleanWords) > 0 {
+		firstStart = cleanWords[0].Start
+	} else if len(cleanSegments) > 0 {
+		firstStart = cleanSegments[0].Start
+	}
+
+	data := &AcousticTimelineData{
+		Language:       res.Language,
+		Duration:       res.Duration,
+		FirstWordStart: firstStart,
+		Words:          cleanWords,
+		Segments:       cleanSegments,
+	}
+	data.Phrases = BuildAcousticPhrases(data)
+	return data
+}
+
+// BuildAcousticPhrases группирует откалиброванные слова Whisper в естественные вокальные строки караоке,
+// опираясь на границы сегментов Whisper и дыхательные паузы вокалиста.
+func BuildAcousticPhrases(data *AcousticTimelineData) []AcousticPhrase {
+	if data == nil {
+		return nil
+	}
+
+	// Если есть пословные таймкоды — строим фразы с точностью до первого слова каждой фразы
+	if len(data.Words) > 0 {
+		// Собираем границы концов сегментов Whisper как подсказки естественного конца фразы
+		segEnds := make([]float64, 0, len(data.Segments))
+		for _, s := range data.Segments {
+			segEnds = append(segEnds, s.End)
+		}
+
+		isNearSegmentEnd := func(wordEnd float64) bool {
+			for _, se := range segEnds {
+				if math.Abs(wordEnd-se) <= 0.22 {
+					return true
+				}
+			}
+			return false
+		}
+
+		var phrases []AcousticPhrase
+		var curWords []WhisperWord
+
+		flushPhrase := func() {
+			if len(curWords) == 0 {
+				return
+			}
+			var texts []string
+			for _, cw := range curWords {
+				texts = append(texts, strings.TrimSpace(cw.Word))
+			}
+			phrases = append(phrases, AcousticPhrase{
+				Index: len(phrases) + 1,
+				Start: curWords[0].Start,
+				End:   curWords[len(curWords)-1].End,
+				Text:  strings.Join(texts, " "),
+				Words: append([]WhisperWord(nil), curWords...),
+			})
+			curWords = curWords[:0]
+		}
+
+		for i, w := range data.Words {
+			if len(curWords) > 0 {
+				prevW := curWords[len(curWords)-1]
+				gap := w.Start - prevW.End
+				// Разрываем строку, если:
+				// 1) Пауза между словами >= 0.45 сек (вдох певца или проигрыш);
+				// 2) Предыдущее слово совпало с концом сегмента Whisper и в строке уже >= 3 слов;
+				// 3) В строке накопилось >= 7 слов и есть микропауза >= 0.18 сек (или >= 9 слов жестко).
+				if gap >= 0.45 ||
+					(len(curWords) >= 3 && isNearSegmentEnd(prevW.End)) ||
+					(len(curWords) >= 7 && gap >= 0.18) ||
+					len(curWords) >= 9 {
+					flushPhrase()
+				}
+			}
+			curWords = append(curWords, w)
+			if i == len(data.Words)-1 {
+				flushPhrase()
+			}
+		}
+
+		return phrases
+	}
+
+	// Фоллбэк на сегменты, если массив слов пуст
+	var phrases []AcousticPhrase
+	for i, s := range data.Segments {
+		phrases = append(phrases, AcousticPhrase{
+			Index: i + 1,
+			Start: s.Start,
+			End:   s.End,
+			Text:  strings.TrimSpace(s.Text),
+		})
+	}
+	return phrases
+}
+
+// BuildAcousticPayload упаковывает результат Groq Whisper в JSON с предварительной калибровкой таймкодов.
 func BuildAcousticPayload(res *WhisperTranscriptionResult) (string, error) {
 	if res == nil {
 		return "", fmt.Errorf("пустой результат транскрибации Whisper")
 	}
 
-	firstStart := 0.0
-	if len(res.Words) > 0 {
-		firstStart = res.Words[0].Start
-	} else if len(res.Segments) > 0 {
-		firstStart = res.Segments[0].Start
-	}
-
-	data := AcousticTimelineData{
-		Language:       res.Language,
-		Duration:       res.Duration,
-		FirstWordStart: firstStart,
-		Words:          res.Words,
-		Segments:       res.Segments,
-	}
-
+	data := SanitizeWhisperTimeline(res)
 	b, err := json.Marshal(data)
 	if err != nil {
 		return "", err
@@ -67,172 +309,55 @@ func BuildAcousticPayload(res *WhisperTranscriptionResult) (string, error) {
 	return string(b), nil
 }
 
-// FormatWordLevelStream превращает массив пословных таймкодов в наглядную и компактную ленту,
-// где ПЕРЕД КАЖДЫМ СЛОВОМ стоит его точный акустический таймкод [mm:ss.xx].
-// Фразы разделяются переносом строки при паузах в вокале более 0.45 сек.
+// FormatWordLevelStream превращает откалиброванные данные Whisper в двойное представление:
+// 1) Готовые акустические фразы [mm:ss.xx] (где таймкод каждой фразы равен точному началу её первого слова);
+// 2) Пословную ленту [mm:ss.xx]слово для сверки каждого отдельного слова.
 func FormatWordLevelStream(acousticJSON string) (string, *AcousticTimelineData) {
 	var data AcousticTimelineData
 	if err := json.Unmarshal([]byte(acousticJSON), &data); err != nil {
 		return acousticJSON, nil
 	}
 
-	// Если есть точные пословные таймкоды (основной режим высокой точности)
+	// На случай если JSON был прочитан из кэша без предварительной калибровки фраз
+	if len(data.Words) > 0 && len(data.Phrases) == 0 {
+		sanitized := SanitizeWhisperTimeline(&WhisperTranscriptionResult{
+			Language: data.Language,
+			Duration: data.Duration,
+			Words:    data.Words,
+			Segments: data.Segments,
+		})
+		data = *sanitized
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Язык: %s | Длительность: %.1f сек | Вступление первого слова вокала: %s\n\n",
+		data.Language, data.Duration, FormatLRCTimestamp(data.FirstWordStart)))
+
+	if len(data.Phrases) > 0 {
+		sb.WriteString("--- АКУСТИЧЕСКИЕ ВОКАЛЬНЫЕ ФРАЗЫ (ТОЧНЫЙ ТАЙМИНГ ПЕРВОГО СЛОВА КАЖДОЙ ФРАЗЫ) ---\n")
+		for _, p := range data.Phrases {
+			sb.WriteString(fmt.Sprintf("%s %s\n", FormatLRCTimestamp(p.Start), p.Text))
+		}
+		sb.WriteString("\n")
+	}
+
 	if len(data.Words) > 0 {
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("Язык: %s | Длительность: %.1f сек | Начало первого вокала: %s\n\n",
-			data.Language, data.Duration, FormatLRCTimestamp(data.FirstWordStart)))
-
-		var lineWords []string
-		prevEnd := data.Words[0].Start
-
-		for i, w := range data.Words {
-			wordClean := strings.TrimSpace(w.Word)
-			if wordClean == "" {
+		sb.WriteString("--- ДЕТАЛЬНАЯ ПОСЛОВНАЯ СЕТКА ([mm:ss.xx]слово) ---\n")
+		for _, p := range data.Phrases {
+			if len(p.Words) == 0 {
 				continue
 			}
-
-			gap := w.Start - prevEnd
-			// Если пауза между словами > 0.45 сек или накопилось 10 слов — переносим строку для читаемости
-			if i > 0 && (gap > 0.45 || len(lineWords) >= 10) {
-				sb.WriteString(strings.Join(lineWords, " "))
-				sb.WriteString("\n")
-				lineWords = lineWords[:0]
+			var lineTokens []string
+			for _, w := range p.Words {
+				lineTokens = append(lineTokens, fmt.Sprintf("%s%s", FormatLRCTimestamp(w.Start), strings.TrimSpace(w.Word)))
 			}
-
-			lineWords = append(lineWords, fmt.Sprintf("%s%s", FormatLRCTimestamp(w.Start), wordClean))
-			if w.End > w.Start {
-				prevEnd = w.End
-			} else {
-				prevEnd = w.Start + 0.2
-			}
-		}
-
-		if len(lineWords) > 0 {
-			sb.WriteString(strings.Join(lineWords, " "))
+			sb.WriteString(strings.Join(lineTokens, " "))
 			sb.WriteString("\n")
 		}
-
 		return sb.String(), &data
 	}
 
-	// Фоллбэк на сегменты, если пословный массив отсутствует
-	if len(data.Segments) > 0 {
-		var sb strings.Builder
-		for _, s := range data.Segments {
-			sb.WriteString(fmt.Sprintf("%s -> %s %s\n",
-				FormatLRCTimestamp(s.Start), FormatLRCTimestamp(s.End), strings.TrimSpace(s.Text)))
-		}
-		return sb.String(), &data
-	}
-
-	return acousticJSON, &data
-}
-
-// PreAlignReferenceWithWords выполняет локальное математическое сопоставление (Forced Alignment)
-// строк эталонного текста с пословными таймкодами Whisper методом динамического окна и нечеткого поиска.
-// Возвращает размеченный эталонный текст с подсказками-якорями для Gemini.
-func PreAlignReferenceWithWords(referencePlain string, data *AcousticTimelineData) string {
-	refTrimmed := strings.TrimSpace(referencePlain)
-	if refTrimmed == "" || data == nil || len(data.Words) == 0 {
-		return refTrimmed
-	}
-
-	rawLines := strings.Split(refTrimmed, "\n")
-	var cleanLines []string
-	for _, l := range rawLines {
-		t := strings.TrimSpace(l)
-		if t != "" {
-			cleanLines = append(cleanLines, t)
-		}
-	}
-	if len(cleanLines) == 0 {
-		return refTrimmed
-	}
-
-	// Нормализуем все слова Whisper для быстрого нечеткого сравнения
-	type normWhisperWord struct {
-		norm  string
-		start float64
-		end   float64
-	}
-	wList := make([]normWhisperWord, 0, len(data.Words))
-	for _, w := range data.Words {
-		n := normalizeWordForAlign(w.Word)
-		if n != "" {
-			wList = append(wList, normWhisperWord{norm: n, start: w.Start, end: w.End})
-		}
-	}
-	if len(wList) == 0 {
-		return refTrimmed
-	}
-
-	var resultBuilder strings.Builder
-	searchCursor := 0
-
-	for lineIdx, line := range cleanLines {
-		lineTokens := tokenizeLineForAlign(line)
-		if len(lineTokens) == 0 {
-			resultBuilder.WriteString(fmt.Sprintf("Строка %d: %s\n", lineIdx+1, line))
-			continue
-		}
-
-		// Определяем окно поиска в массиве слов Whisper
-		// Пропорциональная оценка позиции + допуск вперед/назад
-		maxWindow := searchCursor + 35
-		if maxWindow > len(wList) {
-			maxWindow = len(wList)
-		}
-
-		bestIdx := -1
-		bestScore := 0.0
-
-		for wi := searchCursor; wi < maxWindow; wi++ {
-			// Сравниваем первые 1..3 слова строки с позицией wi в Whisper
-			matchSum := 0.0
-			checkCount := len(lineTokens)
-			if checkCount > 3 {
-				checkCount = 3
-			}
-			validChecks := 0
-			for k := 0; k < checkCount && (wi+k) < len(wList); k++ {
-				sim := wordSimilarity(lineTokens[k], wList[wi+k].norm)
-				matchSum += sim
-				validChecks++
-			}
-			if validChecks == 0 {
-				continue
-			}
-			avgSim := matchSum / float64(validChecks)
-			// Небольшой штраф за слишком далекий прыжок вперед, чтобы не перескочить куплет
-			distancePenalty := float64(wi-searchCursor) * 0.012
-			score := avgSim - distancePenalty
-
-			// Первое слово строки должно иметь хорошее фонетическое/буквенное сходство
-			firstWordSim := wordSimilarity(lineTokens[0], wList[wi].norm)
-			if firstWordSim >= 0.55 && score > bestScore && avgSim >= 0.55 {
-				bestScore = score
-				bestIdx = wi
-			}
-		}
-
-		if bestIdx != -1 {
-			anchorTime := FormatLRCTimestamp(wList[bestIdx].start)
-			resultBuilder.WriteString(fmt.Sprintf("Строка %02d [якорь первого слова ≈ %s]: %s\n", lineIdx+1, anchorTime, line))
-			// Сдвигаем курсор поиска минимум на половину длины текущей строки
-			advance := len(lineTokens) / 2
-			if advance < 1 {
-				advance = 1
-			}
-			searchCursor = bestIdx + advance
-			if searchCursor >= len(wList) {
-				searchCursor = len(wList) - 1
-			}
-		} else {
-			resultBuilder.WriteString(fmt.Sprintf("Строка %02d [якорь требует уточнения по контексту]: %s\n", lineIdx+1, line))
-		}
-	}
-
-	return resultBuilder.String()
+	return sb.String(), &data
 }
 
 func normalizeWordForAlign(s string) string {
@@ -273,7 +398,6 @@ func wordSimilarity(a, b string) float64 {
 		return 0.0
 	}
 
-	// Быстрая матрица Левенштейна
 	prev := make([]int, lb+1)
 	curr := make([]int, lb+1)
 	for j := 0; j <= lb; j++ {
@@ -305,5 +429,10 @@ func wordSimilarity(a, b string) float64 {
 	if lb > maxLen {
 		maxLen = lb
 	}
-	return 1.0 - float64(prev[lb])/float64(maxLen)
+	dist := prev[lb]
+	sim := 1.0 - (float64(dist) / float64(maxLen))
+	if sim < 0 {
+		return 0
+	}
+	return sim
 }
