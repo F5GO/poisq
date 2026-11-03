@@ -193,8 +193,8 @@ func (s *AdminServer) handleCoverAIResolve(w http.ResponseWriter, r *http.Reques
 		stagingItem.CurrentJSON = string(curJSON)
 		stagingItem.ProposedJSON = string(propJSON)
 
-		// Обновляем предложение в staging_changes
-		if err := s.stagingRepo.UpdateProposedJSON(stagingItem.ID, stagingItem.ProposedJSON); err == nil {
+		// Обновляем предложение в staging_changes (и current_json, и proposed_json)
+		if _, err := s.stagingRepo.CreateProposal(*stagingItem); err == nil {
 			updatedProposal = stagingItem
 		}
 	}

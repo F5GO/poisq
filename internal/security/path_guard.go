@@ -74,11 +74,48 @@ func (g *PathGuard) Root() string {
 // ValidateTarget проверяет, что целевой путь находится строго внутри корня медиатеки
 // и не использует символические ссылки для выхода наружу (Symlink Escape).
 func (g *PathGuard) ValidateTarget(targetPath string, checkWriteExt bool) (string, error) {
-	if strings.TrimSpace(targetPath) == "" {
+	cleaned := filepath.Clean(strings.TrimSpace(targetPath))
+	if cleaned == "" || cleaned == "." {
 		return "", ErrPathTraversal
 	}
 
-	absTarget, err := filepath.Abs(filepath.Clean(targetPath))
+	var absTarget string
+	if !filepath.IsAbs(cleaned) {
+		absTarget = filepath.Join(g.rootAbs, cleaned)
+	} else {
+		absTarget = cleaned
+		// Если абсолютный путь пришел из Navidrome базы с другим префиксом (/music vs реальный g.rootAbs)
+		if !isSubpath(g.rootAbs, absTarget) {
+			prefixes := []string{"/music", "/data/music", "/media/music", "/media"}
+			matched := false
+			for _, p := range prefixes {
+				if strings.HasPrefix(absTarget, p) {
+					candidate := filepath.Join(g.rootAbs, strings.TrimPrefix(absTarget, p))
+					if isSubpath(g.rootAbs, candidate) {
+						absTarget = candidate
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				rootBase := filepath.Base(g.rootAbs)
+				parts := strings.Split(absTarget, string(filepath.Separator))
+				for i, part := range parts {
+					if strings.EqualFold(part, rootBase) && i+1 < len(parts) {
+						sub := filepath.Join(parts[i+1:]...)
+						candidate := filepath.Join(g.rootAbs, sub)
+						if isSubpath(g.rootAbs, candidate) {
+							absTarget = candidate
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	absTarget, err := filepath.Abs(absTarget)
 	if err != nil {
 		return "", ErrPathTraversal
 	}

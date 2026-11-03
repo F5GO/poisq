@@ -246,13 +246,36 @@ function initViewControls() {
     });
   });
 
-  // Поиск по медиатеке с дебаунсом
-  document.getElementById("track-search-input")?.addEventListener("input", (e) => {
+  // Поиск по медиатеке с дебаунсом и кнопкой сброса
+  const searchInput = document.getElementById("track-search-input");
+  const clearBtn = document.getElementById("btn-clear-track-search");
+
+  const updateClearBtn = () => {
+    if (!clearBtn) return;
+    if (searchInput && searchInput.value.trim().length > 0) {
+      clearBtn.classList.remove("hidden");
+    } else {
+      clearBtn.classList.add("hidden");
+    }
+  };
+
+  searchInput?.addEventListener("input", (e) => {
+    updateClearBtn();
     clearTimeout(state.searchDebounceTimer);
     state.searchDebounceTimer = setTimeout(() => {
       state.searchQuery = e.target.value.trim();
       loadTracks();
     }, 250);
+  });
+
+  searchInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      clearTrackSearch();
+    }
+  });
+
+  clearBtn?.addEventListener("click", () => {
+    clearTrackSearch();
   });
 
   // Поиск в сайдбаре караоке
@@ -418,6 +441,20 @@ function renderArtistsGrid(container, tracks) {
   `;
 }
 
+function clearTrackSearch() {
+  const searchInput = document.getElementById("track-search-input");
+  const clearBtn = document.getElementById("btn-clear-track-search");
+  if (searchInput) {
+    searchInput.value = "";
+    searchInput.focus();
+  }
+  if (clearBtn) {
+    clearBtn.classList.add("hidden");
+  }
+  state.searchQuery = "";
+  loadTracks();
+}
+
 function renderAlbumsGrid(container, tracks) {
   const map = new Map();
   for (const t of tracks) {
@@ -438,8 +475,8 @@ function renderAlbumsGrid(container, tracks) {
   container.innerHTML = `
     <div class="album-grid">
       ${albums.map(alb => {
-        const coverSrc = alb.hasCover && alb.folderPath
-          ? `/api/v1/covers/local?path=${encodeURIComponent(alb.folderPath + "/cover.jpg")}`
+        const coverSrc = alb.folderPath
+          ? `/api/v1/covers/local?path=${encodeURIComponent(alb.folderPath)}`
           : "";
         return `
           <div class="album-card" onclick="filterByAlbum('${escapeHtml(alb.album)}')">
@@ -454,7 +491,11 @@ function renderAlbumsGrid(container, tracks) {
 }
 
 function filterByArtist(artist) {
-  document.getElementById("track-search-input").value = artist;
+  const input = document.getElementById("track-search-input");
+  if (input) input.value = artist;
+  const clearBtn = document.getElementById("btn-clear-track-search");
+  if (clearBtn) clearBtn.classList.remove("hidden");
+
   state.searchQuery = artist;
   state.viewMode = "tracks";
   document.querySelectorAll("#view-mode-selector .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.view === "tracks"));
@@ -462,7 +503,11 @@ function filterByArtist(artist) {
 }
 
 function filterByAlbum(album) {
-  document.getElementById("track-search-input").value = album;
+  const input = document.getElementById("track-search-input");
+  if (input) input.value = album;
+  const clearBtn = document.getElementById("btn-clear-track-search");
+  if (clearBtn) clearBtn.classList.remove("hidden");
+
   state.searchQuery = album;
   state.viewMode = "tracks";
   document.querySelectorAll("#view-mode-selector .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.view === "tracks"));
@@ -492,8 +537,8 @@ async function openTrackDrawer(trackId) {
 
   if (titleEl) titleEl.textContent = track.title || "Без названия";
 
-  const coverUrl = track.hasCover && track.folderPath
-    ? `/api/v1/covers/local?path=${encodeURIComponent(track.folderPath + "/cover.jpg")}`
+  const coverUrl = track.folderPath
+    ? `/api/v1/covers/local?path=${encodeURIComponent(track.folderPath)}`
     : "";
 
   let lyricsStatusDesc = "Отсутствует";
@@ -973,7 +1018,7 @@ async function loadStagingData() {
     // 1. Отображение только обложки (Side-by-Side без лишнего перечеркивания неизмененных тегов)
     if (item.changeType === "cover") {
       const curHasCover = curObj.hasCover;
-      const curRes = curHasCover && curObj.width > 0 ? `${curObj.width}×${curObj.height} px` : "Отсутствует";
+      const curRes = curHasCover && curObj.width > 0 ? `${curObj.width}×${curObj.height} px` : (curHasCover ? "Найден" : "Поиск на диске...");
       const curCoverSrc = curObj.existingFile
         ? `/api/v1/covers/local?path=${encodeURIComponent(curObj.existingFile)}`
         : (path ? `/api/v1/covers/local?path=${encodeURIComponent(path)}` : "");
@@ -1019,8 +1064,8 @@ async function loadStagingData() {
                     alt="Текущая" 
                     title="Нажмите для полноэкранного просмотра"
                     onclick="openCoverLightbox(${item.id}, 0)"
-                    onload="const m = document.getElementById('cur-meta-${item.id}'); if (m && this.naturalWidth) m.innerText = 'Файл: Найден на диске · ' + this.naturalWidth + '×' + this.naturalHeight + ' px';"
-                    onerror="this.style.display='none'; const emp = document.getElementById('cur-empty-${item.id}'); if (emp) emp.style.display='flex';"
+                    onload="const m = document.getElementById('cur-meta-${item.id}'); if (m && this.naturalWidth) m.innerText = 'Файл: Найден на диске · ' + this.naturalWidth + '×' + this.naturalHeight + ' px'; const emp = document.getElementById('cur-empty-${item.id}'); if (emp) emp.style.display='none'; this.style.display='block';"
+                    onerror="this.style.display='none'; const emp = document.getElementById('cur-empty-${item.id}'); if (emp) emp.style.display='flex'; const m = document.getElementById('cur-meta-${item.id}'); if (m) m.innerText = 'Файл: Отсутствует · Отсутствует';"
                   />
                   <div id="cur-empty-${item.id}" class="cover-side-img" style="display:none;align-items:center;justify-content:center;color:var(--text-muted);" onclick="openCoverLightbox(${item.id}, 0)">Нет файла</div>
                 ` 

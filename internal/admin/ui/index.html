@@ -70,7 +70,10 @@
 
       <!-- Фильтр и счетчик -->
       <div class="filter-row">
-        <input type="text" id="track-search-input" placeholder="Поиск по артисту, треку или альбому..." class="search-field" />
+        <div class="search-input-wrap">
+          <input type="text" id="track-search-input" placeholder="Поиск по артисту, треку или альбому..." class="search-field" />
+          <button type="button" id="btn-clear-track-search" class="search-clear-btn hidden" title="Очистить поиск (Esc)">✕</button>
+        </div>
         <span class="meta-label mono" id="tracks-count-label">Показано: 0 треков</span>
       </div>
 

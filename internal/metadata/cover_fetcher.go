@@ -75,12 +75,22 @@ func NewCoverFetcher(guard *security.PathGuard) *CoverFetcher {
 // Поддерживает регистронезависимый поиск (Cover.JPG, Folder.png, album.jpg и др.).
 // Если в папке уже есть обложка размером >= 500x500, сервис ее не трогает.
 func (cf *CoverFetcher) InspectFolderCover(folderPath string) (hasCover bool, width int, height int, existingFile string) {
-	safeFolder, err := cf.guard.ValidateTarget(folderPath, false)
-	if err != nil {
-		return false, 0, 0, ""
+	root := ""
+	if cf.guard != nil {
+		root = cf.guard.Root()
 	}
 
-	foundPath := FindLocalCoverFile(safeFolder)
+	safeFolder := folderPath
+	if cf.guard != nil {
+		if s, err := cf.guard.ValidateTarget(folderPath, false); err == nil {
+			safeFolder = s
+		}
+	}
+
+	foundPath := FindCoverAnywhere(root, safeFolder)
+	if foundPath == "" && safeFolder != folderPath {
+		foundPath = FindCoverAnywhere(root, folderPath)
+	}
 	if foundPath == "" {
 		return false, 0, 0, ""
 	}
