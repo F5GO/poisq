@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/metadata"
 	"github.com/F5GO/poisq/internal/proxy"
 )
@@ -44,6 +45,8 @@ func (s *AdminServer) handleNavidromeArtistImage(w http.ResponseWriter, r *http.
 		writeJSONError(w, http.StatusBadRequest, "artist name is required")
 		return
 	}
+
+	logger.Debug("[ARTIST-IMAGE] Запрос фото исполнителя: %q", artistName)
 
 	root := ""
 	if s.guard != nil {
@@ -137,6 +140,7 @@ func (s *AdminServer) handleNavidromeArtistImage(w http.ResponseWriter, r *http.
 		return
 	}
 
+	logger.Warn("[ARTIST-IMAGE] Фото исполнителя не найдено ни в одном источнике: %q", artistName)
 	writeJSONError(w, http.StatusNotFound, "artist image not found")
 }
 
@@ -155,6 +159,8 @@ func (s *AdminServer) handleNavidromeAlbumCover(w http.ResponseWriter, r *http.R
 	artistName := strings.TrimSpace(r.URL.Query().Get("artist"))
 	folderPath := strings.TrimSpace(r.URL.Query().Get("path"))
 	trackID := strings.TrimSpace(r.URL.Query().Get("trackId"))
+
+	logger.Debug("[ALBUM-COVER] Запрос обложки: album=%q, artist=%q, path=%q, trackId=%q", albumName, artistName, folderPath, trackID)
 
 	root := ""
 	if s.guard != nil {
@@ -241,6 +247,7 @@ func (s *AdminServer) handleNavidromeAlbumCover(w http.ResponseWriter, r *http.R
 		}
 	}
 
+	logger.Warn("[ALBUM-COVER] Обложка альбома не найдена ни в одном источнике: album=%q, artist=%q, path=%q", albumName, artistName, folderPath)
 	writeJSONError(w, http.StatusNotFound, "album cover not found")
 }
 

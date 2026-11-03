@@ -4,13 +4,16 @@
 // Данный файл cover_locator.go реализует глубокий, регистронезависимый и всепрощающий поиск
 // локальных файлов обложек альбомов и фотографий исполнителей (cover.jpg, folder.jpg, artist.jpg, front.png, webp).
 // Устойчив к различиям в тире/дефисах (- / – / —), нормализации Unicode (NFC/NFD на macOS APFS),
-// вариациям путей Navidrome (/music vs /music/Music), дочерним папкам альбомов, родительским каталогам и подпапкам со сканами.
+// вариациям путей Navidrome (/music vs /music/Music vs «Music — копия»), дочерним папкам альбомов,
+// родительским каталогам и подпапкам со сканами, с подробным отладочным логированием (LOG_LEVEL=debug).
 package metadata
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 var priorityCoverBases = []string{
@@ -47,12 +50,11 @@ func FindLocalCoverFile(folderPath string) string {
 }
 
 // FindCoverAnywhere выполняет всесторонний поиск файла обложки на файловой системе:
-// 1. Проверяет прямой путь (если передан путь к файлу картинки или аудиофайлу).
+// 1. Генерирует все вариации пути (включая устранение « — копия», префиксы Music/, разные корни).
 // 2. Сканирует целевой каталог на приоритетные имена (cover, folder, front, artist, etc.).
-// 3. Проверяет вложенные подпапки со сканами (Artwork/, Scans/, Covers/) и дочерние папки альбомов.
+// 3. Проверяет вложенные подпапки со сканами (Artwork/, Scans/) и дочерние папки альбомов.
 // 4. Поднимается вверх по родительским папкам альбома/артиста.
-// 5. Выполняет нечеткий поиск (Fuzzy Match) при различиях в тире, пробелах, регистре и префиксах (Music/).
-// 6. Если переданы альтернативные корни (/music, /data), проверяет и их.
+// 5. Выполняет нечеткий поиск (Fuzzy Match) при различиях в тире, пробелах, регистре и суффиксах копий.
 func FindCoverAnywhere(musicRoot, targetPath string) string {
 	clean := filepath.Clean(strings.TrimSpace(targetPath))
 	if clean == "" || clean == "." || clean == "/" {
@@ -73,37 +75,19 @@ func FindCoverAnywhere(musicRoot, targetPath string) string {
 		}
 	}
 
-	// 1. Если передан относительный путь — пробуем разрешить относительно musicRoot и стандартных корней
-	candidatePaths := []string{clean}
-	if !filepath.IsAbs(clean) {
-		if musicRoot != "" {
-			candidatePaths = append([]string{filepath.Join(musicRoot, clean)}, candidatePaths...)
-		}
-		for _, stdRoot := range []string{"/music", "/music/Music", "/data"} {
-			candidatePaths = append(candidatePaths, filepath.Join(stdRoot, clean))
-		}
-	} else {
-		// Если путь абсолютный, добавляем варианты с/без промежуточного сегмента Music/
-		if strings.HasPrefix(clean, "/music/Music/") {
-			candidatePaths = append(candidatePaths, "/music/"+strings.TrimPrefix(clean, "/music/Music/"))
-		} else if strings.HasPrefix(clean, "/music/") {
-			candidatePaths = append(candidatePaths, "/music/Music/"+strings.TrimPrefix(clean, "/music/"))
-		}
-		if musicRoot != "" && !strings.HasPrefix(clean, musicRoot) {
-			trimmed := strings.TrimPrefix(clean, "/music")
-			trimmed = strings.TrimPrefix(trimmed, "/")
-			if trimmed != "" {
-				candidatePaths = append(candidatePaths, filepath.Join(musicRoot, trimmed))
-			}
-		}
+	candidatePaths := GeneratePathVariants(musicRoot, targetPath)
+	if len(candidatePaths) == 0 {
+		candidatePaths = []string{clean}
 	}
 
 	for _, cand := range candidatePaths {
 		if found := findCoverInSingleTarget(musicRoot, cand); found != "" {
+			logger.Debug("[COVER] Найдена обложка на диске: %s (запрос: %s, вариант: %s)", found, targetPath, cand)
 			return found
 		}
 	}
 
+	logger.Debug("[COVER] Обложка не найдена на диске для пути %q (проверено %d вариантов путей)", targetPath, len(candidatePaths))
 	return ""
 }
 
@@ -179,11 +163,11 @@ func FindCoverByArtistAndAlbum(musicRoot, artist, album string) string {
 		}
 
 		if artist != "" && album != "" {
-			// Пробуем r/Artist/Album и r/Artist/Artist - Album
 			for _, p := range []string{
 				filepath.Join(r, artist, album),
 				filepath.Join(r, artist, artist+" - "+album),
 				filepath.Join(r, artist, artist+" – "+album),
+				filepath.Join(r, artist, artist+" — "+album),
 			} {
 				if resolved := ResolveFuzzyDirectory(r, p); resolved != "" {
 					if found := scanDirectoryAndSubdirsForCover(resolved); found != "" {
@@ -205,7 +189,7 @@ func FindCoverByArtistAndAlbum(musicRoot, artist, album string) string {
 }
 
 // scanDirectoryAndSubdirsForCover ищет обложку в каталоге, его подпапках Artwork/Scans
-// и дочерних папках первого уровня (например, когда передана папка исполнителя, а обложка лежит в папке альбома).
+// и дочерних папках первого уровня.
 func scanDirectoryAndSubdirsForCover(dirPath string) string {
 	// Сначала ищем в самой директории
 	if found := scanDirectoryForCoverOnly(dirPath); found != "" {
@@ -234,7 +218,7 @@ func scanDirectoryAndSubdirsForCover(dirPath string) string {
 		}
 	}
 
-	// 2-й проход: проверяем дочерние подкаталоги первого уровня (до 10 подпапок альбомов/дисков)
+	// 2-й проход: проверяем дочерние подкаталоги первого уровня (до 15 подпапок альбомов/дисков)
 	checkedSubdirs := 0
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
@@ -245,7 +229,7 @@ func scanDirectoryAndSubdirsForCover(dirPath string) string {
 			return found
 		}
 		checkedSubdirs++
-		if checkedSubdirs >= 10 {
+		if checkedSubdirs >= 15 {
 			break
 		}
 	}
@@ -300,8 +284,8 @@ func scanDirectoryForCoverOnly(dirPath string) string {
 }
 
 // ResolveFuzzyDirectory находит реальный существующий каталог на диске,
-// разрешая расхождения в тире (- vs – vs —), Unicode NFC/NFD, пробелах, регистре
-// и вариациях префикса библиотеки (например, /music/Music vs /music).
+// разрешая расхождения в тире (- vs – vs —), суффиксах копий (« — копия»),
+// Unicode NFC/NFD, пробелах, регистре и вариациях префикса библиотеки.
 func ResolveFuzzyDirectory(musicRoot, targetPath string) string {
 	clean := filepath.Clean(strings.TrimSpace(targetPath))
 	if clean == "" || clean == "." || clean == "/" {
@@ -356,6 +340,7 @@ func ResolveFuzzyDirectory(musicRoot, targetPath string) string {
 		}
 
 		targetNorm := normalizeNameForMatch(seg)
+		targetCleanNorm := stripCopySuffix(targetNorm)
 		foundMatch := false
 
 		for _, e := range entries {
@@ -363,30 +348,34 @@ func ResolveFuzzyDirectory(musicRoot, targetPath string) string {
 				continue
 			}
 			eNorm := normalizeNameForMatch(e.Name())
-			if eNorm == targetNorm {
+			eCleanNorm := stripCopySuffix(eNorm)
+
+			if eNorm == targetNorm || eCleanNorm == targetCleanNorm || (targetCleanNorm != "" && eNorm == targetCleanNorm) {
 				current = filepath.Join(current, e.Name())
 				foundMatch = true
 				break
 			}
 		}
 
-		// Если совпадение не найдено, проверяем распространенный случай:
-		// 1) сегмент 'Music'/'music' может отсутствовать на диске
-		if !foundMatch && (strings.EqualFold(seg, "music") || strings.EqualFold(seg, "audio")) {
+		// Если совпадение не найдено, проверяем случай, когда сегмент 'Music'/'music' отсутствует на диске
+		if !foundMatch && (strings.EqualFold(seg, "music") || strings.EqualFold(seg, "audio") || strings.EqualFold(targetCleanNorm, "music")) {
 			continue
 		}
 
-		// 2) сегмент 'Music'/'music' может присутствовать на диске, но отсутствовать в запросе
+		// Сегмент 'Music'/'music' может присутствовать на диске, но отсутствовать в запросе
 		if !foundMatch {
 			for _, e := range entries {
 				if e.IsDir() && (strings.EqualFold(e.Name(), "music") || strings.EqualFold(e.Name(), "audio")) {
 					musicSub := filepath.Join(current, e.Name())
 					if subEntries, err := os.ReadDir(musicSub); err == nil {
 						for _, se := range subEntries {
-							if se.IsDir() && normalizeNameForMatch(se.Name()) == targetNorm {
-								current = filepath.Join(musicSub, se.Name())
-								foundMatch = true
-								break
+							if se.IsDir() {
+								seNorm := normalizeNameForMatch(se.Name())
+								if seNorm == targetNorm || stripCopySuffix(seNorm) == targetCleanNorm {
+									current = filepath.Join(musicSub, se.Name())
+									foundMatch = true
+									break
+								}
 							}
 						}
 					}
@@ -397,19 +386,21 @@ func ResolveFuzzyDirectory(musicRoot, targetPath string) string {
 			}
 		}
 
-		// Если это имя папки альбома с префиксом исполнителя (например, 'Green Day - Boulevard')
+		// Если это имя папки альбома с префиксом исполнителя (например, 'Король и Шут - Будь как дома')
 		if !foundMatch && strings.Contains(targetNorm, "-") {
 			parts := strings.Split(targetNorm, "-")
 			afterDash := strings.TrimSpace(parts[len(parts)-1])
-			for _, e := range entries {
-				if !e.IsDir() {
-					continue
-				}
-				eNorm := normalizeNameForMatch(e.Name())
-				if strings.Contains(eNorm, afterDash) || strings.Contains(afterDash, eNorm) {
-					current = filepath.Join(current, e.Name())
-					foundMatch = true
-					break
+			if len(afterDash) > 3 {
+				for _, e := range entries {
+					if !e.IsDir() {
+						continue
+					}
+					eNorm := normalizeNameForMatch(e.Name())
+					if strings.Contains(eNorm, afterDash) || strings.Contains(afterDash, eNorm) {
+						current = filepath.Join(current, e.Name())
+						foundMatch = true
+						break
+					}
 				}
 			}
 		}
@@ -424,6 +415,14 @@ func ResolveFuzzyDirectory(musicRoot, targetPath string) string {
 	}
 
 	return ""
+}
+
+func stripCopySuffix(s string) string {
+	res := s
+	for _, suf := range copySuffixes {
+		res = strings.ReplaceAll(res, normalizeNameForMatch(suf), "")
+	}
+	return strings.TrimSpace(res)
 }
 
 func normalizeNameForMatch(s string) string {
