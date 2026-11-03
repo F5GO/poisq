@@ -1088,13 +1088,44 @@ body {
   box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
 }
 
-.cover-cand-thumb {
+.cover-cand-thumb-wrap {
+  position: relative;
+  cursor: pointer;
   width: 100px;
   height: 100px;
-  border-radius: 4px;
-  object-fit: cover;
-  background: #000;
   margin-bottom: 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #000;
+}
+
+.cover-cand-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.15s ease;
+}
+
+.cover-cand-thumb-wrap:hover .cover-cand-thumb {
+  transform: scale(1.08);
+}
+
+.cover-cand-zoom-hint {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 9px;
+  padding: 3px 0;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.cover-cand-thumb-wrap:hover .cover-cand-zoom-hint {
+  opacity: 1;
 }
 
 .cover-cand-title {

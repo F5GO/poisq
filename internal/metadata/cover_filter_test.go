@@ -52,4 +52,21 @@ func TestCoverFilterRejectsKaraokeAndTributes(t *testing.T) {
 	if !valid || score < 80 {
 		t.Fatalf("expected genuine Green Day single to be accepted with high score, got valid=%v score=%d", valid, score)
 	}
+
+	// 5. Очистка повторения артиста в названии альбома ("Green Day – Boulevard of Broken Dreams")
+	cleaned := CleanTargetAlbum("Green Day", "Green Day – Boulevard of Broken Dreams")
+	if cleaned != "Boulevard of Broken Dreams" {
+		t.Fatalf("expected 'Boulevard of Broken Dreams', got %q", cleaned)
+	}
+
+	// 6. Подлинный студийный альбом Green Day для трека-сингла
+	valid, score = ScoreCoverCandidate(
+		"Green Day",
+		"American Idiot",
+		"Green Day",
+		"Green Day – Boulevard of Broken Dreams",
+	)
+	if !valid || score < 70 {
+		t.Fatalf("expected American Idiot to be accepted for Green Day single, got valid=%v score=%d", valid, score)
+	}
 }

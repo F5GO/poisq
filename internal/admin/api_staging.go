@@ -9,7 +9,9 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
+	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/metadata"
 )
 
@@ -30,34 +32,78 @@ func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Для предложений по обложкам проверяем актуальное состояние папки на диске,
-	// чтобы гарантированно отображать существующую обложку cover.jpg, даже если в старом слепке стояло false.
-	for i := range items {
-		if items[i].ChangeType == "cover" && items[i].FolderPath != "" && s.guard != nil {
+	// Для предложений по обложкам:
+	// 1. Проверяем актуальное состояние папки на диске (надежный поиск с нормализацией дефисов и родительских папок).
+	// 2. Очищаем от старых караоке/трибьют обложек, заменяя их на подлинные релизы исполнителя.
+	var cleanItems []db.StagingChangeRecord
+	for _, item := range items {
+		if item.ChangeType == "cover" && item.FolderPath != "" {
+			// 1. Проверка локальной обложки на диске
 			var cur map[string]any
-			if err := json.Unmarshal([]byte(items[i].CurrentJSON), &cur); err == nil {
+			if err := json.Unmarshal([]byte(item.CurrentJSON), &cur); err == nil {
 				hasCov, _ := cur["hasCover"].(bool)
 				existingFile, _ := cur["existingFile"].(string)
 				if !hasCov || existingFile == "" {
-					if safeFolder, err := s.guard.ValidateTarget(items[i].FolderPath, false); err == nil {
-						if foundFile := metadata.FindLocalCoverFile(safeFolder); foundFile != "" {
-							cur["hasCover"] = true
-							cur["existingFile"] = foundFile
-							dim := metadata.DetectImageDimensions(foundFile)
-							cur["width"] = dim.Width
-							cur["height"] = dim.Height
-							if updatedBytes, err := json.Marshal(cur); err == nil {
-								items[i].CurrentJSON = string(updatedBytes)
-							}
+					if foundFile := metadata.FindLocalCoverFile(item.FolderPath); foundFile != "" {
+						cur["hasCover"] = true
+						cur["existingFile"] = foundFile
+						dim := metadata.DetectImageDimensions(foundFile)
+						cur["width"] = dim.Width
+						cur["height"] = dim.Height
+						if updatedBytes, err := json.Marshal(cur); err == nil {
+							item.CurrentJSON = string(updatedBytes)
 						}
 					}
 				}
 			}
+
+			// 2. Проверка предлагаемой обложки на караоке / трибьюты
+			var prop map[string]any
+			if err := json.Unmarshal([]byte(item.ProposedJSON), &prop); err == nil {
+				propURL, _ := prop["coverUrl"].(string)
+				propArtist, _ := prop["artist"].(string)
+				propAlbum, _ := prop["album"].(string)
+
+				isDisallowed := metadata.IsDisallowedCoverRelease(propArtist, propAlbum, propArtist, propAlbum)
+				if !isDisallowed {
+					lowerURL := strings.ToLower(propURL)
+					for _, kw := range metadata.DisallowedCoverKeywords {
+						if strings.Contains(lowerURL, kw) {
+							isDisallowed = true
+							break
+						}
+					}
+				}
+
+				if isDisallowed || propURL == "" {
+					// Ищем подлинные варианты через CoverFetcher
+					fetcher := metadata.NewCoverFetcher(s.guard)
+					cands := fetcher.FindCoverCandidates(r.Context(), "", propArtist, propAlbum, 8)
+					if len(cands) > 0 {
+						best := cands[0]
+						prop["coverUrl"] = best.URL
+						prop["source"] = best.Source
+						prop["width"] = best.Width
+						prop["height"] = best.Height
+						prop["alternatives"] = best.Alternatives
+						prop["reason"] = "Обложка высокого разрешения (" + best.Source + ")"
+						if upBytes, err := json.Marshal(prop); err == nil {
+							item.ProposedJSON = string(upBytes)
+							_ = s.stagingRepo.UpdateProposedJSON(item.ID, string(upBytes))
+						}
+					} else {
+						// Если подлинных обложек нет, исключаем это некорректное предложение
+						_ = s.stagingRepo.MarkStatus(item.ID, "ignored")
+						continue
+					}
+				}
+			}
 		}
+		cleanItems = append(cleanItems, item)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": items,
+		"items": cleanItems,
 	})
 }
 
