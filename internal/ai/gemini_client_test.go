@@ -17,11 +17,11 @@ import (
 )
 
 func TestGeminiClient_ModelConfiguration(t *testing.T) {
-	// 1. По умолчанию используется gemini-3.8-flash
+	// 1. По умолчанию используется gemini-2.0-flash (официальная быстрая и стабильная модель)
 	_ = os.Unsetenv("GEMINI_MODEL")
 	c1 := NewGeminiClient(nil)
-	if c1.model != "gemini-3.8-flash" {
-		t.Errorf("ожидалась дефолтная модель 'gemini-3.8-flash', получено: %s", c1.model)
+	if c1.model != "gemini-2.0-flash" {
+		t.Errorf("ожидалась дефолтная модель 'gemini-2.0-flash', получено: %s", c1.model)
 	}
 
 	// 2. Переменная окружения переопределяет модель

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	defaultGeminiModel = "gemini-3.8-flash"
+	defaultGeminiModel = "gemini-2.0-flash"
 	geminiAPIBase      = "https://generativelanguage.googleapis.com/v1beta/models"
 )
 
@@ -33,6 +33,7 @@ type geminiGenerateRequest struct {
 }
 
 type geminiContent struct {
+	Role  string       `json:"role,omitempty"`
 	Parts []geminiPart `json:"parts"`
 }
 
@@ -116,6 +117,14 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 			continue // Мгновенно переключаемся на следующий активный ключ!
 		}
 
+		// Временная перегрузка или недоступность Google (HTTP 503 UNAVAILABLE / 502 / 504)
+		if status == http.StatusServiceUnavailable || status == http.StatusBadGateway || status == http.StatusGatewayTimeout ||
+			strings.Contains(errLower, "high demand") || strings.Contains(errLower, "unavailable") {
+			g.keyPool.ReportUnavailable503(leased.ID, err.Error())
+			time.Sleep(1 * time.Second)
+			continue // Мгновенно переключаемся на следующий ключ в пуле!
+		}
+
 		if status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden {
 			if strings.Contains(errLower, "api_key_invalid") || strings.Contains(errLower, "key not valid") || status != http.StatusBadRequest {
 				g.keyPool.ReportInvalid(leased.ID, status, err.Error())
@@ -123,6 +132,8 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 			}
 		}
 
+		// Любая другая непредвиденная ошибка API также фиксируется в статистике ошибок ключа
+		g.keyPool.ReportUnavailable503(leased.ID, err.Error())
 		return "", err
 	}
 
@@ -130,9 +141,9 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 }
 
 func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
-	// Список моделей для последовательной проверки при HTTP 404 NOT_FOUND (устаревшие/недоступные модели)
+	// Список моделей для последовательной проверки при 404 (недоступна) или 503 (перегружена)
 	modelsToTry := []string{g.model}
-	candidates := []string{"gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"}
+	candidates := []string{"gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.8-flash"}
 	for _, c := range candidates {
 		if c != g.model {
 			modelsToTry = append(modelsToTry, c)
@@ -156,8 +167,10 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 		lastApiStatus = apiStatus
 		lastErr = err
 
-		// Пробуем следующую модель ТОЛЬКО если Google вернул 404 Not Found (модель устарела/недоступна)
-		if status == http.StatusNotFound {
+		// Пробуем следующую модель если Google вернул 404 (Not Found) ИЛИ 503 (модель перегружена/high demand)
+		errLower := strings.ToLower(err.Error() + " " + apiStatus)
+		if status == http.StatusNotFound || status == http.StatusServiceUnavailable || strings.Contains(errLower, "high demand") {
+			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 		// При других ошибках (429 квота, 401/403 неверный ключ) выходим для ротации ключа
@@ -170,7 +183,7 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 func (g *GeminiClient) callSingleModel(ctx context.Context, modelName, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
 	reqPayload := geminiGenerateRequest{
 		Contents: []geminiContent{
-			{Parts: []geminiPart{{Text: userPrompt}}},
+			{Role: "user", Parts: []geminiPart{{Text: userPrompt}}},
 		},
 		GenerationConfig: &geminiGenConfig{
 			Temperature:      0.1,

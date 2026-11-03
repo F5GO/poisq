@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   
   <!-- Модульная дизайн-система -->
-  <link rel="stylesheet" href="/styles.css?v=2.3.0" />
+  <link rel="stylesheet" href="/styles.css?v=2.4.0" />
 </head>
 <body>
   
@@ -404,15 +404,39 @@
   </div>
 
   <!-- Модальное окно: предложение AI караоке при наличии только plain текста -->
-  <div id="modal-whisper-offer" class="modal-backdrop hidden">
+  <div id="modal-whisper-offer" class="modal-overlay hidden">
     <div class="modal-card">
-      <div class="modal-title">Найден обычный текст без таймкодов</div>
-      <p class="modal-desc" id="whisper-offer-desc">
-        Для трека найден текст песни, но без синхронных таймингов для караоке. Создать файл .lrc с точными таймкодами строк через искусственный интеллект (AI Whisper)?
-      </p>
+      <div class="modal-header">
+        <h2 class="modal-title" id="whisper-offer-title">Создание .lrc караоке (AI)</h2>
+        <button class="modal-close-btn" id="btn-close-whisper-offer">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 14px 0;">
+        <div id="whisper-offer-track-title" style="font-weight: 600; color: var(--text-primary); margin-bottom: 8px;"></div>
+        <p class="modal-desc" id="whisper-offer-desc" style="font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
+          Запустить двухэтапный конвейер: сжатие Opus, извлечение акустических таймкодов через Groq Whisper Large v3 и высокоточное сопоставление со строками эталонного текста через Google Gemini.
+        </p>
+      </div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" id="btn-whisper-offer-cancel">Оставить обычный</button>
-        <button type="button" class="btn btn-primary" id="btn-whisper-offer-confirm">Создать .lrc через AI Whisper</button>
+        <button type="button" class="btn btn-secondary" id="btn-whisper-offer-cancel">Отмена</button>
+        <button type="button" class="btn btn-primary" id="btn-whisper-offer-confirm">Запустить генерацию</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно: Повтор задачи по этапам -->
+  <div id="modal-job-retry" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 class="modal-title" id="modal-retry-title">Повтор задачи</h2>
+        <button class="modal-close-btn" id="btn-close-retry-modal">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 14px 0;">
+        <div id="modal-retry-track" style="font-weight: 600; font-size: 14px; margin-bottom: 6px; color: var(--text-primary);"></div>
+        <p class="modal-desc" id="modal-retry-desc" style="font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px;"></p>
+        <div id="modal-retry-error" class="mono hidden" style="font-size: 11px; color: var(--color-crimson, #f43f5e); background: rgba(244, 63, 94, 0.08); padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 14px; word-break: break-word;"></div>
+      </div>
+      <div class="modal-actions" id="modal-retry-actions" style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;">
+        <!-- Кнопки заполняются динамически в app.js -->
       </div>
     </div>
   </div>
@@ -453,6 +477,6 @@
   <!-- Контейнер Toast-уведомлений -->
   <div id="toast-container" class="toast-container"></div>
 
-  <script src="/app.js?v=2.3.0"></script>
+  <script src="/app.js?v=2.4.0"></script>
 </body>
 </html>

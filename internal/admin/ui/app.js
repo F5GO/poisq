@@ -1245,17 +1245,40 @@ async function enqueueLrcTournament() {
   }
 }
 
-async function handleCreateAiLrc() {
+function handleCreateAiLrc() {
   if (!state.selectedTrack) {
     showToast("Сначала выберите трек в караоке-плеере", "error");
     return;
   }
-  const track = state.selectedTrack;
-  const name = `${track.artist || "Артист"} — ${track.title || "Трек"}`;
-  if (!confirm(`Сгенерировать синхронизированный .lrc тайминг для «${name}» с помощью ИИ (Groq Whisper)?`)) {
-    return;
+  openLyricsGenModal(state.selectedTrack);
+}
+
+function openLyricsGenModal(track) {
+  if (!track) return;
+  const modal = document.getElementById("modal-whisper-offer");
+  const titleEl = document.getElementById("whisper-offer-track-title");
+  if (titleEl) {
+    titleEl.textContent = `${track.artist || "Неизвестный артист"} — ${track.title || "Без названия"}`;
   }
-  await enqueueWhisperKaraoke();
+  const confirmBtn = document.getElementById("btn-whisper-offer-confirm");
+  const cancelBtn = document.getElementById("btn-whisper-offer-cancel");
+  const closeBtn = document.getElementById("btn-close-whisper-offer");
+
+  const onConfirm = () => {
+    modal?.classList.add("hidden");
+    confirmBtn?.removeEventListener("click", onConfirm);
+    enqueueWhisperKaraoke();
+  };
+  const onCancel = () => {
+    modal?.classList.add("hidden");
+    confirmBtn?.removeEventListener("click", onConfirm);
+  };
+
+  confirmBtn?.addEventListener("click", onConfirm);
+  cancelBtn?.addEventListener("click", onCancel);
+  closeBtn?.addEventListener("click", onCancel);
+
+  modal?.classList.remove("hidden");
 }
 
 async function enqueueWhisperKaraoke() {
@@ -2087,7 +2110,7 @@ async function loadJobsData() {
         actionBtns += `<button class="btn-table-action danger" onclick="event.stopPropagation(); jobAction(${j.id}, 'delete')" title="Удалить задачу">✕</button>`;
       } else {
         // running, done, failed
-        actionBtns += `<button class="btn-table-action primary" onclick="event.stopPropagation(); jobAction(${j.id}, 'retry')" title="Перезапустить задачу заново">↻ Повтор</button>`;
+        actionBtns += `<button class="btn-table-action primary" onclick="event.stopPropagation(); promptJobRetry(${j.id})" title="Повторить задачу">↻ Повтор</button>`;
         actionBtns += `<button class="btn-table-action danger" onclick="event.stopPropagation(); jobAction(${j.id}, 'delete')" title="Удалить запись о задаче">✕</button>`;
       }
       actionBtns += `</div>`;
@@ -2113,14 +2136,67 @@ async function loadJobsData() {
   }
 }
 
-async function jobAction(jobId, action) {
+function promptJobRetry(jobId) {
+  const j = (state.jobs || []).find(item => item.id === jobId);
+  if (!j) {
+    jobAction(jobId, 'retry', 'restart');
+    return;
+  }
+
+  const modal = document.getElementById("modal-job-retry");
+  const trackEl = document.getElementById("modal-retry-track");
+  const descEl = document.getElementById("modal-retry-desc");
+  const errEl = document.getElementById("modal-retry-error");
+  const actionsEl = document.getElementById("modal-retry-actions");
+  if (!modal || !actionsEl) return;
+
+  const trackObj = (state.tracks || []).find(t => t.id === (j.trackId || j.targetId));
+  const trackName = trackObj ? `${trackObj.artist || "Неизвестный артист"} — ${trackObj.title || "Без названия"}` : (j.trackId || `Задача #${j.id}`);
+  if (trackEl) trackEl.textContent = trackName;
+
+  const errText = j.errorLog || j.lastError || "";
+  if (errText) {
+    errEl.textContent = errText;
+    errEl.classList.remove("hidden");
+  } else {
+    errEl.classList.add("hidden");
+  }
+
+  // Проверяем, произошел ли сбой на этапе Gemini или это задача караоке
+  const isGeminiStageFailure = errText.includes("Gemini") || (j.jobType === "whisper_karaoke" && (j.attemptCount || 0) > 0);
+
+  if (isGeminiStageFailure) {
+    descEl.innerHTML = `Этап акустического распознавания Whisper успешно пройден и сохранен в кэше. Сбой произошел на этапе связи с Google Gemini.<br><br>С какого этапа перезапустить задачу?`;
+    actionsEl.innerHTML = `
+      <button type="button" class="btn btn-secondary" onclick="closeRetryModal()">Отмена</button>
+      <button type="button" class="btn btn-secondary" onclick="closeRetryModal(); jobAction(${j.id}, 'retry', 'restart')">🔄 Заново с 1 этапа</button>
+      <button type="button" class="btn btn-primary" onclick="closeRetryModal(); jobAction(${j.id}, 'retry', 'resume')">⚡️ С этапа Gemini</button>
+    `;
+  } else {
+    descEl.textContent = `Перезапустить выполнение задачи #${j.id} в очереди фонового воркера?`;
+    actionsEl.innerHTML = `
+      <button type="button" class="btn btn-secondary" onclick="closeRetryModal()">Отмена</button>
+      <button type="button" class="btn btn-primary" onclick="closeRetryModal(); jobAction(${j.id}, 'retry', 'restart')">Перезапустить задачу</button>
+    `;
+  }
+
+  document.getElementById("btn-close-retry-modal")?.addEventListener("click", closeRetryModal);
+  modal.classList.remove("hidden");
+}
+
+function closeRetryModal() {
+  document.getElementById("modal-job-retry")?.classList.add("hidden");
+}
+
+async function jobAction(jobId, action, stage = "resume") {
   try {
-    await fetchApi("/jobs/action", "POST", { id: Number(jobId), action });
+    await fetchApi("/jobs/action", "POST", { id: Number(jobId), action, stage });
     let msg = "Действие выполнено";
     if (action === "pause") msg = `Задача #${jobId} приостановлена`;
     else if (action === "resume") msg = `Задача #${jobId} возобновлена`;
-    else if (action === "retry") msg = `Задача #${jobId} отправлена на повтор`;
-    else if (action === "delete") msg = `Задача #${jobId} удалена`;
+    else if (action === "retry") {
+      msg = stage === "resume" ? `Задача #${jobId} возобновлена с этапа Gemini` : `Задача #${jobId} перезапущена с 1 этапа`;
+    } else if (action === "delete") msg = `Задача #${jobId} удалена`;
     showToast(`✓ ${msg}`, "success");
     await loadJobsData();
   } catch (err) {

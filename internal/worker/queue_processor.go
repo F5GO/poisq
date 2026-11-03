@@ -221,10 +221,46 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 			_ = qp.saveWinningLyrics(track, tRes.Winner.ProviderID, lyrics.KindPlain, refPlain, track.LangCode, false)
 		}
 	}
+	if refPlain == "" && track != nil {
+		refPlain = ai.FastCleanStructuralTags(track.ActiveLyrics)
+		if refPlain == "" {
+			refPlain = ai.FastCleanStructuralTags(track.LyricsBody)
+		}
+	}
 
 	if qp.karaoke != nil && (job.JobType == "whisper_karaoke" || job.JobType == "full_pipeline") {
-		logger.Info("[WORKER] [Задача #%d] Запуск транскрибации караоке через Groq Whisper + Gemini...", job.ID)
-		karaokeOut, kErr := qp.karaoke.GenerateSyncedLRC(ctx, track.FilePath, track.Artist, track.Title, refPlain, track.LangCode)
+		logger.Info("[WORKER] [Задача #%d] Старт караоке-пайплайна (Groq Whisper + Gemini) для «%s — %s»...", job.ID, track.Artist, track.Title)
+
+		// Проверяем наличие кэшированного результата Whisper для пошагового продолжения
+		var acousticJSON string
+		if cachedList, err := qp.cacheRepo.ListByTrack(track.ID); err == nil {
+			for _, c := range cachedList {
+				if c.Provider == "whisper_raw" && strings.TrimSpace(c.RawLyrics) != "" {
+					acousticJSON = c.RawLyrics
+					logger.Info("[WORKER] [Задача #%d] Обнаружен кэш этапа Whisper — пропускаем аудио-транскрибацию и запускаем сразу этап Gemini Merge!", job.ID)
+					break
+				}
+			}
+		}
+
+		if acousticJSON == "" {
+			logger.Info("[WORKER] [Задача #%d] Этап 1-2: Сжатие Opus и распознавание через Groq Whisper...", job.ID)
+			rawJSON, wErr := qp.karaoke.TranscribeToSegments(ctx, track.FilePath, track.LangCode)
+			if wErr != nil {
+				return wErr
+			}
+			acousticJSON = rawJSON
+			_ = qp.cacheRepo.Upsert(db.ProviderCacheRecord{
+				TrackID:   track.ID,
+				Provider:  "whisper_raw",
+				Kind:      "acoustic_json",
+				Score:     50.0,
+				RawLyrics: acousticJSON,
+			})
+		}
+
+		logger.Info("[WORKER] [Задача #%d] Этап 3: Высокоточный мердж и синхронизация строк через Google Gemini...", job.ID)
+		karaokeOut, kErr := qp.karaoke.MergeSegmentsWithReference(ctx, acousticJSON, track.Artist, track.Title, refPlain)
 		if kErr != nil {
 			return kErr
 		}
