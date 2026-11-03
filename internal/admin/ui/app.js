@@ -161,13 +161,53 @@ function parseLRC(lrcText) {
 document.addEventListener("DOMContentLoaded", () => {
   state.audioEl = document.getElementById("audio-stream");
 
+  initTheme();
   initNavigation();
   initViewControls();
   initPlayerControls();
   initDrawer();
   initKeyModal();
   loadLibraryData();
+  loadKeysData();
 });
+
+// -----------------------------------------------------------------------------
+// 0. Управление цветовой темой и брендингом
+// -----------------------------------------------------------------------------
+function initTheme() {
+  const savedTheme = localStorage.getItem("poisq_theme") || "light";
+  applyTheme(savedTheme);
+
+  const toggleBtn = document.getElementById("btn-toggle-theme");
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      const currentTheme = document.documentElement.getAttribute("data-theme") || "light";
+      const newTheme = currentTheme === "dark" ? "light" : "dark";
+      applyTheme(newTheme);
+      localStorage.setItem("poisq_theme", newTheme);
+    });
+  }
+
+  const brandHomeLink = document.getElementById("brand-home-link");
+  if (brandHomeLink) {
+    brandHomeLink.addEventListener("click", () => {
+      switchTab("library");
+    });
+  }
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  const sunIcon = document.getElementById("theme-icon-sun");
+  const moonIcon = document.getElementById("theme-icon-moon");
+  if (theme === "dark") {
+    sunIcon?.classList.remove("hidden");
+    moonIcon?.classList.add("hidden");
+  } else {
+    sunIcon?.classList.add("hidden");
+    moonIcon?.classList.remove("hidden");
+  }
+}
 
 // -----------------------------------------------------------------------------
 // 1. Навигация и переключение вкладок
@@ -411,7 +451,7 @@ function renderTracksTable(container, tracks) {
       <tr class="${rowClass}" onclick="openTrackDrawer('${escapeHtml(t.id)}')" style="cursor: pointer;">
         <td class="col-num mono">${num}</td>
         <td>
-          <div style="font-weight: 500; color: #ffffff;">${escapeHtml(t.title || "Без названия")}</div>
+          <div style="font-weight: 600; color: var(--text-primary);">${escapeHtml(t.title || "Без названия")}</div>
           <div style="font-size: 11px; color: var(--text-muted);">${escapeHtml(t.artist || "Неизвестный артист")}</div>
         </td>
         <td style="color: var(--text-secondary);">${escapeHtml(t.album || "—")}</td>
@@ -567,12 +607,12 @@ async function openTrackDrawer(trackId) {
     <div style="display: flex; gap: 16px; align-items: center;">
       <div class="drawer-cover-wrap">
         ${coverUrl 
-          ? `<img src="${coverUrl}" class="drawer-cover-img" alt="Обложка" onerror="this.parentElement.innerHTML='<div style=\\'display:flex;height:100%;align-items:center;justify-content:center;color:var(--text-muted);font-size:32px;\\'>♪</div>'"/>` 
-          : `<div style="display:flex;height:100%;align-items:center;justify-content:center;color:var(--text-muted);font-size:32px;">♪</div>`
+          ? `<img src="${coverUrl}" class="drawer-cover-img" alt="Обложка" onerror="this.parentElement.innerHTML='<div style=\\'display:flex;height:100%;align-items:center;justify-content:center;background:var(--brand-gradient-soft);\\'><img src=\\'/assets/brand/poisq-mark-192.png\\' alt=\\'poisq\\' style=\\'width:40px;height:40px;opacity:0.85;\\'/></div>'"/>` 
+          : `<div style="display:flex;height:100%;align-items:center;justify-content:center;background:var(--brand-gradient-soft);"><img src="/assets/brand/poisq-mark-192.png" alt="poisq" style="width:40px;height:40px;opacity:0.85;"/></div>`
         }
       </div>
       <div>
-        <div style="font-size: 16px; font-weight: 600; color: #ffffff;">${escapeHtml(track.title || "—")}</div>
+        <div style="font-size: 16px; font-weight: 700; color: var(--text-primary);">${escapeHtml(track.title || "—")}</div>
         <div style="font-size: 13px; color: var(--text-secondary); margin-top: 2px;">${escapeHtml(track.artist || "—")}</div>
         <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${escapeHtml(track.album || "—")}</div>
       </div>
@@ -710,6 +750,12 @@ function initPlayerControls() {
   });
   document.getElementById("btn-whisper-offer-confirm")?.addEventListener("click", () => {
     document.getElementById("modal-whisper-offer")?.classList.add("hidden");
+    const hasGroq = (state.keys || []).some(k => k.provider === "groq" && k.status !== "invalid");
+    if (!hasGroq) {
+      showToast("Для караоке Whisper требуется добавить бесплатный ключ Groq Cloud во вкладке «Ключи API».", "info");
+      switchTab("keys");
+      return;
+    }
     enqueueWhisperKaraoke();
   });
 
@@ -801,9 +847,9 @@ async function openTrackInKaraoke(trackId) {
       ? `/api/v1/navidrome/album-cover?album=${encodeURIComponent(track.album || "")}&artist=${encodeURIComponent(track.artist || "")}&path=${encodeURIComponent(track.folderPath)}`
       : "";
     if (coverUrl) {
-      playerCover.innerHTML = `<img src="${coverUrl}" class="player-cover-img" alt="Обложка" onerror="this.parentElement.innerHTML='♪'"/>`;
+      playerCover.innerHTML = `<img src="${coverUrl}" class="player-cover-img" alt="Обложка" onerror="this.parentElement.innerHTML='<img src=\\'/assets/brand/poisq-mark-192.png\\' alt=\\'poisq\\' style=\\'width:28px;height:28px;opacity:0.85;\\'/>'"/>`;
     } else {
-      playerCover.innerHTML = "♪";
+      playerCover.innerHTML = `<img src="/assets/brand/poisq-mark-192.png" alt="poisq" style="width:28px;height:28px;opacity:0.85;"/>`;
     }
   }
 
@@ -1193,6 +1239,13 @@ async function enqueueLrcTournament() {
 async function enqueueWhisperKaraoke() {
   if (!state.selectedTrack) {
     showToast("Сначала выберите трек в караоке-плеере", "error");
+    return;
+  }
+
+  const hasGroq = (state.keys || []).some(k => k.provider === "groq" && k.status !== "invalid");
+  if (!hasGroq) {
+    showToast("Для создания караоке Whisper требуется добавить ключ Groq Cloud во вкладке «Ключи API».", "info");
+    switchTab("keys");
     return;
   }
 
@@ -2005,7 +2058,7 @@ async function loadJobsData() {
         <tr>
           <td class="col-num mono">${j.id}</td>
           <td>
-            <div style="font-weight: 500; color: #ffffff;">${escapeHtml(trackDisplay)}</div>
+            <div style="font-weight: 600; color: var(--text-primary);">${escapeHtml(trackDisplay)}</div>
             ${trackObj && trackId ? `<div class="mono text-muted" style="font-size: 10px;">${escapeHtml(trackId)}</div>` : ""}
           </td>
           <td>${escapeHtml(jobTypeLabel)}</td>
@@ -2121,7 +2174,7 @@ async function loadKeysData() {
 
     return `
       <tr>
-        <td style="font-weight: 500; color: #ffffff;">${escapeHtml(providerTitle)}</td>
+        <td style="font-weight: 600; color: var(--text-primary);">${escapeHtml(providerTitle)}</td>
         <td>${keyDisplay}</td>
         <td>${statusBadge}</td>
         <td class="mono text-muted">${k.successCount || 0} / ${k.errorCount || 0}</td>

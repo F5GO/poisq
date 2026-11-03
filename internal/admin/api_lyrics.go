@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/lyrics"
 )
 
@@ -141,6 +142,13 @@ func (s *AdminServer) handleLyricsEnqueue(w http.ResponseWriter, r *http.Request
 	if req.JobType == "" {
 		req.JobType = "full_pipeline"
 	}
+
+	if req.JobType == "whisper_karaoke" && (s.keyPool == nil || !s.keyPool.HasKeys("groq")) {
+		writeJSONError(w, http.StatusBadRequest, "Для генерации караоке через Whisper требуется API-ключ Groq Cloud. Добавьте его во вкладке «Ключи API». Для обычного поиска нажмите кнопку «Найти текст».")
+		return
+	}
+
+	logger.Info("[API] Постановка задачи в очередь: trackId=%s, jobType=%s, enqueueAll=%v", req.TrackID, req.JobType, req.EnqueueAll)
 
 	enqueued := 0
 	if req.EnqueueAll {

@@ -1,0 +1,100 @@
+/*
+ * poisq Studio — Кнопки управления (Buttons)
+ * 
+ * Что делает этот код и для чего он нужен:
+ * Предоставляет унифицированную систему кнопок в соответствии с Apple HIG и брендбуком poisq:
+ * - Скругления 10–14 px (--radius-md: 12px);
+ * - Первичные акцентные кнопки (Primary) с умеренным фирменным синим акцентом;
+ * - Вторичные нейтральные кнопки (Secondary) с мягкой границей;
+ * - Кнопки управления воспроизведением (Play, Step Back/Forward).
+ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+/* Первичная кнопка (Акцентное действие по брендбуку poisq) */
+.btn-primary {
+  background: var(--poisq-blue);
+  color: #FFFFFF;
+  border-color: rgba(37, 99, 235, 0.9);
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2), 0 3px 8px rgba(37, 99, 235, 0.15);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.25), 0 6px 16px rgba(37, 99, 235, 0.2);
+}
+
+/* Вторичная кнопка */
+.btn-secondary {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+}
+
+/* Предостерегающая контурная кнопка (Полный сброс БД) */
+.btn-danger-outline {
+  background: transparent;
+  color: var(--color-red);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.btn-danger-outline:hover:not(:disabled) {
+  background: var(--color-red-bg);
+  border-color: var(--color-red);
+}
+
+/* Кнопка закрытия модальных окон и панелей */
+.modal-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.modal-close-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}

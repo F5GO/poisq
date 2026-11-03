@@ -9,7 +9,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/keypool"
+	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/lyrics"
 )
 
@@ -115,30 +115,38 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 			if errors.Is(err, db.ErrNoPendingJobs) {
 				return
 			}
-			log.Printf("[WARN] [WORKER] Ошибка выборки задачи из очереди: %v", err)
+			logger.Warn("[WORKER] Ошибка выборки задачи из очереди: %v", err)
 			return
 		}
 
+		logger.Info("[WORKER] Взята задача #%d в обработку: тип=%s, трекId=%s", job.ID, job.JobType, job.TrackID)
+
 		if err := qp.executeJob(ctx, job); err != nil {
 			if errors.Is(err, db.ErrNoAvailableKeys) {
+				if job.JobType == "whisper_karaoke" && (qp.keyPool == nil || !qp.keyPool.HasKeys("groq")) {
+					_ = qp.jobRepo.MarkRetryOrFailed(job.ID, 3, 3, "Отсутствует ключ Groq Cloud в пуле. Добавьте его во вкладке «Ключи API».")
+					logger.Warn("[WORKER] Задача #%d отклонена: в пуле нет ключа Groq Cloud для AI Whisper караоке", job.ID)
+					return
+				}
 				retryAt := qp.keyPool.NextRetryTimestamp("gemini")
 				groqRetry := qp.keyPool.NextRetryTimestamp("groq")
 				if groqRetry > retryAt {
 					retryAt = groqRetry
 				}
 				_ = qp.jobRepo.MarkWaitingQuota(job.ID, retryAt, "Ожидание освобождения API-ключей: "+err.Error())
-				log.Printf("[INFO] [WORKER] Все ключи в кулдауне/исчерпаны. Задача #%d переведена в ожидание до %v",
+				logger.Info("[WORKER] Ключи в кулдауне. Задача #%d переведена в ожидание до %v",
 					job.ID, time.Unix(retryAt, 0).Format(time.RFC3339))
 				return
 			}
 
 			_ = qp.jobRepo.MarkRetryOrFailed(job.ID, job.AttemptCount, 3, err.Error())
-			log.Printf("[WARN] [WORKER] Задача #%d (трек %s) завершилась ошибкой (попытка %d): %v",
+			logger.Warn("[WORKER] Задача #%d (трек %s) завершилась ошибкой (попытка %d): %v",
 				job.ID, job.TrackID, job.AttemptCount, err)
 			continue
 		}
 
 		_ = qp.jobRepo.MarkDone(job.ID)
+		logger.Info("[WORKER] Задача #%d успешно завершена!", job.ID)
 	}
 }
 
@@ -148,6 +156,8 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 	if err != nil {
 		return err
 	}
+
+	logger.Info("[WORKER] [Задача #%d] Старт обработки: «%s — %s» (тип задачи: %s)", job.ID, track.Artist, track.Title, job.JobType)
 
 	q := lyrics.SearchQuery{
 		TrackID:  track.ID,
@@ -166,8 +176,11 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 	// Если нужен только быстрый турнир без облачного AI
 	if job.JobType == "tournament" {
 		if tRes == nil || tRes.Winner == nil {
+			logger.Warn("[WORKER] [Задача #%d] Текст не найден ни в одном источнике для «%s — %s»", job.ID, track.Artist, track.Title)
 			return lyrics.ErrNotFound
 		}
+		logger.Info("[WORKER] [Задача #%d] Турнир завершен победой %s (формат: %s, оценка: %.1f)",
+			job.ID, tRes.Winner.ProviderID, tRes.Winner.Lyrics.Kind, tRes.Winner.Score.Total)
 		return qp.saveWinningLyrics(track, tRes.Winner.ProviderID, tRes.Winner.Lyrics.Kind,
 			selectBestText(tRes.Winner.Lyrics), track.LangCode, false)
 	}
@@ -179,6 +192,7 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 		_ = qp.saveWinningLyrics(track, tRes.Winner.ProviderID, lyrics.KindLRC, cleanedLocal, track.LangCode, false)
 
 		if qp.cleaner != nil {
+			logger.Info("[WORKER] [Задача #%d] Запуск AI-консенсуса и валидации текста через Gemini...", job.ID)
 			consensus, aiErr := qp.cleaner.BuildConsensus(ctx, track.Artist, track.Title, tRes.Candidates)
 			if aiErr != nil {
 				if errors.Is(aiErr, db.ErrNoAvailableKeys) && job.JobType == "ai_consensus" {
@@ -209,6 +223,7 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 	}
 
 	if qp.karaoke != nil && (job.JobType == "whisper_karaoke" || job.JobType == "full_pipeline") {
+		logger.Info("[WORKER] [Задача #%d] Запуск транскрибации караоке через Groq Whisper + Gemini...", job.ID)
 		karaokeOut, kErr := qp.karaoke.GenerateSyncedLRC(ctx, track.FilePath, track.Artist, track.Title, refPlain, track.LangCode)
 		if kErr != nil {
 			return kErr
@@ -248,11 +263,14 @@ func (qp *QueueProcessor) saveWinningLyrics(track *db.TrackRecord, source string
 	if qp.lrcWriter != nil && track.FilePath != "" {
 		if _, err := qp.lrcWriter.WriteForAudioFile(track.FilePath, trimmed); err == nil {
 			lrcWritten = true
+			logger.Info("[WORKER] Файл .lrc успешно записан на диск рядом с %s", track.FilePath)
 		} else {
-			log.Printf("[WARN] [WORKER] Не удалось записать .lrc файл для %s: %v", track.FilePath, err)
+			logger.Warn("[WORKER] Не удалось записать .lrc файл для %s: %v", track.FilePath, err)
 		}
 	}
 
+	logger.Info("[WORKER] Текст для «%s — %s» сохранен в базу (статус: %s, источник: %s, lrc_file: %v)",
+		track.Artist, track.Title, status, source, lrcWritten)
 	return qp.trackRepo.UpdateLyrics(track.ID, status, source, trimmed, langCode, lrcWritten)
 }
 
