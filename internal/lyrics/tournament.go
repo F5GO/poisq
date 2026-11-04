@@ -57,7 +57,16 @@ type TournamentOrchestrator struct {
 	timeout   time.Duration
 	tolerance time.Duration
 	expander  QueryExpander
+
+	aliasSource ArtistAliasSource
+	judge       ArtistJudge
 }
+
+// SetArtistAliasSource подключает источник настоящих алиасов исполнителя (MusicBrainz).
+func (t *TournamentOrchestrator) SetArtistAliasSource(a ArtistAliasSource) { t.aliasSource = a }
+
+// SetArtistJudge подключает ИИ-судью, подтверждающего, что найденная запись принадлежит тому же исполнителю.
+func (t *TournamentOrchestrator) SetArtistJudge(j ArtistJudge) { t.judge = j }
 
 // SetQueryExpander подключает ИИ-расширение запросов (используется как последняя фаза умного поиска).
 func (t *TournamentOrchestrator) SetQueryExpander(e QueryExpander) {
@@ -151,6 +160,28 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 			winner, info = t.choose(candidates, q)
 			if winner != nil && info != nil && info.ConsensusOK && info.HasFullLRC {
 				logger.Info("[TOURNAMENT] Умный поиск: подтверждённый LRC найден на варианте %d/%d", i+1, len(variants))
+				break
+			}
+		}
+	}
+
+	// Фаза «реальные написания»: алиасы MusicBrainz и записи баз, найденные по названию и длительности
+	if ctx.Err() == nil && !(winner != nil && info != nil && info.ConsensusOK && info.HasFullLRC) {
+		tried := map[string]struct{}{strings.ToLower(q.Artist) + "|" + strings.ToLower(q.Title): {}}
+		for _, v := range GenerateQueryVariants(q, 4) {
+			tried[strings.ToLower(v.Artist)+"|"+strings.ToLower(v.Title)] = struct{}{}
+		}
+		realQs := t.realNameQueries(ctx, q, tried)
+		for i, vq := range realQs {
+			if ctx.Err() != nil {
+				break
+			}
+			label := fmt.Sprintf("реальное написание %d/%d: «%s — %s»", i+1, len(realQs), vq.Artist, vq.Title)
+			more := t.runPhase(ctx, vq, q, label)
+			candidates = mergeCandidates(candidates, more)
+			winner, info = t.choose(candidates, q)
+			if winner != nil && info != nil && info.ConsensusOK && info.HasFullLRC {
+				logger.Info("[TOURNAMENT] Подтверждённый LRC найден по реальному написанию %d/%d", i+1, len(realQs))
 				break
 			}
 		}

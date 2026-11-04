@@ -64,3 +64,14 @@ func TestQueryExpanderCachesAndSanitizes(t *testing.T) {
 		t.Fatalf("второй вызов должен идти из кэша: calls=%d err=%v", gen.calls, err)
 	}
 }
+
+func TestArtistJudgeParsesIndexesOnly(t *testing.T) {
+	gen := &fakeGen{out: "```json\n{\"same\":[0,2]}\n```"}
+	j := NewLLMArtistJudge(gen)
+	idx, err := j.SameArtist(context.Background(),
+		lyrics.SearchQuery{Artist: "МакSим", Title: "Отпускаю"},
+		[]lyrics.DiscoveredTrack{{Artist: "MakSim"}, {Artist: "Drake"}, {Artist: "Maxim"}})
+	if err != nil || len(idx) != 2 || idx[0] != 0 || idx[1] != 2 {
+		t.Fatalf("idx=%v err=%v", idx, err)
+	}
+}
