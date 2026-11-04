@@ -345,7 +345,8 @@ def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_
             status += " (сдвинуто)"
         end = max(end, start + 0.2)
         prev_end = end
-        results.append({"line": i, "status": status, "start": start, "end": end, "matched": len(got), "of": len(toks)})
+        results.append({"line": i, "status": status, "start": start, "end": end, "matched": len(got), "of": len(toks),
+                        "asr_start": a_start, "asr_end": a_end})
     return results, asr
 
 
@@ -569,6 +570,8 @@ def main():
             if w:
                 phrase.append((w, st, en))
                 last_end = en
+        with open(os.path.join(args.work, "asr_words.json"), "w", encoding="utf-8") as f:
+            json.dump([{"word": w, "start": st, "end": en} for w, st, en in asr], f, ensure_ascii=False, indent=1)
         found = [r for r in results if r["start"] is not None]
         print(f"[asr-anchor] найдено в записи строк: {len(found)} из {len(results)}")
         errs, lrc_lines = [], []
@@ -579,7 +582,8 @@ def main():
                 continue
             q = max(0.0, r["start"] - args.lead)
             lrc_lines.append("[%02d:%05.2f] %s" % (int(q // 60), q % 60, gold[r["line"]][1]))
-            print("   строка %2d  %7.2f–%7.2f  %-18s %s" % (r["line"] + 1, r["start"], r["end"], r["status"], line_text[:40]))
+            print("   строка %2d  %7.2f–%7.2f  (якорь Whisper %7.2f–%7.2f) %-28s %s" % (
+                r["line"] + 1, r["start"], r["end"], r["asr_start"], r["asr_end"], r["status"], line_text[:34]))
             if not no_gold:
                 errs.append(r["start"] - gold[r["line"]][0])
         with open(os.path.join(args.work, "aligned_asr_anchor.lrc"), "w", encoding="utf-8") as f:
