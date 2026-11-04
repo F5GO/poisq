@@ -259,3 +259,24 @@ You might also like
 		t.Errorf("Потеряны полезные строки песни: %s", cleaned)
 	}
 }
+
+// Транслитерированное имя исполнителя (МакSим / MakSim) допустимо только при точном совпадении
+// названия и длительности (±2 сек); без совпадения длительности кандидат отклоняется.
+func TestScoreCandidateWeakArtistNeedsStrongDuration(t *testing.T) {
+	q := SearchQuery{Artist: "МакSим", Title: "Отпускаю", Duration: 261 * time.Second}
+
+	ok := ScoreCandidate(q, "MakSim", "Отпускаю", "", 262*time.Second, KindLRC, "[00:01.00] a", 6*time.Second)
+	if !ok.Accepted {
+		t.Fatalf("кандидат с другим написанием артиста и той же длительностью должен приниматься, score=%+v", ok)
+	}
+
+	bad := ScoreCandidate(q, "MakSim", "Отпускаю", "", 270*time.Second, KindLRC, "[00:01.00] a", 6*time.Second)
+	if bad.Accepted {
+		t.Fatalf("кандидат с другим артистом и чужой длительностью должен отклоняться, score=%+v", bad)
+	}
+
+	other := ScoreCandidate(q, "Drake", "NOKIA", "", 0, KindLRC, "[00:01.00] a", 6*time.Second)
+	if other.Accepted {
+		t.Fatalf("чужой трек не должен приниматься, score=%+v", other)
+	}
+}

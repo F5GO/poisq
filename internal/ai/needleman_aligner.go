@@ -343,9 +343,23 @@ var lrcLineParseRe = regexp.MustCompile(`^\s*\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?
 // и жестко примагничивает (snaps) каждый таймкод к физическому началу слова в аудиофайле,
 // исправляя любые галлюцинации и сдвиги таймкодов со стороны LLM.
 func SnapLRCToAcousticWords(lrcText string, data *AcousticTimelineData) string {
+	out, _ := SnapLRCToAcousticWordsStats(lrcText, data)
+	return out
+}
+
+// SnapStats описывает, насколько результат подтверждён реальным звуком.
+type SnapStats struct {
+	Lines       int // всего строк
+	Unconfirmed int // строки, время которых НЕ подтверждено ни одним словом Whisper (угадано/интерполировано)
+}
+
+// SnapLRCToAcousticWordsStats — то же, что SnapLRCToAcousticWords, но дополнительно возвращает статистику
+// достоверности: сколько строк получили время без подтверждения голосом.
+func SnapLRCToAcousticWordsStats(lrcText string, data *AcousticTimelineData) (string, SnapStats) {
+	var stats SnapStats
 	trimmed := strings.TrimSpace(lrcText)
 	if trimmed == "" || data == nil || len(data.Words) == 0 {
-		return trimmed
+		return trimmed, stats
 	}
 
 	type parsedLine struct {
@@ -382,7 +396,7 @@ func SnapLRCToAcousticWords(lrcText string, data *AcousticTimelineData) string {
 	}
 
 	if len(parsed) == 0 {
-		return trimmed
+		return trimmed, stats
 	}
 
 	// Вычисляем акустические таймкоды строк через глобальный алгоритм Нидлмана — Вунша
@@ -430,6 +444,7 @@ func SnapLRCToAcousticWords(lrcText string, data *AcousticTimelineData) string {
 		case dpMatched[i]:
 			finalSec = d
 		default:
+			stats.Unconfirmed++
 			finalSec = g
 			if finalSec < d && d > 0 && g <= 0 {
 				finalSec = d
@@ -456,7 +471,9 @@ func SnapLRCToAcousticWords(lrcText string, data *AcousticTimelineData) string {
 	logger.Info("[ALIGN] Snap после Gemini: строк %d, таймкод изменён более чем на 0.5 сек у %d (макс. сдвиг %.2f сек), оставлено время Gemini, подтверждённое словом Whisper: %d",
 		len(parsed), shifted, maxShift, usedGemini)
 
-	return strings.TrimSpace(sb.String())
+	stats.Lines = len(parsed)
+	logger.Info("[ALIGN] Достоверность: строк без подтверждения голосом %d из %d", stats.Unconfirmed, stats.Lines)
+	return strings.TrimSpace(sb.String()), stats
 }
 
 // BuildDirectAcousticLRC формирует чистый LRC напрямую из откалиброванных акустических фраз Whisper.

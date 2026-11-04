@@ -366,6 +366,15 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 			return kErr
 		}
 
+		verified := true
+		if karaokeOut.TotalLines > 0 && float64(karaokeOut.UnconfirmedLines)/float64(karaokeOut.TotalLines) > 0.25 {
+			verified = false
+			warn := fmt.Sprintf("⚠ Низкая достоверность тайминга: %d из %d строк не подтверждены голосом (Whisper их не расслышал), время этих строк приблизительное",
+				karaokeOut.UnconfirmedLines, karaokeOut.TotalLines)
+			qp.tracker.RecordStep(job.ID, "low_confidence", warn)
+			logger.Warn("[WORKER] [Задача #%d] %s", job.ID, warn)
+		}
+
 		qp.reportStep(job.ID, "saving", "Этап 4: Запись синхронизированного .lrc файла на диск (Источник: poisq)...")
 		if cErr := qp.cacheRepo.Upsert(db.ProviderCacheRecord{
 			TrackID:   track.ID,
@@ -380,7 +389,7 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 		if langOut == "" {
 			langOut = track.LangCode
 		}
-		return qp.saveWinningLyrics(track, "poisq", lyrics.KindLRC, karaokeOut.CleanedLyrics, langOut, true)
+		return qp.saveWinningLyrics(track, "poisq", lyrics.KindLRC, karaokeOut.CleanedLyrics, langOut, verified)
 	}
 
 	if refPlain != "" {

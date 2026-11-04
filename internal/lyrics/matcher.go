@@ -574,12 +574,15 @@ func ScoreCandidate(
 	}
 
 	// 2. Оценка исполнителя
+	// Если имя исполнителя не совпало (например, «МакSим» и латинское «MakSim»), кандидат не отбрасывается сразу:
+	// он допускается только при совпавшем названии и длительности в пределах 2 сек (проверка ниже).
+	artistWeak := false
 	if candArtist != "" {
 		if MatchArtist(query.Artist, candArtist) {
 			score.ArtistScore = 1.0
 		} else {
-			score.Accepted = false
-			return score
+			artistWeak = true
+			score.ArtistScore = 0.4
 		}
 	} else {
 		score.ArtistScore = 0.7 // Если провайдер не вернул имя артиста отдельно
@@ -612,6 +615,15 @@ func ScoreCandidate(
 		}
 	} else {
 		score.DurationScore = 0.8 // Длительность не задана
+	}
+
+	if artistWeak {
+		strongDuration := query.Duration > 0 && candDuration > 0 &&
+			math.Abs(query.Duration.Seconds()-candDuration.Seconds()) <= 2.0
+		if !strongDuration {
+			score.Accepted = false
+			return score
+		}
 	}
 
 	// 5. Оценка альбома

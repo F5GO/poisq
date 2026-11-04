@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/F5GO/poisq/internal/logger"
 )
@@ -102,15 +103,16 @@ func (kp *KaraokePipeline) MergeSegmentsWithReference(ctx context.Context, acous
 	// по умолчанию, когда черновик есть, Gemini пропускается. Вернуть: KARAOKE_USE_GEMINI=true.
 	if strings.TrimSpace(preAlignedLRC) != "" && !strings.EqualFold(os.Getenv("KARAOKE_USE_GEMINI"), "true") {
 		snapped := preAlignedLRC
+		var stats SnapStats
 		if timelineData != nil && len(timelineData.Words) > 0 {
-			snapped = SnapLRCToAcousticWords(preAlignedLRC, timelineData)
+			snapped, stats = SnapLRCToAcousticWordsStats(preAlignedLRC, timelineData)
 		}
 		logger.Info("[KARAOKE] Gemini пропущен (KARAOKE_USE_GEMINI!=true): используется предвыровненный DP-черновик, строк: %d", strings.Count(snapped, "\n")+1)
 		lang := ""
 		if timelineData != nil {
 			lang = whisperLanguageToISO(timelineData.Language)
 		}
-		return &ConsensusOutput{LangCode: lang, CleanedLyrics: snapped, IsSynced: true}, nil
+		return &ConsensusOutput{LangCode: lang, CleanedLyrics: snapped, IsSynced: true, TotalLines: stats.Lines, UnconfirmedLines: stats.Unconfirmed}, nil
 	}
 
 	refLines := 0
@@ -127,24 +129,39 @@ func (kp *KaraokePipeline) MergeSegmentsWithReference(ctx context.Context, acous
 			return len(timelineData.Words)
 		}(), strings.TrimSpace(preAlignedLRC) != "")
 
-	respJSON, err := kp.gemini.GenerateText(ctx, systemPrompt, userPrompt, "application/json")
-	if err != nil {
-		return nil, fmt.Errorf("этап 3 (Gemini Merge): %w", err)
-	}
+	// Gemini здесь только «косметика» (правка слов): время всё равно перепроверяется по звуку.
+	// Поэтому при перегрузке (503) не ждём минутами, а ограничиваем этап и откатываемся на
+	// математически выровненный черновик — иначе задача висит по 5 минут.
+	gCtx, cancel := context.WithTimeout(ctx, geminiMergeTimeout)
+	defer cancel()
 
-	out, err := ParseConsensusOutput(respJSON)
+	var out *ConsensusOutput
+	respJSON, err := kp.gemini.GenerateText(gCtx, systemPrompt, userPrompt, "application/json")
+	if err == nil {
+		out, err = ParseConsensusOutput(respJSON)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("этап 3 (Gemini Merge): %w", err)
+		if strings.TrimSpace(preAlignedLRC) == "" {
+			return nil, fmt.Errorf("этап 3 (Gemini Merge): %w", err)
+		}
+		logger.Warn("[KARAOKE] Gemini недоступен или вернул мусор (%v): использую черновик DP-выравнивания без правки слов", err)
+		out = &ConsensusOutput{
+			LangCode:      langFromTimeline(timelineData),
+			CleanedLyrics: preAlignedLRC,
+			IsSynced:      true,
+		}
 	}
 
 	// БРОНЕБОЙНЫЙ ПОСТ-ФИЛЬТР:
 	// Принудительно примагничиваем таймкоды всех строк ответа Gemini к реальным физическим словам
 	// аудиозаписи через глобальное выравнивание Нидлмана — Вунша, исключая любую отсебятину LLM по времени!
 	if timelineData != nil && len(timelineData.Words) > 0 {
-		snapped := SnapLRCToAcousticWords(out.CleanedLyrics, timelineData)
+		snapped, stats := SnapLRCToAcousticWordsStats(out.CleanedLyrics, timelineData)
 		if strings.TrimSpace(snapped) != "" {
 			out.CleanedLyrics = snapped
 		}
+		out.TotalLines = stats.Lines
+		out.UnconfirmedLines = stats.Unconfirmed
 	}
 
 	outLines := 0
@@ -179,4 +196,14 @@ func whisperLanguageToISO(name string) string {
 		"japanese": "ja", "korean": "ko", "chinese": "zh", "turkish": "tr", "dutch": "nl",
 	}
 	return m[n]
+}
+
+// geminiMergeTimeout ограничивает общее время этапа Gemini (все ретраи и смены моделей).
+const geminiMergeTimeout = 75 * time.Second
+
+func langFromTimeline(data *AcousticTimelineData) string {
+	if data == nil {
+		return ""
+	}
+	return whisperLanguageToISO(data.Language)
 }
