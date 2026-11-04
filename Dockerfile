@@ -1,6 +1,11 @@
 # Многоэтапная сборка легковесного production-образа poisq
 # Этап 1: Сборка статического бинарного файла на Go (с зашитым через //go:embed фронтендом)
-FROM golang:alpine AS builder
+# Builder всегда работает на нативной архитектуре раннера ($BUILDPLATFORM) и кросс-компилирует Go
+# под целевую платформу — без эмуляции QEMU (она замедляет сборку arm64 в разы).
+FROM --platform=$BUILDPLATFORM golang:alpine AS builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH
 
 WORKDIR /src
 
@@ -18,7 +23,7 @@ RUN go mod download
 COPY . .
 
 # Собираем чистый статический бинарник без CGO (pure Go modernc.org/sqlite + //go:embed)
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/poisq ./cmd/proxy
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /bin/poisq ./cmd/proxy
 
 # Этап 2: Финальный образ на базе Alpine Linux с утилитами аудио-анализа (ffmpeg, fpcalc, flac)
 FROM alpine:3.20
