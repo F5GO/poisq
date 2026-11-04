@@ -65,12 +65,28 @@ func (cb *CircuitBreaker) RecordSuccess() {
 }
 
 // RecordFailure регистрирует сетевой сбой или ошибку 5xx и при достижении порога размыкает цепь на 3 минуты.
-func (cb *CircuitBreaker) RecordFailure() {
+// Возвращает true, если именно этот сбой разомкнул цепь (для явного лога в оркестраторе).
+func (cb *CircuitBreaker) RecordFailure() bool {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
 	cb.failures++
 	if cb.failures >= cb.failureThreshold {
 		cb.openUntil = time.Now().Add(cb.openDuration)
+		return true
 	}
+	return false
+}
+
+// OpenFor возвращает, сколько времени источник еще будет отключен (0 — цепь замкнута).
+func (cb *CircuitBreaker) OpenFor() time.Duration {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if cb.openUntil.IsZero() {
+		return 0
+	}
+	if d := time.Until(cb.openUntil); d > 0 {
+		return d
+	}
+	return 0
 }

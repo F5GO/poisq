@@ -84,6 +84,11 @@ func (p *YandexProvider) SetToken(token string) {
 	p.token = strings.TrimSpace(token)
 }
 
+// HasToken сообщает, задан ли OAuth-токен (для диагностики в логах).
+func (p *YandexProvider) HasToken() bool {
+	return p.getToken() != ""
+}
+
 func (p *YandexProvider) getToken() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -241,7 +246,7 @@ func (p *YandexProvider) fetchLyricsEndpointWithAuth(ctx context.Context, trackI
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, ErrNotFound
+		return nil, httpStatusError("yandex", resp.StatusCode)
 	}
 
 	var data yandexTrackLyricsResponse
@@ -265,7 +270,7 @@ func (p *YandexProvider) fetchLyricsEndpointWithAuth(ctx context.Context, trackI
 	defer dlResp.Body.Close()
 
 	if dlResp.StatusCode != http.StatusOK {
-		return nil, ErrNotFound
+		return nil, httpStatusError("yandex", dlResp.StatusCode)
 	}
 
 	lrcBytes, err := io.ReadAll(io.LimitReader(dlResp.Body, 512*1024))
@@ -305,7 +310,7 @@ func (p *YandexProvider) fetchSupplementEndpoint(ctx context.Context, trackID, c
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, ErrNotFound
+		return nil, httpStatusError("yandex", resp.StatusCode)
 	}
 
 	var data yandexSupplementResponse

@@ -8,6 +8,8 @@ package lyrics
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 )
 
 var (
@@ -28,4 +30,14 @@ type Provider interface {
 
 	// Fetch выполняет поиск и получение текста песни по переданным метаданным.
 	Fetch(ctx context.Context, query SearchQuery) (*Lyrics, error)
+}
+
+// httpStatusError превращает неуспешный HTTP-статус провайдера в ошибку с кодом.
+// 404 остается обычным ErrNotFound («трека нет»), а 401/403/429/5xx становятся
+// явными сбоями, которые видны в логах и учитываются Circuit Breaker.
+func httpStatusError(provider string, status int) error {
+	if status == http.StatusNotFound {
+		return ErrNotFound
+	}
+	return fmt.Errorf("%s: HTTP %d", provider, status)
 }

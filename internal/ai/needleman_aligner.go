@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 type refTokenPos struct {
@@ -223,8 +225,31 @@ func computeGlobalDPLineTimestamps(lineTokensList [][]string, data *AcousticTime
 		tokenOffset += tokCount
 	}
 
+	matchedTokens := 0
+	for _, idx := range matchedWhisperIdx {
+		if idx >= 0 {
+			matchedTokens++
+		}
+	}
+	matchedLines := 0
+	for _, m := range lineMatched {
+		if m {
+			matchedLines++
+		}
+	}
+
 	// Интерполируем строки, в которых Whisper не расслышал ни одного слова (например, бэк-вокал)
 	interpolateUnmatchedLines(lineTimes, lineMatched, data)
+
+	logger.Info("[ALIGN] DP-выравнивание: слов эталона %d (сматчено %d, %.0f%%), слов Whisper %d, строк %d (по голосу %d, ИНТЕРПОЛИРОВАНО %d)",
+		P, matchedTokens, 100*float64(matchedTokens)/float64(P), Q, numLines, matchedLines, numLines-matchedLines)
+	if numLines-matchedLines > 0 {
+		for li, m := range lineMatched {
+			if !m {
+				logger.Debug("[ALIGN] Строка %d без совпадений с Whisper, время интерполировано: %s", li+1, FormatLRCTimestamp(lineTimes[li]))
+			}
+		}
+	}
 	return lineTimes
 }
 
@@ -358,6 +383,8 @@ func SnapLRCToAcousticWords(lrcText string, data *AcousticTimelineData) string {
 
 	var sb strings.Builder
 	prevSec := -1.0
+	shifted := 0
+	maxShift := 0.0
 	for i, pl := range parsed {
 		finalSec := dpTimes[i]
 		// Если глобальный DP дал валидный таймкод — используем его как эталон физической привязки к голосу
@@ -368,8 +395,16 @@ func SnapLRCToAcousticWords(lrcText string, data *AcousticTimelineData) string {
 			finalSec = math.Round((prevSec+0.25)*100) / 100
 		}
 		prevSec = finalSec
+		if d := math.Abs(finalSec - pl.sec); d > 0.5 {
+			shifted++
+			if d > maxShift {
+				maxShift = d
+			}
+			logger.Debug("[ALIGN] Snap строки %d: Gemini %s → акустика %s (Δ %.2f сек)", i+1, FormatLRCTimestamp(pl.sec), FormatLRCTimestamp(finalSec), d)
+		}
 		sb.WriteString(fmt.Sprintf("%s %s\n", FormatLRCTimestamp(finalSec), pl.text))
 	}
+	logger.Info("[ALIGN] Snap после Gemini: строк %d, таймкод изменён более чем на 0.5 сек у %d (макс. сдвиг %.2f сек)", len(parsed), shifted, maxShift)
 
 	return strings.TrimSpace(sb.String())
 }

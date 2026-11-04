@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/F5GO/poisq/internal/keypool"
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 const (
@@ -102,14 +103,24 @@ func (gw *GroqWhisperClient) TranscribeAudio(ctx context.Context, opusData []byt
 			return nil, err
 		}
 
+		logger.Info("[GROQ] Попытка %d/%d: ключ #%d, аудио %.2f МБ, язык=%q, prompt=%q",
+			attempt, maxKeySwitches, leased.ID, float64(len(opusData))/1048576, langHint, hintText)
+		started := time.Now()
 		res, status, err := gw.callWithModelFallback(ctx, leased.PlainKey, opusData, langHint, hintText)
 		if err == nil {
 			gw.keyPool.ReportSuccess(leased.ID)
+			logger.Info("[GROQ] Успех за %s: язык=%s, длительность=%.1f сек, слов=%d, сегментов=%d",
+				time.Since(started).Round(time.Millisecond), res.Language, res.Duration, len(res.Words), len(res.Segments))
+			if len(res.Words) == 0 {
+				logger.Warn("[GROQ] Whisper не вернул пословные таймкоды (words пуст): будет использован откат на сегменты")
+			}
 			return res, nil
 		}
 
 		lastErr = err
 		errLower := strings.ToLower(err.Error())
+		logger.Warn("[GROQ] Попытка %d/%d не удалась через %s (HTTP %d): %v",
+			attempt, maxKeySwitches, time.Since(started).Round(time.Millisecond), status, err)
 
 		if status == http.StatusTooManyRequests || strings.Contains(errLower, "rate_limit") {
 			if strings.Contains(errLower, "tokens per day") || strings.Contains(errLower, "requests per day") || strings.Contains(errLower, "daily") {
@@ -139,6 +150,7 @@ func (gw *GroqWhisperClient) callWithModelFallback(ctx context.Context, apiKey s
 	}
 	// При недоступности полной модели или 503 переключаемся на whisper-large-v3-turbo
 	if status == http.StatusNotFound || status == http.StatusServiceUnavailable || status == http.StatusBadRequest {
+		logger.Warn("[GROQ] Модель %s вернула HTTP %d (%v): переключаюсь на %s", groqWhisperPrimaryModel, status, err, groqWhisperFallbackModel)
 		return gw.callOnce(ctx, groqWhisperFallbackModel, apiKey, opusData, langHint, promptHint)
 	}
 	return nil, status, err

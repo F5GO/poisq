@@ -117,7 +117,7 @@ func (p *MusixmatchProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyr
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, ErrNotFound
+		return nil, httpStatusError("musixmatch", resp.StatusCode)
 	}
 
 	var data musixmatchMacroResponse

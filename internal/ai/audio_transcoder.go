@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/security"
 )
 
@@ -59,6 +60,7 @@ func (t *AudioTranscoder) TranscodeToOpusMono16k(ctx context.Context, audioFileP
 		"pipe:1",
 	}
 
+	started := time.Now()
 	cmd := exec.CommandContext(tCtx, "ffmpeg", args...)
 	var outBuf bytes.Buffer
 	var errBuf bytes.Buffer
@@ -73,6 +75,7 @@ func (t *AudioTranscoder) TranscodeToOpusMono16k(ctx context.Context, audioFileP
 		return nil, fmt.Errorf("ffmpeg вернул пустой аудиопоток для %s", safePath)
 	}
 
+	logger.Info("[FFMPEG] %s → Opus 16 kHz моно: %.2f МБ за %s", safePath, float64(outBuf.Len())/1048576, time.Since(started).Round(time.Millisecond))
 	return outBuf.Bytes(), nil
 }
 

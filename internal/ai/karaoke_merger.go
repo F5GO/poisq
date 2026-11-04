@@ -5,16 +5,21 @@
 // Что делает этот код и для чего он нужен:
 // Данный файл karaoke_merger.go реализует модульный бронебойный пайплайн генерации караоке (.lrc):
 // Этап 1-2: Сжатие в моно-Opus с частотным вокальным фильтром и получение пословных DTW-таймкодов
-//           от полной 32-слойной модели Groq Whisper (whisper-large-v3) с калибровкой растянутых интро.
+//
+//	от полной 32-слойной модели Groq Whisper (whisper-large-v3) с калибровкой растянутых интро.
+//
 // Этап 3: Глобальное динамическое программирование Нидлмана — Вунша (Needleman-Wunsch) +
-//         выверка слов через Google Gemini + жесткая пост-привязка таймкодов (SnapLRCToAcousticWords)
-//         к физическим словам аудиозаписи, исключающая любые галлюцинации времени со стороны LLM.
+//
+//	выверка слов через Google Gemini + жесткая пост-привязка таймкодов (SnapLRCToAcousticWords)
+//	к физическим словам аудиозаписи, исключающая любые галлюцинации времени со стороны LLM.
 package ai
 
 import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 // KaraokePipeline координирует генерацию синхронизированного LRC из аудиофайла и эталонного текста.
@@ -51,10 +56,10 @@ func (kp *KaraokePipeline) TranscribeToSegments(ctx context.Context, audioFilePa
 }
 
 // MergeSegmentsWithReference выполняет этап 3:
-// 1. Вычисляет глобальное выравнивание последовательностей Нидлмана — Вунша (Needleman-Wunsch) по словам Whisper.
-// 2. Выполняет лингвистическую сверку через Google Gemini.
-// 3. Применяет жесткий пост-фильтр SnapLRCToAcousticWords, привязывающий таймкод каждой строки
-//    к физическому началу первого спетого слова в аудиодорожке.
+//  1. Вычисляет глобальное выравнивание последовательностей Нидлмана — Вунша (Needleman-Wunsch) по словам Whisper.
+//  2. Выполняет лингвистическую сверку через Google Gemini.
+//  3. Применяет жесткий пост-фильтр SnapLRCToAcousticWords, привязывающий таймкод каждой строки
+//     к физическому началу первого спетого слова в аудиодорожке.
 func (kp *KaraokePipeline) MergeSegmentsWithReference(ctx context.Context, acousticJSON, artist, title, referencePlainLyrics string) (*ConsensusOutput, error) {
 	wordStream, timelineData := FormatWordLevelStream(acousticJSON)
 	preAlignedLRC := PreAlignReferenceWithWords(referencePlainLyrics, timelineData)
@@ -91,6 +96,20 @@ func (kp *KaraokePipeline) MergeSegmentsWithReference(ctx context.Context, acous
 		)
 	}
 
+	refLines := 0
+	for _, l := range strings.Split(referencePlainLyrics, "\n") {
+		if strings.TrimSpace(l) != "" {
+			refLines++
+		}
+	}
+	logger.Info("[KARAOKE] Мердж «%s — %s»: строк эталона %d, слов Whisper %d, предвыравненный черновик: %v",
+		artist, title, refLines, func() int {
+			if timelineData == nil {
+				return 0
+			}
+			return len(timelineData.Words)
+		}(), strings.TrimSpace(preAlignedLRC) != "")
+
 	respJSON, err := kp.gemini.GenerateText(ctx, systemPrompt, userPrompt, "application/json")
 	if err != nil {
 		return nil, fmt.Errorf("этап 3 (Gemini Merge): %w", err)
@@ -111,6 +130,13 @@ func (kp *KaraokePipeline) MergeSegmentsWithReference(ctx context.Context, acous
 		}
 	}
 
+	outLines := 0
+	for _, l := range strings.Split(out.CleanedLyrics, "\n") {
+		if strings.TrimSpace(l) != "" {
+			outLines++
+		}
+	}
+	logger.Info("[KARAOKE] Итог: строк в LRC %d (эталон %d), язык=%s, синхронизирован=%v", outLines, refLines, out.LangCode, out.IsSynced)
 	return out, nil
 }
 
