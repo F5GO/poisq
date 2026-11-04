@@ -26,6 +26,11 @@ type ConsensusOutput struct {
 	LangCode      string `json:"langCode"`
 	CleanedLyrics string `json:"cleanedLyrics"`
 	IsSynced      bool   `json:"isSynced"`
+
+	// Служебные поля качества (не приходят от Gemini): сколько строк итогового LRC и сколько из них
+	// получили время без подтверждения реальным словом в аудио.
+	TotalLines       int `json:"-"`
+	UnconfirmedLines int `json:"-"`
 }
 
 // LyricsCleaner выполняет локальную и облачную (Gemini) очистку и консенсус текстов песен.
