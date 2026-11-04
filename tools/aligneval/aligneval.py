@@ -158,6 +158,34 @@ def snap_with_rms(items, starts_idx, rms, frame=0.01, rel_thr=0.12, max_shift=2.
     return out, moved
 
 
+def line_flags(items, lines_tokens, rms, frame=0.01, rel_thr=0.12):
+    """Признаки того, что строка поставлена «на выдумку»: выравниватель всегда назначает время всем словам,
+    даже если в записи их нет (текст не совпадает с аудио). Подозрительна строка, если в её интервале мало
+    голоса, слова идут слишком быстро или слишком растянуты. Возвращает [(индекс, начало, конец, доля голоса, слов/с, причины)]."""
+    thr = rel_thr * percentile(rms, 0.95) if rms else 0.0
+    out, pos = [], 0
+    for i, t in enumerate(lines_tokens):
+        a, b = pos, pos + len(t)
+        pos = b
+        if not t:
+            continue
+        st, en = items[a][1], items[b - 1][2]
+        dur = max(en - st, 1e-6)
+        i0, i1 = int(st / frame), min(len(rms), int(en / frame) + 1)
+        seg = rms[i0:i1]
+        ratio = (sum(1 for v in seg if v > thr) / len(seg)) if seg else 0.0
+        rate = len(t) / dur
+        reasons = []
+        if rms and ratio < 0.35:
+            reasons.append("голоса мало (%.0f%% кадров)" % (ratio * 100))
+        if rate > 6.0:
+            reasons.append("слишком быстро (%.1f слов/с)" % rate)
+        if dur / len(t) > 2.5:
+            reasons.append("слишком растянуто (%.1f с/слово)" % (dur / len(t)))
+        out.append((i, st, en, ratio, rate, reasons))
+    return out
+
+
 def refine_items(model, wav, items, lines_tokens, lang, work, total_dur):
     """Второй проход: каждая строка выравнивается ещё раз в коротком окне вместе с соседними строками
     (предыдущая + текущая + следующая). Модель видит только локальный кусок аудио, поэтому реже путает
@@ -370,6 +398,14 @@ def main():
             rms = vocal_rms(wavs["vocals"] if "vocals" in wavs else wav)
             items, moved = snap_with_rms(items, starts, rms)
             print(f"[{name}] snap-onset: начало строки подтянуто к голосу у {moved} строк")
+
+        if "vocals" in wavs and full_counts:
+            flags = line_flags(items, lines_tokens, vocal_rms(wavs["vocals"]))
+            suspect = [f for f in flags if f[5]]
+            print(f"[{name}] подозрительных строк (время могло быть выдумано): {len(suspect)} из {len(flags)}")
+            for i, st, en, ratio, rate, reasons in suspect:
+                print("   строка %2d  %6.1f–%6.1f  %s  | %s" % (i + 1, st, en, "; ".join(reasons), " ".join(lines_tokens[i])[:40]))
+            report[name + "_suspect_lines"] = len(suspect)
 
         errors, rows = [], []
         pred_lrc = []
