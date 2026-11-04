@@ -118,8 +118,10 @@ func main() {
 	groqWhisper := ai.NewGroqWhisperClient(keyPoolMgr)
 	karaokePipeline := ai.NewKaraokePipeline(audioTranscoder, groqWhisper, llm)
 	tournament.SetQueryExpander(ai.NewLLMQueryExpander(llm, db.NewAliasCacheRepository(poisqDB)))
+	tournament.SetArtistJudge(ai.NewLLMArtistJudge(llm))
 
 	mbClient := metadata.NewMusicBrainzClient()
+	tournament.SetArtistAliasSource(mbClient)
 	acoustIDClient := metadata.NewAcoustIDClient(pathGuard, keyPoolMgr)
 	coverFetcher := metadata.NewCoverFetcher(pathGuard)
 	libraryScanner := metadata.NewLibraryScanner(

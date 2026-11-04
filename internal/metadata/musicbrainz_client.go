@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/F5GO/poisq/internal/httpclient"
@@ -78,6 +79,15 @@ type mbReleaseSearchResp struct {
 // MusicBrainzClient управляет запросами к MusicBrainz API с защитой от бана по IP (1 req/sec).
 type MusicBrainzClient struct {
 	rc *httpclient.ResilientClient
+
+	namesMu    sync.Mutex
+	namesCache map[string]mbNamesEntry
+}
+
+type mbNamesEntry struct {
+	names []string
+	err   error
+	at    time.Time
 }
 
 // NewMusicBrainzClient создает новый экземпляр клиента MusicBrainz.
@@ -207,4 +217,31 @@ func (mb *MusicBrainzClient) LookupRelease(ctx context.Context, artist, album st
 		TrackCount:      top.TrackCount,
 		Score:           top.Score,
 	}, nil
+}
+
+// ArtistNames возвращает каноничное имя артиста и его реальные алиасы из MusicBrainz
+// (реализует lyrics.ArtistAliasSource). Запросы идут через общий лимитер 1 req/sec.
+func (mb *MusicBrainzClient) ArtistNames(ctx context.Context, name string) ([]string, error) {
+	key := strings.ToLower(strings.TrimSpace(name))
+	mb.namesMu.Lock()
+	if e, ok := mb.namesCache[key]; ok && time.Since(e.at) < 24*time.Hour {
+		mb.namesMu.Unlock()
+		return e.names, e.err
+	}
+	mb.namesMu.Unlock()
+
+	info, err := mb.LookupArtist(ctx, name)
+	var names []string
+	if err == nil {
+		names = append([]string{info.CanonicalName}, info.Aliases...)
+	}
+	if ctx.Err() == nil { // не кэшируем отмену по таймауту
+		mb.namesMu.Lock()
+		if mb.namesCache == nil {
+			mb.namesCache = make(map[string]mbNamesEntry)
+		}
+		mb.namesCache[key] = mbNamesEntry{names: names, err: err, at: time.Now()}
+		mb.namesMu.Unlock()
+	}
+	return names, err
 }
