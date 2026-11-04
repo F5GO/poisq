@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 const (
@@ -33,6 +35,18 @@ type musixmatchMacroResponse struct {
 	Message struct {
 		Body struct {
 			MacroCalls struct {
+				MatcherTrackGet struct {
+					Message struct {
+						Body struct {
+							Track struct {
+								TrackName   string `json:"track_name"`
+								ArtistName  string `json:"artist_name"`
+								AlbumName   string `json:"album_name"`
+								TrackLength int    `json:"track_length"`
+							} `json:"track"`
+						} `json:"body"`
+					} `json:"message"`
+				} `json:"matcher.track.get"`
 				TrackSubtitlesGet struct {
 					Message struct {
 						Body struct {
@@ -151,11 +165,31 @@ func (p *MusixmatchProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyr
 		}
 	}
 
+	// Раньше метаданные трека не заполнялись, и фильтр соответствия отклонял каждый ответ Musixmatch
+	// (артист и название пустые). Берем их из matcher.track.get; если провайдер их не прислал,
+	// ответ все равно получен по запросу артист+название, поэтому используем значения запроса.
+	mt := calls.MatcherTrackGet.Message.Body.Track
+	candArtist := strings.TrimSpace(mt.ArtistName)
+	candTitle := strings.TrimSpace(mt.TrackName)
+	if candArtist == "" || candTitle == "" {
+		logger.Warn("[MUSIXMATCH] matcher.track.get не вернул метаданные (артист=%q, название=%q): использую значения запроса", candArtist, candTitle)
+		if candArtist == "" {
+			candArtist = query.Artist
+		}
+		if candTitle == "" {
+			candTitle = query.Title
+		}
+	}
+
 	return &Lyrics{
 		Kind:         kind,
 		PlainLyrics:  lyrBody,
 		SyncedLyrics: synced,
 		Lines:        lines,
+		Artist:       candArtist,
+		Title:        candTitle,
+		Album:        strings.TrimSpace(mt.AlbumName),
+		Duration:     time.Duration(mt.TrackLength) * time.Second,
 		Source:       "musixmatch",
 		CachedAt:     time.Now(),
 	}, nil
