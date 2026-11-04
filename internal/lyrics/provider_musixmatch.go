@@ -53,6 +53,12 @@ type musixmatchMacroResponse struct {
 							Subtitle struct {
 								SubtitleBody string `json:"subtitle_body"`
 							} `json:"subtitle"`
+							// Реальный формат ответа macro.subtitles.get: subtitle_list[0].subtitle.subtitle_body
+							SubtitleList []struct {
+								Subtitle struct {
+									SubtitleBody string `json:"subtitle_body"`
+								} `json:"subtitle"`
+							} `json:"subtitle_list"`
 						} `json:"body"`
 					} `json:"message"`
 				} `json:"track.subtitles.get"`
@@ -141,6 +147,14 @@ func (p *MusixmatchProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyr
 
 	calls := data.Message.Body.MacroCalls
 	subBody := strings.TrimSpace(calls.TrackSubtitlesGet.Message.Body.Subtitle.SubtitleBody)
+	if subBody == "" {
+		for _, it := range calls.TrackSubtitlesGet.Message.Body.SubtitleList {
+			if b := strings.TrimSpace(it.Subtitle.SubtitleBody); b != "" {
+				subBody = b
+				break
+			}
+		}
+	}
 	lyrBody := strings.TrimSpace(calls.TrackLyricsGet.Message.Body.Lyrics.LyricsBody)
 
 	// Очищаем стандартное предупреждение Musixmatch об авторских правах

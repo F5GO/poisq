@@ -781,5 +781,10 @@ func GenerateArtistVariants(artist string) []string {
 		add(r.Replace(artist))
 	}
 
+	// Транслитерация кириллического имени в латиницу («максим» → «Maksim»): так артист записан в международных базах
+	if norm != "" && hasCyrillic(norm) {
+		add(titleCaseWords(TransliterateRuToLat(norm)))
+	}
+
 	return variants
 }
