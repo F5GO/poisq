@@ -22,7 +22,7 @@ func (f *fakeGen) GenerateText(ctx context.Context, s, u, m string) (string, err
 type memCache map[string]string
 
 func (m memCache) Get(k string) (string, bool) { v, ok := m[k]; return v, ok }
-func (m memCache) Set(k, v string) error        { m[k] = v; return nil }
+func (m memCache) Set(k, v string) error       { m[k] = v; return nil }
 
 func TestFallbackGeneratorUsesSecondOnError(t *testing.T) {
 	a := &fakeGen{err: errors.New("503")}
