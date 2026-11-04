@@ -303,6 +303,43 @@ def groq_words(wav16, lang_iso, api_key):
     return [(w["word"], float(w["start"]), float(w["end"])) for w in r.json().get("words", [])]
 
 
+def expected_line_dur(tokens_of_line):
+    """Грубая оценка длительности пения строки по числу букв (~0.22 с/буква, подобрано по повторам в «Весне»)."""
+    return 0.22 * sum(len(w) for w in tokens_of_line) + 0.6
+
+
+def best_onset_near(rms, center, back=1.0, fwd=0.8, win=0.3, frame=0.01):
+    """Кадр с самым резким нарастанием громкости около center: средняя громкость следующих win сек
+    минус предыдущих win сек. Это начало слова, а не просто «ещё что-то звучит» (хвост реверберации)."""
+    w = max(1, int(win / frame))
+    lo, hi = max(w, int((center - back) / frame)), min(len(rms) - w, int((center + fwd) / frame))
+    best_k, best_v = None, 0.0
+    for k in range(lo, hi):
+        v = sum(rms[k:k + w]) / w - sum(rms[k - w:k]) / w
+        if v > best_v:
+            best_k, best_v = k, v
+    return None if best_k is None else best_k * frame
+
+
+def fix_stretched_starts(results, rms, lines_tokens, frame=0.01):
+    """Whisper надёжно ставит конец фразы, но часто растягивает её начало назад по тишине/затянутой ноте.
+    Если интервал строки заметно длиннее ожидаемого для такого текста, старт берётся как «конец − ожидаемая
+    длительность» и уточняется по ближайшему резкому нарастанию громкости."""
+    for r in results:
+        if r["start"] is None:
+            continue
+        exp = expected_line_dur(lines_tokens[r["line"]])
+        span = r["asr_end"] - r["start"]
+        if span > max(1.8 * exp, exp + 2.5):
+            est = r["asr_end"] - exp
+            onset = best_onset_near(rms, est, frame=frame)
+            new_s = onset if onset is not None else est
+            if new_s > r["start"] + 0.5 and new_s < r["end"] - 0.3:
+                r["status"] += " (растянуто %.1f с вместо ~%.1f: старт %+.2f)" % (span, exp, new_s - r["start"])
+                r["start"] = new_s
+    return results
+
+
 def snap_edges_to_voice(results, rms, frame=0.01, rel_thr=0.12, run_s=0.12, min_move=0.15):
     """Привязывает края строк к реальному голосу (огибающая вокала после Demucs).
     Whisper и выравниватели растягивают слова на тишину: первое слово «приклеивается» к концу предыдущей
@@ -599,7 +636,9 @@ def main():
         iso = {"Russian": "ru", "English": "en"}.get(lang, "")
         t1 = time.time()
         results, asr = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key)
-        results = snap_edges_to_voice(results, vocal_rms(wavs["vocals"]))
+        _rms = vocal_rms(wavs["vocals"])
+        results = fix_stretched_starts(results, _rms, lines_tokens)
+        results = snap_edges_to_voice(results, _rms)
         print(f"[asr-anchor] заняло {time.time() - t1:.1f} сек; слов в распознавании: {len(asr)}")
         # Что реально звучит (карта по Whisper): фразы, разделённые паузами > 1.2 сек
         print("[asr-anchor] что слышит Whisper на вокале (фразы по паузам):")
