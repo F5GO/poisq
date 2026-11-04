@@ -376,7 +376,11 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 		}); cErr != nil {
 			logger.Warn("[WORKER] [Задача #%d] Не удалось записать provider_cache: %v", job.ID, cErr)
 		}
-		return qp.saveWinningLyrics(track, "poisq", lyrics.KindLRC, karaokeOut.CleanedLyrics, karaokeOut.LangCode, true)
+		langOut := karaokeOut.LangCode
+		if langOut == "" {
+			langOut = track.LangCode
+		}
+		return qp.saveWinningLyrics(track, "poisq", lyrics.KindLRC, karaokeOut.CleanedLyrics, langOut, true)
 	}
 
 	if refPlain != "" {
