@@ -35,11 +35,11 @@ type ConsensusOutput struct {
 
 // LyricsCleaner выполняет локальную и облачную (Gemini) очистку и консенсус текстов песен.
 type LyricsCleaner struct {
-	gemini *GeminiClient
+	gemini TextGenerator
 }
 
 // NewLyricsCleaner создает новый экземпляр очистителя и валидатора текстов.
-func NewLyricsCleaner(gemini *GeminiClient) *LyricsCleaner {
+func NewLyricsCleaner(gemini TextGenerator) *LyricsCleaner {
 	return &LyricsCleaner{gemini: gemini}
 }
 

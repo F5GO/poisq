@@ -388,3 +388,87 @@ func scanTrackRows(rows *sql.Rows) (*TrackRecord, error) {
 	t.LyricsBody = t.ActiveLyrics
 	return &t, nil
 }
+
+// SearchRow — облегчённая запись трека (без текстов песен) для построения поискового индекса.
+type SearchRow struct {
+	ID       string
+	Artist   string
+	Album    string
+	Title    string
+	FilePath string
+}
+
+// ListSearchRows возвращает все треки (с фильтром по статусу) только с полями, нужными для умного поиска.
+func (r *TrackRepository) ListSearchRows(statusFilter string) ([]SearchRow, error) {
+	query := `SELECT id, artist, album || ' ' || album_artist, title, file_path FROM tracks WHERE 1=1`
+	if statusFilter != "" && statusFilter != "all" {
+		switch statusFilter {
+		case "mojibake":
+			query += ` AND is_mojibake = 1`
+		case "no_cover":
+			query += ` AND (has_cover = 0 OR (cover_width > 0 AND cover_width < 500))`
+		default:
+			query += ` AND lyrics_status = ?`
+		}
+	}
+	var args []any
+	if statusFilter != "" && statusFilter != "all" && statusFilter != "mojibake" && statusFilter != "no_cover" {
+		args = append(args, statusFilter)
+	}
+
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SearchRow
+	for rows.Next() {
+		var sr SearchRow
+		if err := rows.Scan(&sr.ID, &sr.Artist, &sr.Album, &sr.Title, &sr.FilePath); err != nil {
+			return nil, err
+		}
+		out = append(out, sr)
+	}
+	return out, rows.Err()
+}
+
+// ListByIDs возвращает полные записи треков в порядке переданных идентификаторов.
+func (r *TrackRepository) ListByIDs(ids []string) ([]TrackRecord, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := r.db.Query(`
+		SELECT id, file_path, folder_path, artist, album, album_artist, title,
+		       track_number, year, duration, lang_code, has_cover, cover_width, cover_height,
+		       is_mojibake, lyrics_status, active_source, active_lyrics, lrc_file_synced, updated_at
+		FROM tracks WHERE id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byID := make(map[string]TrackRecord, len(ids))
+	for rows.Next() {
+		t, err := scanTrackRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		byID[t.ID] = *t
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]TrackRecord, 0, len(ids))
+	for _, id := range ids {
+		if t, ok := byID[id]; ok {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}

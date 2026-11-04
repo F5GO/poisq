@@ -130,6 +130,12 @@ func initPoisqSchema(sqliteDB *sql.DB) error {
 		UNIQUE(track_id, provider)
 	);
 	CREATE INDEX IF NOT EXISTS idx_provider_cache_track ON provider_cache(track_id);
+
+	CREATE TABLE IF NOT EXISTS ai_alias_cache (
+		cache_key TEXT PRIMARY KEY,
+		value_json TEXT NOT NULL DEFAULT '{}',
+		created_at INTEGER NOT NULL DEFAULT 0
+	);
 	`
 	_, err := sqliteDB.Exec(schema)
 	return err

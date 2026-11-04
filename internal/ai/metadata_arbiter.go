@@ -38,12 +38,12 @@ type ArbiterDecision struct {
 
 // MetadataArbiter отвечает за разрешение спорных ситуаций с тегами и обложками через Gemini 2.5 Flash.
 type MetadataArbiter struct {
-	gemini *GeminiClient
+	gen TextGenerator
 }
 
 // NewMetadataArbiter создает экземпляр арбитра метаданных.
-func NewMetadataArbiter(gemini *GeminiClient) *MetadataArbiter {
-	return &MetadataArbiter{gemini: gemini}
+func NewMetadataArbiter(gen TextGenerator) *MetadataArbiter {
+	return &MetadataArbiter{gen: gen}
 }
 
 const arbiterSystemPrompt = `Ты — авторитетный музыкальный архивариус и эксперт каталогизации аудиоколлекций по стандартам MusicBrainz Picard, Apple Music и Discogs.
@@ -74,8 +74,8 @@ const arbiterSystemPrompt = `Ты — авторитетный музыкаль�
 
 // ResolveDisputedMetadata анализирует контекст файлов и папки и возвращает решение нейросети.
 func (a *MetadataArbiter) ResolveDisputedMetadata(ctx context.Context, fCtx FolderContext) (*ArbiterDecision, error) {
-	if a.gemini == nil {
-		return nil, fmt.Errorf("gemini client is not initialized")
+	if a.gen == nil {
+		return nil, fmt.Errorf("LLM is not initialized")
 	}
 
 	var userPromptBuilder strings.Builder
@@ -103,7 +103,7 @@ func (a *MetadataArbiter) ResolveDisputedMetadata(ctx context.Context, fCtx Fold
 		userPromptBuilder.WriteString(fmt.Sprintf("Текущие названия треков: %s\n", strings.Join(fCtx.ExistingTitles, ", ")))
 	}
 
-	rawJSON, err := a.gemini.GenerateText(ctx, arbiterSystemPrompt, userPromptBuilder.String(), "application/json")
+	rawJSON, err := a.gen.GenerateText(ctx, arbiterSystemPrompt, userPromptBuilder.String(), "application/json")
 	if err != nil {
 		return nil, fmt.Errorf("ошибка вызова Gemini Metadata Arbiter: %w", err)
 	}

@@ -12,8 +12,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/lyrics"
+	"github.com/F5GO/poisq/internal/search"
 )
 
 func (s *AdminServer) handleTracksList(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +27,13 @@ func (s *AdminServer) handleTracksList(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	search := r.URL.Query().Get("q")
 
-	tracks, err := s.tracksRepo.ListTracks(status, search, 200)
+	var tracks []db.TrackRecord
+	var err error
+	if strings.TrimSpace(search) == "" {
+		tracks, err = s.tracksRepo.ListTracks(status, "", 200)
+	} else {
+		tracks, err = s.smartSearchTracks(status, search, 200)
+	}
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -357,4 +365,26 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// smartSearchTracks ищет по библиотеке с учётом регистра, смешанных алфавитов («МакSим»), транслитерации,
+// смены раскладки и мелких опечаток (см. internal/search/library_match.go).
+func (s *AdminServer) smartSearchTracks(status, query string, limit int) ([]db.TrackRecord, error) {
+	rows, err := s.tracksRepo.ListSearchRows(status)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(rows))
+	keys := make([]search.LibraryKey, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+		keys[i] = search.BuildLibraryKey(r.Artist, r.Title, r.Album, r.FilePath)
+	}
+	ranked := search.RankByQuery(search.PrepareLibraryQuery(query), ids, keys, limit)
+	order := make([]string, len(ranked))
+	for i, r := range ranked {
+		order[i] = r.ID
+	}
+	logger.Info("[STUDIO-SEARCH] запрос %q: найдено %d из %d треков", query, len(ranked), len(rows))
+	return s.tracksRepo.ListByIDs(order)
 }

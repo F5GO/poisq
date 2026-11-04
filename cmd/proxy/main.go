@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -102,11 +103,21 @@ func main() {
 	lrcWriter.SetResolver(metadata.FindAudioFileAnywhere)
 
 	geminiClient := ai.NewGeminiClient(keyPoolMgr)
-	lyricsCleaner := ai.NewLyricsCleaner(geminiClient)
-	metadataArbiter := ai.NewMetadataArbiter(geminiClient)
+	groqChat := ai.NewGroqChatClient(keyPoolMgr)
+	// Текстовые задачи сначала идут в быстрый Groq (Llama), Gemini — запасной (часто отвечает 503 High Demand).
+	// Порядок можно поменять: LLM_PRIMARY=gemini.
+	llm := ai.NewFallbackGenerator()
+	if strings.EqualFold(os.Getenv("LLM_PRIMARY"), "gemini") {
+		llm.Add("gemini", geminiClient).Add("groq", groqChat)
+	} else {
+		llm.Add("groq", groqChat).Add("gemini", geminiClient)
+	}
+	lyricsCleaner := ai.NewLyricsCleaner(llm)
+	metadataArbiter := ai.NewMetadataArbiter(llm)
 	audioTranscoder := ai.NewAudioTranscoder(pathGuard)
 	groqWhisper := ai.NewGroqWhisperClient(keyPoolMgr)
-	karaokePipeline := ai.NewKaraokePipeline(audioTranscoder, groqWhisper, geminiClient)
+	karaokePipeline := ai.NewKaraokePipeline(audioTranscoder, groqWhisper, llm)
+	tournament.SetQueryExpander(ai.NewLLMQueryExpander(llm, db.NewAliasCacheRepository(poisqDB)))
 
 	mbClient := metadata.NewMusicBrainzClient()
 	acoustIDClient := metadata.NewAcoustIDClient(pathGuard, keyPoolMgr)
