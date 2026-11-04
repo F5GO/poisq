@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 const (
@@ -183,6 +185,7 @@ func PickConsensusWinner(cands []TournamentCandidate, q SearchQuery) (*Tournamen
 		}
 		toks := textTokens(c.Lyrics)
 		if len(toks) < minVoteTokens {
+			logger.Info("[CONSENSUS] %s не участвует в голосовании: в тексте всего %d слов (нужно ≥ %d)", c.ProviderID, len(toks), minVoteTokens)
 			continue
 		}
 		voters = append(voters, voter{idx: i, cand: c, tokens: toks, counts: bagCounts(toks)})
