@@ -236,6 +236,111 @@ def vocal_rms(wav16, frame=0.01):
     return r.tolist()
 
 
+def word_sim(a, b):
+    import difflib
+
+    return 1.0 if a == b else difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def match_ref_to_asr(ref, asr, min_sim=0.6, gap_ref=-0.95, gap_asr=-0.4):
+    """Глобальное выравнивание (Нидлман—Вунш) слов эталона и слов распознавания, строго по порядку.
+    Повторы припева не путаются, потому что распознавание содержит их в том порядке, в каком они спеты.
+    Слова эталона, которых нет в записи, остаются без пары. Возвращает список: для каждого слова эталона
+    индекс слова распознавания или None."""
+    P, Q = len(ref), len(asr)
+    dp = [[0.0] * (Q + 1) for _ in range(P + 1)]
+    back = [[0] * (Q + 1) for _ in range(P + 1)]  # 1 = диагональ, 2 = пропуск слова эталона, 3 = пропуск слова ASR
+    for i in range(1, P + 1):
+        dp[i][0], back[i][0] = i * gap_ref, 2
+    for j in range(1, Q + 1):
+        dp[0][j], back[0][j] = j * (gap_asr / 4), 3
+    sims = {}
+    for i in range(1, P + 1):
+        for j in range(1, Q + 1):
+            key = (ref[i - 1], asr[j - 1])
+            if key not in sims:
+                sims[key] = word_sim(*key)
+            sm = sims[key]
+            diag = dp[i - 1][j - 1] + (3.0 * sm if sm >= min_sim else -1.0)
+            up = dp[i - 1][j] + gap_ref
+            left = dp[i][j - 1] + gap_asr
+            best, d = diag, 1
+            if up > best:
+                best, d = up, 2
+            if left > best:
+                best, d = left, 3
+            dp[i][j], back[i][j] = best, d
+    out = [None] * P
+    i, j = P, Q
+    while i > 0 and j > 0:
+        d = back[i][j]
+        if d == 1:
+            if sims.get((ref[i - 1], asr[j - 1]), 0) >= min_sim:
+                out[i - 1] = j - 1
+            i, j = i - 1, j - 1
+        elif d == 2:
+            i -= 1
+        else:
+            j -= 1
+    return out
+
+
+def groq_words(wav16, lang_iso, api_key):
+    """Whisper large-v3 на ЧИСТОМ вокале: слова с таймкодами (грубая карта «что и когда спето»)."""
+    import requests
+
+    with open(wav16, "rb") as f:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={"Authorization": "Bearer " + api_key},
+            files={"file": ("vocals.wav", f, "audio/wav")},
+            data={"model": "whisper-large-v3", "response_format": "verbose_json", "temperature": "0",
+                  "language": lang_iso, "timestamp_granularities[]": "word"},
+            timeout=180,
+        )
+    if r.status_code != 200:
+        sys.exit(f"Groq HTTP {r.status_code}: {r.text[:300]}")
+    return [(w["word"], float(w["start"]), float(w["end"])) for w in r.json().get("words", [])]
+
+
+def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key):
+    """Подход «распознавание → якоря → точное выравнивание»:
+    1) Whisper по вокалу даёт, что и когда спето (устойчиво к повторам и проигрышам);
+    2) слова эталона сопоставляются с распознанными строго по порядку; строки без пары считаются «не найденными в записи»;
+    3) для найденных строк время уточняется Qwen3-ForcedAligner в коротком окне вокруг якоря."""
+    asr = groq_words(voc16, lang_iso, api_key)
+    asr_tokens = [(" ".join(tokens(w)), st, en) for w, st, en in asr]
+    asr_tokens = [t for t in asr_tokens if t[0]]
+    ref = [w for t in lines_tokens for w in t]
+    pair = match_ref_to_asr(ref, [t[0] for t in asr_tokens])
+
+    results, pos = [], 0
+    for i, toks in enumerate(lines_tokens):
+        idxs = pair[pos:pos + len(toks)]
+        pos += len(toks)
+        got = [(k, j) for k, j in enumerate(idxs) if j is not None]
+        if not toks or len(got) < max(1, (len(toks) + 1) // 2):
+            results.append({"line": i, "status": "нет в записи", "start": None, "end": None, "matched": len(got), "of": len(toks)})
+            continue
+        k0, j0 = got[0]
+        k1, j1 = got[-1]
+        a_start = max(0.0, asr_tokens[j0][1] - 0.45 * k0)
+        a_end = asr_tokens[j1][2] + 0.45 * (len(toks) - 1 - k1)
+        t0, t1 = max(0.0, a_start - 1.5), a_end + 1.5
+        status, start, end = "ASR", a_start, a_end
+        tmp = os.path.join(work, f"anchor_{i}.wav")
+        run(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(t0), "-t", str(t1 - t0), "-i", voc16, "-ac", "1", "-ar", "16000", tmp])
+        try:
+            res = model.align(audio=tmp, text=" ".join(toks), language=lang_name)
+            sub = [(it.text, float(it.start_time) + t0, float(it.end_time) + t0) for it in res[0]]
+            if len(sub) == len(toks) and abs(sub[0][1] - a_start) <= 3.0:
+                status, start, end = "ASR+выравнивание", sub[0][1], sub[-1][2]
+        except Exception as e:  # noqa: BLE001
+            print(f"   строка {i + 1}: выравнивание в окне не удалось: {e}")
+        results.append({"line": i, "status": status, "start": start, "end": end, "matched": len(got), "of": len(toks)})
+    return results, asr
+
+
 def run(cmd, **kw):
     print("+", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True, **kw)
@@ -300,6 +405,8 @@ def main():
     ap.add_argument("--refine", action="store_true", help="второй проход: перевыровнять каждую строку в окне с соседями")
     ap.add_argument("--snap-onset", dest="snap_onset", action="store_true", help="подтянуть начало строк к реальному началу голоса")
     ap.add_argument("--lead", type=float, default=0.5, help="на сколько сек раньше писать время строк в итоговый LRC (по умолчанию 0.5)")
+    ap.add_argument("--asr-anchor", dest="asr_anchor", action="store_true",
+                    help="якоря от Whisper по вокалу (нужен GROQ_API_KEY в окружении) + точное выравнивание в окне")
     ap.add_argument("--repair", action="store_true", help="перевыровнять строки с нарушенным порядком времён в окне между соседями")
     args = ap.parse_args()
 
@@ -430,6 +537,46 @@ def main():
         print(f"[{name}] худшие строки (ошибка, эталон, модель, текст):")
         for e, g, p, l in sorted(rows, reverse=True)[:6]:
             print(f"   {e:5.2f}s  {g:7.2f}  {p:7.2f}  {l[:50]}")
+
+    if args.asr_anchor:
+        key = os.environ.get("GROQ_API_KEY", "")
+        if not key:
+            sys.exit("для --asr-anchor задайте GROQ_API_KEY (docker run -e GROQ_API_KEY)")
+        if "vocals" not in wavs:
+            sys.exit("--asr-anchor требует вариант vocals")
+        iso = {"Russian": "ru", "English": "en"}.get(lang, "")
+        t1 = time.time()
+        results, asr = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key)
+        print(f"[asr-anchor] заняло {time.time() - t1:.1f} сек; слов в распознавании: {len(asr)}")
+        # Что реально звучит (карта по Whisper): фразы, разделённые паузами > 1.2 сек
+        print("[asr-anchor] что слышит Whisper на вокале (фразы по паузам):")
+        phrase, last_end = [], None
+        for w, st, en in asr + [("", 1e9, 1e9)]:
+            if phrase and (last_end is None or st - last_end > 1.2 or not w):
+                print("   %6.1f–%6.1f  %s" % (phrase[0][1], phrase[-1][2], " ".join(x[0].strip() for x in phrase)[:80]))
+                phrase = []
+            if w:
+                phrase.append((w, st, en))
+                last_end = en
+        found = [r for r in results if r["start"] is not None]
+        print(f"[asr-anchor] найдено в записи строк: {len(found)} из {len(results)}")
+        errs, lrc_lines = [], []
+        for r in results:
+            line_text = " ".join(lines_tokens[r["line"]])
+            if r["start"] is None:
+                print("   строка %2d  НЕТ В ЗАПИСИ  (слов найдено %d из %d)  %s" % (r["line"] + 1, r["matched"], r["of"], line_text[:40]))
+                continue
+            q = max(0.0, r["start"] - args.lead)
+            lrc_lines.append("[%02d:%05.2f] %s" % (int(q // 60), q % 60, gold[r["line"]][1]))
+            print("   строка %2d  %7.2f–%7.2f  %-18s %s" % (r["line"] + 1, r["start"], r["end"], r["status"], line_text[:40]))
+            if not no_gold:
+                errs.append(r["start"] - gold[r["line"]][0])
+        with open(os.path.join(args.work, "aligned_asr_anchor.lrc"), "w", encoding="utf-8") as f:
+            f.write("\n".join(lrc_lines) + "\n")
+        if errs:
+            m = line_metrics(errs)
+            report["asr_anchor"] = m
+            print("[asr-anchor] метрики:", json.dumps(m, ensure_ascii=False))
 
     with open(os.path.join(args.work, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
