@@ -4,12 +4,12 @@
 //
 // Что делает этот код и для чего он нужен:
 // Данный файл lyrics_aligner.go реализует калибровку пословных DTW-таймкодов Whisper:
-// 1. Очищает транскрипцию от галлюцинаций Whisper на тишине (субтитры, копирайты).
-// 2. Устраняет классический дефект DTW в Whisper на музыке (Word Duration Clamping из stable-ts):
-//    когда первое слово после инструментального интро или проигрыша растягивает свой Start
-//    назад к началу музыки (например, start=0.00, end=15.40), алгоритм вычисляет истинный момент
-//    вступления голоса от точной правой границы слова (end - naturalDuration).
-// 3. Группирует откалиброванные слова в естественные вокальные фразы караоке с точными таймкодами.
+//  1. Очищает транскрипцию от галлюцинаций Whisper на тишине (субтитры, копирайты).
+//  2. Устраняет классический дефект DTW в Whisper на музыке (Word Duration Clamping из stable-ts):
+//     когда первое слово после инструментального интро или проигрыша растягивает свой Start
+//     назад к началу музыки (например, start=0.00, end=15.40), алгоритм вычисляет истинный момент
+//     вступления голоса от точной правой границы слова (end - naturalDuration).
+//  3. Группирует откалиброванные слова в естественные вокальные фразы караоке с точными таймкодами.
 package ai
 
 import (
@@ -18,6 +18,8 @@ import (
 	"math"
 	"strings"
 	"unicode"
+
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 // AcousticPhrase представляет одну реально пропетую вокальную строчку (фразу),
@@ -111,6 +113,8 @@ func SanitizeWhisperTimeline(res *WhisperTranscriptionResult) *AcousticTimelineD
 		return &AcousticTimelineData{}
 	}
 
+	droppedSegments, droppedWords, clampedWords, shiftedWords := 0, 0, 0, 0
+
 	// 1. Очищаем сегменты от галлюцинаций тишины
 	cleanSegments := make([]WhisperSegment, 0, len(res.Segments))
 	for _, seg := range res.Segments {
@@ -133,10 +137,12 @@ func SanitizeWhisperTimeline(res *WhisperTranscriptionResult) *AcousticTimelineD
 	for i, w := range res.Words {
 		wText := strings.TrimSpace(w.Word)
 		if wText == "" || isWhisperHallucination(wText) {
+			droppedWords++
 			continue
 		}
 		// Пропускаем чисто пунктуационные токены без букв/цифр
 		if normalizeWordForAlign(wText) == "" {
+			droppedWords++
 			continue
 		}
 
@@ -162,11 +168,15 @@ func SanitizeWhisperTimeline(res *WhisperTranscriptionResult) *AcousticTimelineD
 			if clampedStart < prevEnd {
 				clampedStart = prevEnd
 			}
+			logger.Debug("[ALIGN] Слово %q растянуто (%.2f–%.2f, %.2f сек > %.2f): start сдвинут на %.2f",
+				wText, w.Start, end, end-w.Start, maxDur, clampedStart)
 			start = clampedStart
+			clampedWords++
 		}
 
 		if start < prevEnd {
 			start = prevEnd
+			shiftedWords++
 		}
 		if end <= start {
 			end = start + 0.18
@@ -210,6 +220,9 @@ func SanitizeWhisperTimeline(res *WhisperTranscriptionResult) *AcousticTimelineD
 		Segments:       cleanSegments,
 	}
 	data.Phrases = BuildAcousticPhrases(data)
+	logger.Info("[ALIGN] Whisper: слов %d→%d (отброшено %d), сегментов %d→%d (отброшено %d), clamping растянутых слов: %d, сдвиг из-за перекрытий: %d, фраз: %d, первое слово вокала: %s, длительность аудио: %.1f сек",
+		len(res.Words), len(cleanWords), droppedWords, len(res.Segments), len(cleanSegments), droppedSegments,
+		clampedWords, shiftedWords, len(data.Phrases), FormatLRCTimestamp(firstStart), res.Duration)
 	return data
 }
 

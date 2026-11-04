@@ -23,3 +23,6 @@ lyrics_archive/
 _lyrics_archive/
 .lyrics_backup/
 chrome-extension/
+
+# Локально собранные бинарники для быстрого деплоя
+dist/

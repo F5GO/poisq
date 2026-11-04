@@ -147,7 +147,8 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 			return
 		}
 
-		logger.Info("[WORKER] Взята задача #%d в обработку: тип=%s, трекId=%s", job.ID, job.JobType, job.TrackID)
+		logger.Info("[WORKER] Взята задача #%d в обработку: тип=%s, трекId=%s, попытка=%d", job.ID, job.JobType, job.TrackID, job.AttemptCount)
+		jobStarted := time.Now()
 
 		if err := qp.executeJob(ctx, job); err != nil {
 			if errors.Is(err, db.ErrNoAvailableKeys) {
@@ -173,14 +174,14 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 
 			qp.tracker.RecordStep(job.ID, "error", "✖ Ошибка: "+err.Error())
 			_ = qp.jobRepo.MarkRetryOrFailed(job.ID, job.AttemptCount, 3, err.Error())
-			logger.Warn("[WORKER] Задача #%d (трек %s) завершилась ошибкой (попытка %d): %v",
-				job.ID, job.TrackID, job.AttemptCount, err)
+			logger.Warn("[WORKER] Задача #%d (трек %s) завершилась ошибкой через %s (попытка %d): %v",
+				job.ID, job.TrackID, time.Since(jobStarted).Round(time.Millisecond), job.AttemptCount, err)
 			continue
 		}
 
 		qp.tracker.RecordStep(job.ID, "done", "✓ Задача успешно завершена! Текст синхронизирован и сохранен на диск (.lrc).")
 		_ = qp.jobRepo.MarkDone(job.ID)
-		logger.Info("[WORKER] Задача #%d успешно завершена!", job.ID)
+		logger.Info("[WORKER] Задача #%d успешно завершена за %s!", job.ID, time.Since(jobStarted).Round(time.Millisecond))
 	}
 }
 
@@ -257,7 +258,9 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 	// Шаг 2: Если найден синхронизированный LRC (и это не принудительный запуск whisper_karaoke) — проводим очистку и AI-консенсус
 	if job.JobType != "whisper_karaoke" && tRes != nil && tRes.Winner != nil && tRes.Winner.Lyrics.Kind == lyrics.KindLRC {
 		cleanedLocal := ai.FastCleanStructuralTags(tRes.Winner.Lyrics.SyncedLyrics)
-		_ = qp.saveWinningLyrics(track, tRes.Winner.ProviderID, lyrics.KindLRC, cleanedLocal, track.LangCode, false)
+		if sErr := qp.saveWinningLyrics(track, tRes.Winner.ProviderID, lyrics.KindLRC, cleanedLocal, track.LangCode, false); sErr != nil {
+			logger.Warn("[WORKER] [Задача #%d] Не удалось сохранить текст: %v", job.ID, sErr)
+		}
 
 		if qp.cleaner != nil {
 			qp.reportStep(job.ID, "consensus", "Этап 2: Валидация и очистка LRC-таймкодов через Google Gemini...")
@@ -267,15 +270,19 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 				if errors.Is(aiErr, db.ErrNoAvailableKeys) && job.JobType == "ai_consensus" {
 					return aiErr
 				}
+				logger.Warn("[WORKER] [Задача #%d] AI-консенсус не удался, оставлен локально очищенный LRC от %s: %v", job.ID, tRes.Winner.ProviderID, aiErr)
+				qp.tracker.RecordStep(job.ID, "consensus_failed", "⚠ AI-консенсус не удался: "+aiErr.Error()+" (оставлен LRC провайдера)")
 				return nil
 			}
-			_ = qp.cacheRepo.Upsert(db.ProviderCacheRecord{
+			if cErr := qp.cacheRepo.Upsert(db.ProviderCacheRecord{
 				TrackID:   track.ID,
 				Provider:  "poisq",
 				Kind:      "lrc",
 				Score:     99.5,
 				RawLyrics: consensus.CleanedLyrics,
-			})
+			}); cErr != nil {
+				logger.Warn("[WORKER] [Задача #%d] Не удалось записать provider_cache: %v", job.ID, cErr)
+			}
 			return qp.saveWinningLyrics(track, "poisq", lyrics.KindLRC, consensus.CleanedLyrics, consensus.LangCode, true)
 		}
 		return nil
@@ -290,7 +297,9 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 		if candPlain != "" {
 			refPlain = candPlain
 			if job.JobType != "whisper_karaoke" {
-				_ = qp.saveWinningLyrics(track, tRes.Winner.ProviderID, lyrics.KindPlain, refPlain, track.LangCode, false)
+				if sErr := qp.saveWinningLyrics(track, tRes.Winner.ProviderID, lyrics.KindPlain, refPlain, track.LangCode, false); sErr != nil {
+					logger.Warn("[WORKER] [Задача #%d] Не удалось сохранить текст: %v", job.ID, sErr)
+				}
 			}
 		}
 	}
@@ -310,13 +319,15 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 				return wErr
 			}
 			acousticJSON = rawJSON
-			_ = qp.cacheRepo.Upsert(db.ProviderCacheRecord{
+			if cErr := qp.cacheRepo.Upsert(db.ProviderCacheRecord{
 				TrackID:   track.ID,
 				Provider:  "whisper_words_v3",
 				Kind:      "acoustic_json",
 				Score:     50.0,
 				RawLyrics: acousticJSON,
-			})
+			}); cErr != nil {
+				logger.Warn("[WORKER] [Задача #%d] Не удалось записать provider_cache: %v", job.ID, cErr)
+			}
 			qp.reportStep(job.ID, "whisper_done", "Этап 2 завершен: получены и откалиброваны пословные таймкоды вокала от Groq Whisper")
 		}
 
@@ -356,13 +367,15 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 		}
 
 		qp.reportStep(job.ID, "saving", "Этап 4: Запись синхронизированного .lrc файла на диск (Источник: poisq)...")
-		_ = qp.cacheRepo.Upsert(db.ProviderCacheRecord{
+		if cErr := qp.cacheRepo.Upsert(db.ProviderCacheRecord{
 			TrackID:   track.ID,
 			Provider:  "poisq",
 			Kind:      "lrc",
 			Score:     100.0,
 			RawLyrics: karaokeOut.CleanedLyrics,
-		})
+		}); cErr != nil {
+			logger.Warn("[WORKER] [Задача #%d] Не удалось записать provider_cache: %v", job.ID, cErr)
+		}
 		return qp.saveWinningLyrics(track, "poisq", lyrics.KindLRC, karaokeOut.CleanedLyrics, karaokeOut.LangCode, true)
 	}
 

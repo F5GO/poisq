@@ -102,7 +102,7 @@ func (p *NetEaseProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyrics
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, ErrNotFound
+		return nil, httpStatusError("netease", resp.StatusCode)
 	}
 
 	var lyrResp neteaseLyricResponse
@@ -178,7 +178,7 @@ func (p *NetEaseProvider) searchSong(ctx context.Context, q SearchQuery) (int64,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return 0, "", "", "", 0, ErrNotFound
+		return 0, "", "", "", 0, httpStatusError("netease", resp.StatusCode)
 	}
 
 	var data neteaseSearchResponse

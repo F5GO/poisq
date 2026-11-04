@@ -101,7 +101,7 @@ func (p *GeniusProvider) searchSongURL(ctx context.Context, q SearchQuery) (stri
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", "", "", ErrNotFound
+		return "", "", "", httpStatusError("genius", resp.StatusCode)
 	}
 
 	var data geniusMultiSearchResponse
@@ -159,7 +159,7 @@ func (p *GeniusProvider) scrapeLyrics(ctx context.Context, pageURL, candArtist, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, ErrNotFound
+		return nil, httpStatusError("genius", resp.StatusCode)
 	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)

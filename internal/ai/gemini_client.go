@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/F5GO/poisq/internal/keypool"
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 const (
@@ -156,14 +157,19 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 			}
 		}
 
+		started := time.Now()
 		resText, status, apiStatus, err := g.callOnce(ctx, leased.PlainKey, systemPrompt, userPrompt, responseMimeType)
 		if err == nil {
 			g.keyPool.ReportSuccess(leased.ID)
+			logger.Info("[GEMINI] Успех: попытка %d/%d, ключ #%d, модель %s, %s, промпт %d симв., ответ %d симв.",
+				attempt, maxAttempts, leased.ID, g.model, time.Since(started).Round(time.Millisecond), len(userPrompt), len(resText))
 			return resText, nil
 		}
 
 		lastErr = err
 		errLower := strings.ToLower(err.Error() + " " + apiStatus)
+		logger.Warn("[GEMINI] Попытка %d/%d не удалась (ключ #%d, HTTP %d, %s, %s): %v",
+			attempt, maxAttempts, leased.ID, status, apiStatus, time.Since(started).Round(time.Millisecond), err)
 
 		// Классификация ошибки для пула ключей
 		if status == http.StatusTooManyRequests || strings.Contains(errLower, "resource_exhausted") || strings.Contains(errLower, "quota") {
@@ -243,6 +249,7 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 			lastStatus = status
 			lastApiStatus = apiStatus
 			lastErr = err
+			logger.Debug("[GEMINI] Модель %s, повтор %d: HTTP %d (%s): %v", m, retry+1, status, apiStatus, err)
 
 			errLower := strings.ToLower(err.Error() + " " + apiStatus)
 			isTransient := status == http.StatusServiceUnavailable ||
@@ -268,6 +275,7 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 			}
 
 			// Если повторы на текущей модели не удались или статус 404 — переходим к следующей модели (3.6-flash)
+			logger.Warn("[GEMINI] Модель %s недоступна (HTTP %d): переход к следующей модели из списка", m, status)
 			break
 		}
 	}

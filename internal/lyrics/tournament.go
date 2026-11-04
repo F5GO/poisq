@@ -9,6 +9,8 @@ package lyrics
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -113,6 +115,8 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 		if leased, err := t.keyPool.Acquire("yandex"); err == nil && leased != nil {
 			t.yandex.SetToken(leased.PlainKey)
 			t.keyPool.ReportSuccess(leased.ID)
+		} else if !t.yandex.HasToken() {
+			logger.Warn("[TOURNAMENT] [yandex] OAuth-токен Яндекс Музыки не задан (пул ключей и env пусты): синхронные тексты Яндекса недоступны")
 		}
 	}
 
@@ -122,7 +126,7 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 
 	for _, gp := range t.providers {
 		if !gp.breaker.Allow() {
-			logger.Debug("[TOURNAMENT] [%s] Пропущен (Circuit Breaker активен)", gp.prov.ID())
+			logger.Warn("[TOURNAMENT] [%s] Пропущен: Circuit Breaker активен еще ~%s", gp.prov.ID(), gp.breaker.OpenFor().Round(time.Second))
 			continue
 		}
 
@@ -132,6 +136,7 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 
 			release, err := g.limiter.Wait(ctx)
 			if err != nil {
+				logger.Warn("[TOURNAMENT] [%s] Не получен слот rate limiter: %v", g.prov.ID(), err)
 				return
 			}
 			defer release()
@@ -139,16 +144,29 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 			pCtx, cancel := context.WithTimeout(ctx, t.timeout)
 			defer cancel()
 
+			started := time.Now()
 			lyr, err := g.prov.Fetch(pCtx, q)
+			elapsed := time.Since(started).Round(time.Millisecond)
 			if err != nil {
-				if err != ErrNotFound && err != context.Canceled {
-					g.breaker.RecordFailure()
+				switch {
+				case errors.Is(err, ErrNotFound):
+					logger.Info("[TOURNAMENT] [%s] Не найдено (%s)", g.prov.ID(), elapsed)
+				case errors.Is(err, context.Canceled):
+					logger.Info("[TOURNAMENT] [%s] Запрос отменен (%s)", g.prov.ID(), elapsed)
+				default:
+					reason := err.Error()
+					if errors.Is(err, context.DeadlineExceeded) {
+						reason = fmt.Sprintf("таймаут %s: %v", t.timeout, err)
+					}
+					logger.Warn("[TOURNAMENT] [%s] ОШИБКА провайдера через %s: %s", g.prov.ID(), elapsed, reason)
+					if g.breaker.RecordFailure() {
+						logger.Warn("[TOURNAMENT] [%s] Circuit Breaker РАЗОМКНУТ: источник отключен на %s", g.prov.ID(), g.breaker.OpenFor().Round(time.Second))
+					}
 				}
-				logger.Debug("[TOURNAMENT] [%s] Ответ: %v", g.prov.ID(), err)
 				return
 			}
 			if lyr == nil {
-				logger.Debug("[TOURNAMENT] [%s] Текст не найден", g.prov.ID())
+				logger.Info("[TOURNAMENT] [%s] Пустой ответ (%s)", g.prov.ID(), elapsed)
 				return
 			}
 			g.breaker.RecordSuccess()
@@ -158,16 +176,20 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 				content = lyr.PlainLyrics
 			}
 			if content == "" && !lyr.Instrumental {
+				logger.Info("[TOURNAMENT] [%s] Ответ без текста (%s)", g.prov.ID(), elapsed)
 				return
 			}
 
 			score := ScoreCandidate(q, lyr.Artist, lyr.Title, lyr.Album, lyr.Duration, lyr.Kind, content, t.tolerance)
 			if !score.Accepted {
-				logger.Debug("[TOURNAMENT] [%s] Текст отклонен фильтром соответствия (балл: %.1f)", g.prov.ID(), score.Total)
+				logger.Info("[TOURNAMENT] [%s] Кандидат отклонен фильтром (%s): «%s — %s», альбом %q, длительность %v; артист=%.1f название=%.1f длительность=%.1f",
+					g.prov.ID(), elapsed, lyr.Artist, lyr.Title, lyr.Album, lyr.Duration,
+					score.ArtistScore, score.TitleScore, score.DurationScore)
 				return
 			}
 
-			logger.Info("[TOURNAMENT] [%s] Найден подходящий текст! Формат: %s, оценка: %.1f из 100", g.prov.ID(), lyr.Kind, score.Total)
+			logger.Info("[TOURNAMENT] [%s] Найден подходящий текст за %s! Формат: %s, оценка: %.1f из 100 (артист=%.1f название=%.1f длительность=%.1f), строк: %d",
+				g.prov.ID(), elapsed, lyr.Kind, score.Total, score.ArtistScore, score.TitleScore, score.DurationScore, len(lyr.Lines))
 
 			// Сохраняем сырой ответ провайдера в SQLite (provider_cache) для переключения в UI
 			if t.cacheRepo != nil && q.TrackID != "" {
@@ -178,14 +200,16 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 					"durationMs": lyr.Duration.Milliseconds(),
 					"isCensored": score.IsCensored,
 				})
-				_ = t.cacheRepo.Upsert(db.ProviderCacheRecord{
+				if upErr := t.cacheRepo.Upsert(db.ProviderCacheRecord{
 					TrackID:      q.TrackID,
 					Provider:     g.prov.ID(),
 					Kind:         string(lyr.Kind),
 					Score:        score.Total,
 					RawLyrics:    content,
 					MetadataJSON: string(metaBytes),
-				})
+				}); upErr != nil {
+					logger.Warn("[TOURNAMENT] [%s] Не удалось сохранить ответ в provider_cache: %v", g.prov.ID(), upErr)
+				}
 			}
 
 			mu.Lock()
