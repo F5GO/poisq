@@ -314,7 +314,7 @@ def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_
     ref = [w for t in lines_tokens for w in t]
     pair = match_ref_to_asr(ref, [t[0] for t in asr_tokens])
 
-    results, pos = [], 0
+    results, pos, prev_end = [], 0, 0.0
     for i, toks in enumerate(lines_tokens):
         idxs = pair[pos:pos + len(toks)]
         pos += len(toks)
@@ -326,7 +326,10 @@ def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_
         k1, j1 = got[-1]
         a_start = max(0.0, asr_tokens[j0][1] - 0.45 * k0)
         a_end = asr_tokens[j1][2] + 0.45 * (len(toks) - 1 - k1)
-        t0, t1 = max(0.0, a_start - 1.5), a_end + 1.5
+        # окно не заходит левее конца предыдущей строки: строки не должны перекрываться
+        t0, t1 = max(0.0, a_start - 1.5, prev_end - 0.3), a_end + 1.5
+        if t1 - t0 < 0.8:
+            t0 = max(0.0, a_start - 0.5)
         status, start, end = "ASR", a_start, a_end
         tmp = os.path.join(work, f"anchor_{i}.wav")
         run(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(t0), "-t", str(t1 - t0), "-i", voc16, "-ac", "1", "-ar", "16000", tmp])
@@ -337,6 +340,11 @@ def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_
                 status, start, end = "ASR+выравнивание", sub[0][1], sub[-1][2]
         except Exception as e:  # noqa: BLE001
             print(f"   строка {i + 1}: выравнивание в окне не удалось: {e}")
+        if start < prev_end - 0.3:  # перекрытие с предыдущей строкой: берём якорь Whisper, сдвинутый за её конец
+            start = max(prev_end, a_start)
+            status += " (сдвинуто)"
+        end = max(end, start + 0.2)
+        prev_end = end
         results.append({"line": i, "status": status, "start": start, "end": end, "matched": len(got), "of": len(toks)})
     return results, asr
 
