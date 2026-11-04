@@ -17,6 +17,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/F5GO/poisq/internal/logger"
@@ -96,6 +97,22 @@ func (kp *KaraokePipeline) MergeSegmentsWithReference(ctx context.Context, acous
 		)
 	}
 
+	// Gemini здесь только «возвращает» уже выровненный черновик: тайминг всё равно считает DP + Snap,
+	// а эталонный текст уже верный. При перегрузке API это добавляет минуты ожидания (503), поэтому
+	// по умолчанию, когда черновик есть, Gemini пропускается. Вернуть: KARAOKE_USE_GEMINI=true.
+	if strings.TrimSpace(preAlignedLRC) != "" && !strings.EqualFold(os.Getenv("KARAOKE_USE_GEMINI"), "true") {
+		snapped := preAlignedLRC
+		if timelineData != nil && len(timelineData.Words) > 0 {
+			snapped = SnapLRCToAcousticWords(preAlignedLRC, timelineData)
+		}
+		logger.Info("[KARAOKE] Gemini пропущен (KARAOKE_USE_GEMINI!=true): используется предвыровненный DP-черновик, строк: %d", strings.Count(snapped, "\n")+1)
+		lang := ""
+		if timelineData != nil {
+			lang = whisperLanguageToISO(timelineData.Language)
+		}
+		return &ConsensusOutput{LangCode: lang, CleanedLyrics: snapped, IsSynced: true}, nil
+	}
+
 	refLines := 0
 	for _, l := range strings.Split(referencePlainLyrics, "\n") {
 		if strings.TrimSpace(l) != "" {
@@ -148,4 +165,18 @@ func (kp *KaraokePipeline) GenerateSyncedLRC(ctx context.Context, audioFilePath,
 		return nil, err
 	}
 	return kp.MergeSegmentsWithReference(ctx, acousticJSON, artist, title, referencePlainLyrics)
+}
+
+// whisperLanguageToISO переводит название языка из ответа Whisper ("russian") в двухбуквенный код.
+func whisperLanguageToISO(name string) string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if len(n) == 2 {
+		return n
+	}
+	m := map[string]string{
+		"russian": "ru", "english": "en", "ukrainian": "uk", "belarusian": "be", "german": "de",
+		"french": "fr", "spanish": "es", "italian": "it", "portuguese": "pt", "polish": "pl",
+		"japanese": "ja", "korean": "ko", "chinese": "zh", "turkish": "tr", "dutch": "nl",
+	}
+	return m[n]
 }
