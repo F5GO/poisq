@@ -100,6 +100,42 @@ def map_words_to_lines(lines_tokens, items):
     return starts
 
 
+def lis_indices(vals):
+    """Индексы наибольшей неубывающей подпоследовательности (строки с согласованным порядком времён)."""
+    import bisect
+
+    tails, tails_idx, prev = [], [], [-1] * len(vals)
+    for i, v in enumerate(vals):
+        k = bisect.bisect_right(tails, v)
+        if k == len(tails):
+            tails.append(v)
+            tails_idx.append(i)
+        else:
+            tails[k] = v
+            tails_idx[k] = i
+        prev[i] = tails_idx[k - 1] if k > 0 else -1
+    out, cur = [], tails_idx[-1] if tails_idx else -1
+    while cur != -1:
+        out.append(cur)
+        cur = prev[cur]
+    return set(out)
+
+
+def eval_lrc_pair(gold, pred):
+    """Сравнивает два LRC по совпадающим строкам (по тексту, в порядке следования)."""
+    pnorm = [(" ".join(tokens(l)), s) for s, l in pred]
+    errors, j = [], 0
+    for g_sec, g_line in gold:
+        key = " ".join(tokens(g_line))
+        k = j
+        while k < len(pnorm) and pnorm[k][0] != key:
+            k += 1
+        if k < len(pnorm):
+            errors.append(pnorm[k][1] - g_sec)
+            j = k + 1
+    return errors
+
+
 def run(cmd, **kw):
     print("+", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True, **kw)
@@ -107,6 +143,48 @@ def run(cmd, **kw):
 
 def stage(name, t0):
     print(f"[{time.time() - t0:7.1f}s] {name}", flush=True)
+
+
+def repair_items(model, wav, items, lines_tokens, lang, work):
+    """Строки, выбивающиеся из порядка времён (типично: повторяющийся припев попал не в то место),
+    перевыравниваются отдельно в окне между надёжными соседними строками."""
+    starts_idx, pos = [], 0
+    for t in lines_tokens:
+        starts_idx.append(pos)
+        pos += len(t)
+    ends_idx = starts_idx[1:] + [len(items)]
+    S = [items[a][1] for a in starts_idx]
+    good = lis_indices(S)
+    bad = [i for i in range(len(S)) if i not in good]
+    if not bad:
+        return items, starts_idx, 0
+
+    items = list(items)
+    fixed, i = 0, 0
+    while i < len(bad):
+        j = i
+        while j + 1 < len(bad) and bad[j + 1] == bad[j] + 1:
+            j += 1
+        a, b = bad[i], bad[j]  # подряд идущие плохие строки a..b
+        left = max([k for k in good if k < a], default=None)
+        right = min([k for k in good if k > b], default=None)
+        w0 = items[ends_idx[left] - 1][2] if left is not None else 0.0
+        w1 = items[starts_idx[right]][1] if right is not None else items[-1][2] + 5.0
+        i = j + 1
+        if w1 - w0 < 1.0:
+            continue
+        w0c = max(0.0, w0 - 0.3)
+        sub_text = " ".join(w for k in range(a, b + 1) for w in lines_tokens[k])
+        tmp = os.path.join(work, f"repair_{a}_{b}.wav")
+        run(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(w0c), "-t", str(w1 - w0c + 0.3), "-i", wav, "-ac", "1", "-ar", "16000", tmp])
+        res = model.align(audio=tmp, text=sub_text, language=lang)
+        sub = [(it.text, float(it.start_time) + w0c, float(it.end_time) + w0c) for it in res[0]]
+        n_expected = sum(len(lines_tokens[k]) for k in range(a, b + 1))
+        if len(sub) != n_expected:
+            continue
+        items[starts_idx[a]:ends_idx[b]] = sub
+        fixed += b - a + 1
+    return items, starts_idx, fixed
 
 
 def main():
@@ -117,6 +195,8 @@ def main():
     ap.add_argument("--lang", default="", help="Russian/English/... (по умолчанию определяется по тексту)")
     ap.add_argument("--variants", default="vocals,mix", help="что выравнивать: vocals, mix")
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--pred", default="", help="только сравнить с эталоном готовый LRC (например, из poisq), без моделей")
+    ap.add_argument("--repair", action="store_true", help="перевыровнять строки с нарушенным порядком времён в окне между соседями")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -124,6 +204,13 @@ def main():
     gold_all = parse_lrc(open(args.gold_lrc, encoding="utf-8", errors="replace").read())
     if len(gold_all) < 5:
         sys.exit("в эталонном LRC слишком мало строк с таймкодами")
+
+    if args.pred:
+        pred = parse_lrc(open(args.pred, encoding="utf-8", errors="replace").read())
+        errs = eval_lrc_pair(gold_all, pred)
+        print(f"совпавших строк: {len(errs)} из {len(gold_all)}")
+        print("метрики:", json.dumps(line_metrics(errs), ensure_ascii=False))
+        return
 
     base = os.path.join(args.work, "track")
     mix_wav = base + "_mix.wav"
@@ -185,6 +272,10 @@ def main():
         items = [(it.text, float(it.start_time), float(it.end_time)) for it in res[0]]
         print(f"[{name}] выравнивание заняло {time.time() - t1:.1f} сек, слов от модели: {len(items)}")
         starts = map_words_to_lines(lines_tokens, items)
+
+        if args.repair and len(items) == sum(len(t) for t in lines_tokens):
+            items, starts, fixed = repair_items(model, wav, items, lines_tokens, lang, args.work)
+            print(f"[{name}] repair: перевыровнено строк с нарушенным порядком: {fixed}")
 
         errors, rows = [], []
         pred_lrc = []
