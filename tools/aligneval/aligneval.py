@@ -136,6 +136,78 @@ def eval_lrc_pair(gold, pred):
     return errors
 
 
+def snap_with_rms(items, starts_idx, rms, frame=0.01, rel_thr=0.12, max_shift=2.5, min_shift=0.15):
+    """Подтягивает начало каждой строки к реальному началу голоса.
+    Выравниватели часто «растягивают» первое слово строки назад, на тишину перед ним (после проигрыша
+    следующая строка появляется слишком рано). rms — огибающая громкости вокала по кадрам frame сек."""
+    if not rms:
+        return list(items), 0
+    thr = rel_thr * percentile(rms, 0.95)
+    out, moved = list(items), 0
+    for a in starts_idx:
+        text, s, e = out[a]
+        i0 = max(0, int(s / frame))
+        i1 = min(len(rms), int(min(e, s + max_shift) / frame) + 1)
+        first = next((k for k in range(i0, i1) if rms[k] > thr), None)
+        if first is None:
+            continue
+        new_s = first * frame
+        if new_s - s >= min_shift and new_s < e - 0.05:
+            out[a] = (text, new_s, e)
+            moved += 1
+    return out, moved
+
+
+def refine_items(model, wav, items, lines_tokens, lang, work, total_dur):
+    """Второй проход: каждая строка выравнивается ещё раз в коротком окне вместе с соседними строками
+    (предыдущая + текущая + следующая). Модель видит только локальный кусок аудио, поэтому реже путает
+    повторы припева. Берётся результат для средней строки."""
+    starts_idx, pos = [], 0
+    for t in lines_tokens:
+        starts_idx.append(pos)
+        pos += len(t)
+    ends_idx = starts_idx[1:] + [len(items)]
+    new_items, changed = list(items), 0
+    n = len(lines_tokens)
+    for i in range(n):
+        lo, hi = max(0, i - 1), min(n - 1, i + 1)
+        t0 = max(0.0, items[starts_idx[lo]][1] - 1.5)
+        t1 = min(total_dur, items[ends_idx[hi] - 1][2] + 1.5)
+        if t1 - t0 < 1.0:
+            continue
+        sub_text = " ".join(w for k in range(lo, hi + 1) for w in lines_tokens[k])
+        tmp = os.path.join(work, f"refine_{i}.wav")
+        run(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(t0), "-t", str(t1 - t0), "-i", wav, "-ac", "1", "-ar", "16000", tmp])
+        res = model.align(audio=tmp, text=sub_text, language=lang)
+        sub = [(it.text, float(it.start_time) + t0, float(it.end_time) + t0) for it in res[0]]
+        if len(sub) != sum(len(lines_tokens[k]) for k in range(lo, hi + 1)):
+            continue
+        off = sum(len(lines_tokens[k]) for k in range(lo, i))
+        mine = sub[off:off + len(lines_tokens[i])]
+        # не принимаем результат, если он вышел за пределы окна соседей (подозрительный скачок)
+        if mine and abs(mine[0][1] - items[starts_idx[i]][1]) > 8.0:
+            continue
+        if any(abs(a[1] - b[1]) > 0.05 for a, b in zip(mine, new_items[starts_idx[i]:ends_idx[i]])):
+            changed += 1
+        new_items[starts_idx[i]:ends_idx[i]] = mine
+    return new_items, changed
+
+
+def vocal_rms(wav16, frame=0.01):
+    import numpy as np
+    import soundfile as sf
+
+    x, sr = sf.read(wav16, dtype="float32")
+    if x.ndim > 1:
+        x = x.mean(axis=1)
+    hop = int(sr * frame)
+    n = len(x) // hop
+    if n == 0:
+        return []
+    r = np.sqrt((x[: n * hop].reshape(n, hop) ** 2).mean(axis=1))
+    return r.tolist()
+
+
 def run(cmd, **kw):
     print("+", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True, **kw)
@@ -190,22 +262,34 @@ def repair_items(model, wav, items, lines_tokens, lang, work):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("audio", help="путь к аудиофайлу")
-    ap.add_argument("gold_lrc", help="эталонный LRC (человеческий тайминг)")
+    ap.add_argument("gold_lrc", nargs="?", default="", help="эталонный LRC (человеческий тайминг); не нужен с --text")
     ap.add_argument("--work", default="/work", help="рабочая папка (кэш стемов и результаты)")
     ap.add_argument("--lang", default="", help="Russian/English/... (по умолчанию определяется по тексту)")
     ap.add_argument("--variants", default="vocals,mix", help="что выравнивать: vocals, mix")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--pred", default="", help="только сравнить с эталоном готовый LRC (например, из poisq), без моделей")
+    ap.add_argument("--text", default="", help="режим без эталона: файл с текстом (по строке); метрик не будет, только aligned_*.lrc")
+    ap.add_argument("--refine", action="store_true", help="второй проход: перевыровнять каждую строку в окне с соседями")
+    ap.add_argument("--snap-onset", dest="snap_onset", action="store_true", help="подтянуть начало строк к реальному началу голоса")
+    ap.add_argument("--lead", type=float, default=0.5, help="на сколько сек раньше писать время строк в итоговый LRC (по умолчанию 0.5)")
     ap.add_argument("--repair", action="store_true", help="перевыровнять строки с нарушенным порядком времён в окне между соседями")
     args = ap.parse_args()
 
     t0 = time.time()
     os.makedirs(args.work, exist_ok=True)
-    gold_all = parse_lrc(open(args.gold_lrc, encoding="utf-8", errors="replace").read())
-    if len(gold_all) < 5:
-        sys.exit("в эталонном LRC слишком мало строк с таймкодами")
+    no_gold = bool(args.text)
+    if no_gold:
+        stamp = re.compile(r"\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]")
+        raw_text = open(args.text, encoding="utf-8", errors="replace").read()
+        gold_all = [(0.0, stamp.sub("", l).strip()) for l in raw_text.splitlines() if stamp.sub("", l).strip()]
+    else:
+        if not args.gold_lrc:
+            sys.exit("нужен эталонный LRC или --text файл")
+        gold_all = parse_lrc(open(args.gold_lrc, encoding="utf-8", errors="replace").read())
+        if len(gold_all) < 5:
+            sys.exit("в эталонном LRC слишком мало строк с таймкодами")
 
-    if args.pred:
+    if args.pred and not no_gold:
         pred = parse_lrc(open(args.pred, encoding="utf-8", errors="replace").read())
         errs = eval_lrc_pair(gold_all, pred)
         print(f"совпавших строк: {len(errs)} из {len(gold_all)}")
@@ -219,7 +303,7 @@ def main():
     stage("микс подготовлен (первые %d сек)" % MAX_SEC, t0)
 
     # Эталонные строки только внутри обрезанного окна
-    gold = [(s, l) for s, l in gold_all if s < MAX_SEC - 8]
+    gold = list(gold_all) if no_gold else [(s, l) for s, l in gold_all if s < MAX_SEC - 8]
     lines_tokens = [tokens(l) for _, l in gold]
     keep = [i for i, t in enumerate(lines_tokens) if t]
     gold = [gold[i] for i in keep]
@@ -277,15 +361,31 @@ def main():
             items, starts, fixed = repair_items(model, wav, items, lines_tokens, lang, args.work)
             print(f"[{name}] repair: перевыровнено строк с нарушенным порядком: {fixed}")
 
+        full_counts = len(items) == sum(len(t) for t in lines_tokens)
+        if args.refine and full_counts:
+            total_dur = items[-1][2] + 3.0
+            items, changed = refine_items(model, wav, items, lines_tokens, lang, args.work, total_dur)
+            print(f"[{name}] refine: изменено строк: {changed}")
+        if args.snap_onset and full_counts:
+            rms = vocal_rms(wavs["vocals"] if "vocals" in wavs else wav)
+            items, moved = snap_with_rms(items, starts, rms)
+            print(f"[{name}] snap-onset: начало строки подтянуто к голосу у {moved} строк")
+
         errors, rows = [], []
         pred_lrc = []
         for (g_sec, g_line), idx in zip(gold, starts):
             if idx is None or idx >= len(items):
                 continue
             p = items[idx][1]
-            errors.append(p - g_sec)
-            rows.append((abs(p - g_sec), g_sec, p, g_line))
-            pred_lrc.append("[%02d:%05.2f] %s" % (int(p // 60), p % 60, g_line))
+            if not no_gold:
+                errors.append(p - g_sec)
+                rows.append((abs(p - g_sec), g_sec, p, g_line))
+            q = max(0.0, p - args.lead)
+            pred_lrc.append("[%02d:%05.2f] %s" % (int(q // 60), q % 60, g_line))
+        if no_gold:
+            print(f"[{name}] строки с временем (с учётом --lead {args.lead}):")
+            for l in pred_lrc:
+                print("   " + l)
         m = line_metrics(errors)
         report[name] = m
         with open(os.path.join(args.work, f"aligned_{name}.lrc"), "w", encoding="utf-8") as f:
