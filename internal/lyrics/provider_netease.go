@@ -20,20 +20,39 @@ import (
 
 const neteaseBaseURL = "https://music.163.com/api"
 
+type neteaseSearchResult struct {
+	Songs []struct {
+		ID       int64  `json:"id"`
+		Name     string `json:"name"`
+		Duration int64  `json:"duration"` // в миллисекундах
+		Artists  []struct {
+			Name string `json:"name"`
+		} `json:"artists"`
+		Album struct {
+			Name string `json:"name"`
+		} `json:"album"`
+	} `json:"songs"`
+}
+
+// UnmarshalJSON терпимо разбирает поле result: когда ничего не найдено,
+// NetEase иногда возвращает строку или null вместо объекта.
+func (r *neteaseSearchResult) UnmarshalJSON(b []byte) error {
+	trimmed := strings.TrimSpace(string(b))
+	if trimmed == "" || trimmed[0] != '{' {
+		*r = neteaseSearchResult{}
+		return nil
+	}
+	type alias neteaseSearchResult
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	*r = neteaseSearchResult(a)
+	return nil
+}
+
 type neteaseSearchResponse struct {
-	Result struct {
-		Songs []struct {
-			ID       int64  `json:"id"`
-			Name     string `json:"name"`
-			Duration int64  `json:"duration"` // в миллисекундах
-			Artists  []struct {
-				Name string `json:"name"`
-			} `json:"artists"`
-			Album struct {
-				Name string `json:"name"`
-			} `json:"album"`
-		} `json:"songs"`
-	} `json:"result"`
+	Result neteaseSearchResult `json:"result"`
 }
 
 type neteaseLyricResponse struct {

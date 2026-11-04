@@ -67,6 +67,13 @@ func PreAlignReferenceWithWords(referencePlain string, data *AcousticTimelineDat
 // computeGlobalDPLineTimestamps вычисляет точный акустический таймкод начала каждой строки
 // при помощи глобальной матрицы динамического программирования (Needleman-Wunsch).
 func computeGlobalDPLineTimestamps(lineTokensList [][]string, data *AcousticTimelineData) []float64 {
+	times, _ := computeGlobalDPLineTimestampsDetailed(lineTokensList, data)
+	return times
+}
+
+// computeGlobalDPLineTimestampsDetailed дополнительно возвращает флаги: какие строки реально
+// сопоставлены со словами Whisper (true), а какие получили интерполированное время (false).
+func computeGlobalDPLineTimestampsDetailed(lineTokensList [][]string, data *AcousticTimelineData) ([]float64, []bool) {
 	numLines := len(lineTokensList)
 	lineTimes := make([]float64, numLines)
 	lineMatched := make([]bool, numLines)
@@ -100,7 +107,7 @@ func computeGlobalDPLineTimestamps(lineTokensList [][]string, data *AcousticTime
 	P := len(refTokens)
 	Q := len(wList)
 	if P == 0 || Q == 0 {
-		return lineTimes
+		return lineTimes, lineMatched
 	}
 
 	// Матрица глобального выравнивания Нидлмана — Вунша размера (P+1) x (Q+1)
@@ -250,7 +257,7 @@ func computeGlobalDPLineTimestamps(lineTokensList [][]string, data *AcousticTime
 			}
 		}
 	}
-	return lineTimes
+	return lineTimes, lineMatched
 }
 
 func interpolateUnmatchedLines(lineTimes []float64, lineMatched []bool, data *AcousticTimelineData) {
@@ -378,16 +385,57 @@ func SnapLRCToAcousticWords(lrcText string, data *AcousticTimelineData) string {
 		return trimmed
 	}
 
-	// Вычисляем истинные акустические таймкоды строк через глобальный алгоритм Нидлмана — Вунша
-	dpTimes := computeGlobalDPLineTimestamps(tokenMatrix, data)
+	// Вычисляем акустические таймкоды строк через глобальный алгоритм Нидлмана — Вунша
+	dpTimes, dpMatched := computeGlobalDPLineTimestampsDetailed(tokenMatrix, data)
+
+	// Начала всех слов Whisper — «физические якоря» в аудио
+	wordStarts := make([]float64, 0, len(data.Words))
+	for _, w := range data.Words {
+		wordStarts = append(wordStarts, w.Start)
+	}
+	nearestStart := func(t float64) (float64, float64) {
+		best, bestDist := t, math.MaxFloat64
+		for _, ws := range wordStarts {
+			if d := math.Abs(ws - t); d < bestDist {
+				best, bestDist = ws, d
+			}
+		}
+		return best, bestDist
+	}
+
+	// Если DP не нашёл строку в голосе (интерполяция) или разошёлся с Gemini, а время Gemini
+	// попадает в начало реального слова Whisper (±1 сек) — доверяем Gemini: интерполяция
+	// заведомо хуже таймкода, подтверждённого словом в аудио.
+	const trustWindow = 1.0
 
 	var sb strings.Builder
 	prevSec := -1.0
 	shifted := 0
 	maxShift := 0.0
+	usedGemini := 0
 	for i, pl := range parsed {
-		finalSec := dpTimes[i]
-		// Если глобальный DP дал валидный таймкод — используем его как эталон физической привязки к голосу
+		d := dpTimes[i]
+		g := pl.sec
+		gSnap, gDist := nearestStart(g)
+
+		var finalSec float64
+		switch {
+		case dpMatched[i] && math.Abs(d-g) <= trustWindow:
+			finalSec = d
+		case gDist <= trustWindow:
+			finalSec = gSnap
+			if !dpMatched[i] || math.Abs(d-g) > trustWindow {
+				usedGemini++
+			}
+		case dpMatched[i]:
+			finalSec = d
+		default:
+			finalSec = g
+			if finalSec < d && d > 0 && g <= 0 {
+				finalSec = d
+			}
+		}
+
 		if finalSec < data.FirstWordStart {
 			finalSec = data.FirstWordStart
 		}
@@ -395,16 +443,18 @@ func SnapLRCToAcousticWords(lrcText string, data *AcousticTimelineData) string {
 			finalSec = math.Round((prevSec+0.25)*100) / 100
 		}
 		prevSec = finalSec
-		if d := math.Abs(finalSec - pl.sec); d > 0.5 {
+		if dd := math.Abs(finalSec - g); dd > 0.5 {
 			shifted++
-			if d > maxShift {
-				maxShift = d
+			if dd > maxShift {
+				maxShift = dd
 			}
-			logger.Debug("[ALIGN] Snap строки %d: Gemini %s → акустика %s (Δ %.2f сек)", i+1, FormatLRCTimestamp(pl.sec), FormatLRCTimestamp(finalSec), d)
+			logger.Debug("[ALIGN] Snap строки %d: Gemini %s → итог %s (Δ %.2f сек, DP %s, по голосу=%v)",
+				i+1, FormatLRCTimestamp(g), FormatLRCTimestamp(finalSec), dd, FormatLRCTimestamp(d), dpMatched[i])
 		}
 		sb.WriteString(fmt.Sprintf("%s %s\n", FormatLRCTimestamp(finalSec), pl.text))
 	}
-	logger.Info("[ALIGN] Snap после Gemini: строк %d, таймкод изменён более чем на 0.5 сек у %d (макс. сдвиг %.2f сек)", len(parsed), shifted, maxShift)
+	logger.Info("[ALIGN] Snap после Gemini: строк %d, таймкод изменён более чем на 0.5 сек у %d (макс. сдвиг %.2f сек), оставлено время Gemini, подтверждённое словом Whisper: %d",
+		len(parsed), shifted, maxShift, usedGemini)
 
 	return strings.TrimSpace(sb.String())
 }

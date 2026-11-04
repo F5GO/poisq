@@ -107,3 +107,25 @@ func TestLyricsAligner_StretchedIntroClampingAndSnap(t *testing.T) {
 		t.Errorf("SnapLRCToAcousticWords не примагнитил вторую строку к 27.32:\n%s", snapped)
 	}
 }
+
+// Snap должен доверять времени Gemini, если оно подтверждено словом Whisper, даже когда DP
+// не смог сопоставить строку и интерполировал её время.
+func TestSnapKeepsGeminiTimeConfirmedByWhisperWord(t *testing.T) {
+	data := &AcousticTimelineData{
+		FirstWordStart: 5.0,
+		Duration:       60,
+		Words: []WhisperWord{
+			{Word: "альфа", Start: 5.0, End: 5.5},
+			{Word: "бета", Start: 5.6, End: 6.0},
+			// строка 2 прозвучала, но Whisper написал её совсем иначе
+			{Word: "щщщщщ", Start: 30.0, End: 30.6},
+			{Word: "гамма", Start: 50.0, End: 50.5},
+			{Word: "дельта", Start: 50.6, End: 51.0},
+		},
+	}
+	lrc := "[00:05.00] альфа бета\n[00:30.10] эхо привет\n[00:50.00] гамма дельта"
+	got := SnapLRCToAcousticWords(lrc, data)
+	if !strings.Contains(got, "[00:30.00] эхо привет") {
+		t.Fatalf("ожидалась привязка второй строки к слову Whisper на 30.00, получено:\n%s", got)
+	}
+}
