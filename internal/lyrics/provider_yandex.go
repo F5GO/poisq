@@ -35,7 +35,11 @@ type yandexSearchResponse struct {
 				Title           string          `json:"title"`
 				DurationMs      int64           `json:"durationMs"`
 				LyricsAvailable bool            `json:"lyricsAvailable"`
-				Artists         []struct {
+				LyricsInfo      struct {
+					HasAvailableSyncLyrics bool `json:"hasAvailableSyncLyrics"`
+					HasAvailableTextLyrics bool `json:"hasAvailableTextLyrics"`
+				} `json:"lyricsInfo"`
+				Artists []struct {
 					Name string `json:"name"`
 				} `json:"artists"`
 			} `json:"results"`
@@ -122,13 +126,16 @@ func (p *YandexProvider) Name() string {
 
 func (p *YandexProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyrics, error) {
 	// 1. Поиск трека в каталоге Яндекс Музыки (с обязательным page=0 и перебором вариантов написания артиста)
-	trackID, candArtist, candTitle, candDuration, err := p.searchTrack(ctx, query)
+	trackID, candArtist, candTitle, candDuration, hasSync, err := p.searchTrack(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Если передан OAuth-токен — пытаемся получить синхронизированный LRC через подписанный /tracks/{id}/lyrics
-	if p.getToken() != "" {
+	// 2. Если передан OAuth-токен и Яндекс сообщает, что у трека есть синхронный текст (lyricsInfo.hasAvailableSyncLyrics),
+	// получаем LRC через подписанный /tracks/{id}/lyrics (Яндекс отдаёт тексты Musixmatch)
+	if p.getToken() != "" && !hasSync {
+		logger.Info("[YANDEX] У трека %s нет синхронного текста (hasAvailableSyncLyrics=false): беру обычный текст", trackID)
+	} else if p.getToken() != "" {
 		lyr, err := p.fetchLyricsEndpointWithAuth(ctx, trackID, candArtist, candTitle, candDuration)
 		if err == nil && lyr != nil {
 			return lyr, nil
@@ -142,7 +149,7 @@ func (p *YandexProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyrics,
 	return p.fetchSupplementEndpoint(ctx, trackID, candArtist, candTitle, candDuration)
 }
 
-func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string, string, string, time.Duration, error) {
+func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string, string, string, time.Duration, bool, error) {
 	artistVariants := GenerateArtistVariants(q.Artist)
 
 	for _, artVar := range artistVariants {
@@ -180,7 +187,14 @@ func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string
 			continue
 		}
 
-		// 1. Поиск трека с валидацией названия/артиста и длительности (если задана)
+		// 1. Поиск трека с валидацией названия/артиста и длительности (если задана).
+		// Одна и та же песня бывает в каталоге в нескольких релизах: берём тот, у которого есть синхронный текст.
+		type pick struct {
+			id, artist, title string
+			dur               time.Duration
+			sync              bool
+		}
+		var first, withSync *pick
 		for _, track := range tracks {
 			if !track.LyricsAvailable {
 				continue
@@ -203,7 +217,19 @@ func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string
 				}
 			}
 
-			return cleanTrackID(track.ID), trackArtist, track.Title, dur, nil
+			c := &pick{id: cleanTrackID(track.ID), artist: trackArtist, title: track.Title, dur: dur, sync: track.LyricsInfo.HasAvailableSyncLyrics}
+			if first == nil {
+				first = c
+			}
+			if c.sync && withSync == nil {
+				withSync = c
+			}
+		}
+		if withSync != nil {
+			return withSync.id, withSync.artist, withSync.title, withSync.dur, true, nil
+		}
+		if first != nil {
+			return first.id, first.artist, first.title, first.dur, first.sync, nil
 		}
 
 		// 2. Если с учетом погрешности длительности не совпало — берем подходящий по названию/артисту
@@ -219,12 +245,12 @@ func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string
 
 			if MatchTrack(q, trackArtist, track.Title) {
 				dur := time.Duration(track.DurationMs) * time.Millisecond
-				return cleanTrackID(track.ID), trackArtist, track.Title, dur, nil
+				return cleanTrackID(track.ID), trackArtist, track.Title, dur, track.LyricsInfo.HasAvailableSyncLyrics, nil
 			}
 		}
 	}
 
-	return "", "", "", 0, ErrNotFound
+	return "", "", "", 0, false, ErrNotFound
 }
 
 func (p *YandexProvider) fetchLyricsEndpointWithAuth(ctx context.Context, trackID, candArtist, candTitle string, candDuration time.Duration) (*Lyrics, error) {
