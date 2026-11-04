@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/F5GO/poisq/internal/logger"
 	"io"
 	"math"
 	"net/http"
@@ -56,9 +57,9 @@ type neteaseSearchResponse struct {
 }
 
 type neteaseLyricResponse struct {
-	Nolyric bool `json:"nolyric"`
+	Nolyric     bool `json:"nolyric"`
 	Uncollected bool `json:"uncollected"`
-	Lrc     struct {
+	Lrc         struct {
 		Lyric string `json:"lyric"`
 	} `json:"lrc"`
 }
@@ -200,9 +201,20 @@ func (p *NetEaseProvider) searchSong(ctx context.Context, q SearchQuery) (int64,
 		return 0, "", "", "", 0, httpStatusError("netease", resp.StatusCode)
 	}
 
-	var data neteaseSearchResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&data); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
 		return 0, "", "", "", 0, err
+	}
+	var data neteaseSearchResponse
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return 0, "", "", "", 0, err
+	}
+	if len(data.Result.Songs) == 0 {
+		snippet := strings.TrimSpace(string(raw))
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		logger.Info("[NETEASE] Поиск «%s %s» вернул 0 песен; ответ сервера: %s", q.Artist, q.Title, snippet)
 	}
 
 	var bestID int64
@@ -239,6 +251,11 @@ func (p *NetEaseProvider) searchSong(ctx context.Context, q SearchQuery) (int64,
 	}
 
 	if bestID == 0 {
+		if n := len(data.Result.Songs); n > 0 {
+			first := data.Result.Songs[0]
+			logger.Info("[NETEASE] Найдено песен: %d, но ни одна не прошла фильтр; первая: «%s» (%dс) для запроса «%s — %s»",
+				n, first.Name, first.Duration/1000, q.Artist, q.Title)
+		}
 		return 0, "", "", "", 0, ErrNotFound
 	}
 	return bestID, bestArtist, bestTitle, bestAlbum, bestDur, nil

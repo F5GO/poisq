@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/F5GO/poisq/internal/logger"
 	"io"
 	"math"
 	"net/http"
@@ -128,9 +129,13 @@ func (p *YandexProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyrics,
 
 	// 2. Если передан OAuth-токен — пытаемся получить синхронизированный LRC через подписанный /tracks/{id}/lyrics
 	if p.getToken() != "" {
-		if lyr, err := p.fetchLyricsEndpointWithAuth(ctx, trackID, candArtist, candTitle, candDuration); err == nil && lyr != nil {
+		lyr, err := p.fetchLyricsEndpointWithAuth(ctx, trackID, candArtist, candTitle, candDuration)
+		if err == nil && lyr != nil {
 			return lyr, nil
 		}
+		logger.Warn("[YANDEX] Синхронный LRC по OAuth-токену не получен (трек %s): %v — откат на supplement (обычный текст). Проверьте токен и подпись запроса", trackID, err)
+	} else {
+		logger.Info("[YANDEX] OAuth-токен не задан: синхронный LRC недоступен, беру обычный текст (трек %s)", trackID)
 	}
 
 	// 3. Публичный эндпоинт /tracks/{id}/supplement (работает без токена и подписей, отдает fullLyrics за 10мс)
