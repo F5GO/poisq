@@ -407,10 +407,13 @@ def main():
     ap.add_argument("--lead", type=float, default=0.5, help="на сколько сек раньше писать время строк в итоговый LRC (по умолчанию 0.5)")
     ap.add_argument("--asr-anchor", dest="asr_anchor", action="store_true",
                     help="якоря от Whisper по вокалу (нужен GROQ_API_KEY в окружении) + точное выравнивание в окне")
+    ap.add_argument("--only-anchor", dest="only_anchor", action="store_true", help="с --asr-anchor: пропустить обычный проход Qwen по всей дорожке")
     ap.add_argument("--repair", action="store_true", help="перевыровнять строки с нарушенным порядком времён в окне между соседями")
     args = ap.parse_args()
 
     t0 = time.time()
+    if args.asr_anchor and not os.environ.get("GROQ_API_KEY"):
+        sys.exit("для --asr-anchor задайте GROQ_API_KEY: sudo --preserve-env=GROQ_API_KEY docker run -e GROQ_API_KEY ...")
     os.makedirs(args.work, exist_ok=True)
     no_gold = bool(args.text)
     if no_gold:
@@ -485,7 +488,7 @@ def main():
     stage("модель загружена", t0)
 
     report = {}
-    for name, wav in wavs.items():
+    for name, wav in ([] if args.only_anchor else list(wavs.items())):
         t1 = time.time()
         res = model.align(audio=wav, text=text, language=lang)
         items = [(it.text, float(it.start_time), float(it.end_time)) for it in res[0]]
