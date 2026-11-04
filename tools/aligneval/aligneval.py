@@ -695,7 +695,7 @@ def main():
             json.dump([{"word": w, "start": st, "end": en} for w, st, en in asr], f, ensure_ascii=False, indent=1)
         found = [r for r in results if r["start"] is not None]
         print(f"[asr-anchor] найдено в записи строк: {len(found)} из {len(results)}")
-        errs, lrc_lines = [], []
+        errs, lrc_lines, per_line = [], [], []
         for r in results:
             line_text = " ".join(lines_tokens[r["line"]])
             if r["start"] is None:
@@ -703,16 +703,25 @@ def main():
                 continue
             q = max(0.0, r["start"] - args.lead)
             lrc_lines.append("[%02d:%05.2f] %s" % (int(q // 60), q % 60, gold[r["line"]][1]))
-            print("   строка %2d  %7.2f–%7.2f  (якорь Whisper %7.2f–%7.2f) %-28s %s" % (
-                r["line"] + 1, r["start"], r["end"], r["asr_start"], r["asr_end"], r["status"], line_text[:34]))
+            err_txt = ""
             if not no_gold:
-                errs.append(r["start"] - gold[r["line"]][0])
+                e_ = r["start"] - gold[r["line"]][0]
+                errs.append(e_)
+                per_line.append((r["line"] + 1, e_, line_text[:30]))
+                err_txt = "  ош %+.2f" % e_
+            print("   строка %2d  %7.2f–%7.2f  (якорь Whisper %7.2f–%7.2f)%s %-28s %s" % (
+                r["line"] + 1, r["start"], r["end"], r["asr_start"], r["asr_end"], err_txt, r["status"], line_text[:34]))
         with open(os.path.join(args.work, "aligned_asr_anchor.lrc"), "w", encoding="utf-8") as f:
             f.write("\n".join(lrc_lines) + "\n")
         if errs:
             m = line_metrics(errs)
             report["asr_anchor"] = m
             print("[asr-anchor] метрики:", json.dumps(m, ensure_ascii=False))
+            off = statistics.median(errs)
+            worst = sorted(per_line, key=lambda x: -abs(x[1] - off))[:8]
+            print("[asr-anchor] общий сдвиг эталона %+.2f с; строки, сильнее всего выбивающиеся из него (ош − сдвиг):" % off)
+            for n_, e_, t_ in sorted(worst):
+                print("   строка %2d  %+.2f  %s" % (n_, e_ - off, t_))
         sp = os.path.join(args.work, "lrclib_synced.lrc")
         if args.fetch and os.path.exists(sp):
             ref = parse_lrc(open(sp, encoding="utf-8", errors="replace").read())
