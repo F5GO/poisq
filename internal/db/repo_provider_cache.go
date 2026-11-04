@@ -1,7 +1,7 @@
 // Package db отвечает за безопасное взаимодействие с базами данных SQLite (navidrome.db и poisq.db).
 //
 // Данный файл repo_provider_cache.go реализует хранение сырых ответов всех 5 провайдеров
-// текстов песен (LRCLIB, Яндекс Музыка, Musixmatch, NetEase, Genius) и результатов AI-обработки,
+// текстов песен (LRCLIB, Яндекс Музыка, NetEase, Genius) и результатов AI-обработки,
 // позволяя пользователю мгновенно переключаться между ними в веб-интерфейсе без повторных сетевых запросов.
 package db
 
@@ -14,7 +14,7 @@ import (
 type ProviderCacheRecord struct {
 	ID           int64   `json:"id"`
 	TrackID      string  `json:"trackId"`
-	Provider     string  `json:"provider"`     // "lrclib", "yandex", "musixmatch", "netease", "genius", "gemini_consensus", "whisper_karaoke"
+	Provider     string  `json:"provider"`     // "lrclib", "yandex", "netease", "genius", "gemini_consensus", "whisper_karaoke"
 	Kind         string  `json:"kind"`         // "lrc", "richsync", "plain", "instrumental"
 	Score        float64 `json:"score"`        // Оценка качества CandidateScore (0..100)
 	RawLyrics    string  `json:"rawLyrics"`    // Текст или LRC-разметка

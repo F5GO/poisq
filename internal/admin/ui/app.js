@@ -2310,11 +2310,11 @@ function buildJobDetailsRowHtml(j, trackObj) {
 
   const stages = j.jobType === "tournament"
     ? [
-        { title: "1. Опрос 5 LRC-баз", desc: "LRCLIB, NetEase, QQMusic, Musixmatch, Genius" },
+        { title: "1. Умный поиск по LRC-базам", desc: "LRCLIB, Яндекс Музыка, NetEase, Genius" },
         { title: "2. Запись .lrc", desc: "Атомарное сохранение рядом с аудиофайлом" }
       ]
     : [
-        { title: "1. Турнир источников", desc: "Поиск эталонного текста в 5 базах" },
+        { title: "1. Турнир источников", desc: "Поиск эталонного текста в 4 базах" },
         { title: "2. FFmpeg + Groq Whisper", desc: "Сжатие моно-Opus 16kHz и пословные DTW-таймкоды" },
         { title: "3. Gemini 3.8 Alignment", desc: "Математические якоря + пословная синхронизация" },
         { title: "4. Сохранение .lrc", desc: "Запись на диск (Источник: poisq)" }
