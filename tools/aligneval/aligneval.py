@@ -478,6 +478,41 @@ def repair_items(model, wav, items, lines_tokens, lang, work):
     return items, starts_idx, fixed
 
 
+def fetch_lrclib(artist, title, work):
+    """Ищет текст в LRCLIB. Если есть синхронизированная версия, строки берутся из неё (их потом можно
+    сравнить с нашим результатом как с приблизительным эталоном), иначе простой текст.
+    Пишет work/fetched.txt (строки) и work/lrclib_synced.lrc (если есть). Возвращает путь к fetched.txt."""
+    import urllib.parse
+    import urllib.request
+
+    url = "https://lrclib.net/api/search?" + urllib.parse.urlencode({"artist_name": artist, "track_name": title})
+    req = urllib.request.Request(url, headers={"User-Agent": "poisq-aligneval/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        items = json.loads(r.read().decode("utf-8"))
+    if not items:
+        sys.exit(f"LRCLIB: ничего не найдено для «{artist} — {title}»")
+    pick = next((i for i in items if i.get("syncedLyrics")), None) or next((i for i in items if i.get("plainLyrics")), None)
+    if not pick:
+        sys.exit(f"LRCLIB: у найденных записей нет текста для «{artist} — {title}»")
+    stamp = re.compile(r"\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]")
+    synced = pick.get("syncedLyrics") or ""
+    body = synced or pick.get("plainLyrics") or ""
+    lines = [stamp.sub("", l).strip() for l in body.splitlines()]
+    lines = [l for l in lines if l]
+    path = os.path.join(work, "fetched.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    sp = os.path.join(work, "lrclib_synced.lrc")
+    if synced:
+        with open(sp, "w", encoding="utf-8") as f:
+            f.write(synced)
+    elif os.path.exists(sp):
+        os.remove(sp)
+    print(f"[lrclib] {pick.get('artistName')} — {pick.get('trackName')} ({pick.get('duration')} с): {len(lines)} строк, "
+          f"{'с таймингом' if synced else 'только текст'}")
+    return path
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("audio", help="путь к аудиофайлу")
@@ -488,6 +523,7 @@ def main():
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--pred", default="", help="только сравнить с эталоном готовый LRC (например, из poisq), без моделей")
     ap.add_argument("--text", default="", help="режим без эталона: файл с текстом (по строке); метрик не будет, только aligned_*.lrc")
+    ap.add_argument("--fetch", default="", help="«Исполнитель|Название»: взять текст из LRCLIB (вместо --text и эталона)")
     ap.add_argument("--refine", action="store_true", help="второй проход: перевыровнять каждую строку в окне с соседями")
     ap.add_argument("--snap-onset", dest="snap_onset", action="store_true", help="подтянуть начало строк к реальному началу голоса")
     ap.add_argument("--lead", type=float, default=0.5, help="на сколько сек раньше писать время строк в итоговый LRC (по умолчанию 0.5)")
@@ -501,6 +537,11 @@ def main():
     if args.asr_anchor and not os.environ.get("GROQ_API_KEY"):
         sys.exit("для --asr-anchor задайте GROQ_API_KEY: sudo --preserve-env=GROQ_API_KEY docker run -e GROQ_API_KEY ...")
     os.makedirs(args.work, exist_ok=True)
+    if args.fetch:
+        if "|" not in args.fetch:
+            sys.exit('--fetch ожидает формат "Исполнитель|Название"')
+        fa, ft = args.fetch.split("|", 1)
+        args.text = fetch_lrclib(fa.strip(), ft.strip(), args.work)
     no_gold = bool(args.text)
     if no_gold:
         stamp = re.compile(r"\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]")
@@ -672,6 +713,16 @@ def main():
             m = line_metrics(errs)
             report["asr_anchor"] = m
             print("[asr-anchor] метрики:", json.dumps(m, ensure_ascii=False))
+        sp = os.path.join(args.work, "lrclib_synced.lrc")
+        if args.fetch and os.path.exists(sp):
+            ref = parse_lrc(open(sp, encoding="utf-8", errors="replace").read())
+            pred = [(r["start"], " ".join(lines_tokens[r["line"]])) for r in results if r["start"] is not None]
+            e2 = eval_lrc_pair([(s_, " ".join(tokens(l))) for s_, l in ref], pred)
+            if e2:
+                m2 = line_metrics(e2)
+                report["vs_lrclib"] = m2
+                print("[vs LRCLIB] (приблизительный эталон: чужой тайминг мог быть неточным) совпало строк %d из %d: %s" % (
+                    len(e2), len(ref), json.dumps(m2, ensure_ascii=False)))
 
     with open(os.path.join(args.work, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
