@@ -159,6 +159,19 @@ def main():
         wavs["vocals"] = voc16
     stage("аудио готово", t0)
 
+    # qwen_asr при импорте тянет nagisa (токенизатор японского) -> dynet, собранный под AVX2: на CPU без AVX2
+    # это даёт "Illegal instruction". Для русского/английского он не нужен, поэтому подставляем заглушку.
+    import types
+
+    if "nagisa" not in sys.modules:
+        stub = types.ModuleType("nagisa")
+
+        def _unavailable(*_a, **_k):
+            raise RuntimeError("nagisa отключён заглушкой (нет AVX2); японский текст не поддерживается")
+
+        stub.tagging = _unavailable
+        sys.modules["nagisa"] = stub
+
     import torch
     from qwen_asr import Qwen3ForcedAligner
 
