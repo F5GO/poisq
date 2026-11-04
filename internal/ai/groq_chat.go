@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/F5GO/poisq/internal/keypool"
@@ -22,36 +23,153 @@ import (
 
 const groqChatEndpoint = "https://api.groq.com/openai/v1/chat/completions"
 
-// Модели Groq по умолчанию: основная и запасная. Переопределяются GROQ_LLM_MODEL / GROQ_LLM_FALLBACK_MODEL.
+const groqModelsEndpoint = "https://api.groq.com/openai/v1/models"
+
+// Модели Groq выводятся из обращения часто, поэтому клиент не полагается на одно жёстко заданное имя:
+// список доступных моделей запрашивается у самого Groq (GET /models) и выбирается лучшая по предпочтениям.
+// GROQ_LLM_MODEL (если задан) всегда пробуется первой. Значения ниже — только запасные догадки,
+// если список получить не удалось.
+var groqModelPreference = []string{
+	"gpt-oss-120b", "llama-3.3-70b", "llama-4-maverick", "llama-4-scout", "qwen", "kimi", "gpt-oss-20b", "llama-3.1-70b", "llama-3.1-8b",
+}
+
+var groqModelExclude = []string{"whisper", "guard", "tts", "playai", "orpheus", "embed", "distil", "compound", "prompt-guard", "safeguard"}
+
 const (
-	defaultGroqChatModel         = "llama-3.3-70b-versatile"
-	defaultGroqChatFallbackModel = "llama-3.1-8b-instant"
+	guessGroqChatModel         = "llama-3.3-70b-versatile"
+	guessGroqChatFallbackModel = "llama-3.1-8b-instant"
+	groqModelListTTL           = time.Hour
 )
 
 // GroqChatClient — клиент текстовой модели Groq.
 type GroqChatClient struct {
-	keyPool       *keypool.Manager
-	client        *http.Client
-	model         string
-	fallbackModel string
+	keyPool      *keypool.Manager
+	client       *http.Client
+	pinnedModel  string // из GROQ_LLM_MODEL
+	mu           sync.Mutex
+	models       []string // отранжированные доступные модели
+	modelsLoaded time.Time
 }
 
 // NewGroqChatClient создаёт клиент. Ключи берутся из пула провайдера "groq".
 func NewGroqChatClient(keyPool *keypool.Manager) *GroqChatClient {
-	model := strings.TrimSpace(os.Getenv("GROQ_LLM_MODEL"))
-	if model == "" {
-		model = defaultGroqChatModel
-	}
-	fb := strings.TrimSpace(os.Getenv("GROQ_LLM_FALLBACK_MODEL"))
-	if fb == "" {
-		fb = defaultGroqChatFallbackModel
-	}
 	return &GroqChatClient{
-		keyPool:       keyPool,
-		client:        &http.Client{Timeout: 30 * time.Second},
-		model:         model,
-		fallbackModel: fb,
+		keyPool:     keyPool,
+		client:      &http.Client{Timeout: 30 * time.Second},
+		pinnedModel: strings.TrimSpace(os.Getenv("GROQ_LLM_MODEL")),
 	}
+}
+
+// rankGroqModels отбирает чат-модели и сортирует их по списку предпочтений.
+func rankGroqModels(ids []string) []string {
+	var chat []string
+	for _, id := range ids {
+		low := strings.ToLower(id)
+		skip := false
+		for _, bad := range groqModelExclude {
+			if strings.Contains(low, bad) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			chat = append(chat, id)
+		}
+	}
+	var out []string
+	used := map[string]bool{}
+	for _, pref := range groqModelPreference {
+		for _, id := range chat {
+			if !used[id] && strings.Contains(strings.ToLower(id), pref) {
+				used[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	for _, id := range chat {
+		if !used[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// candidateModels возвращает модели в порядке попыток (закреплённая → лучшие из списка Groq → догадки).
+func (g *GroqChatClient) candidateModels(ctx context.Context, apiKey string) []string {
+	g.mu.Lock()
+	cached := g.models
+	fresh := time.Since(g.modelsLoaded) < groqModelListTTL
+	g.mu.Unlock()
+
+	if len(cached) == 0 || !fresh {
+		if ids, err := g.listModels(ctx, apiKey); err != nil {
+			logger.Warn("[GROQ-LLM] Не удалось получить список моделей: %v", err)
+		} else if ranked := rankGroqModels(ids); len(ranked) > 0 {
+			g.mu.Lock()
+			g.models = ranked
+			g.modelsLoaded = time.Now()
+			g.mu.Unlock()
+			cached = ranked
+			logger.Info("[GROQ-LLM] Доступные чат-модели (по предпочтению): %s", strings.Join(ranked, ", "))
+		}
+	}
+
+	var out []string
+	seen := map[string]bool{}
+	add := func(m string) {
+		if m != "" && !seen[m] {
+			seen[m] = true
+			out = append(out, m)
+		}
+	}
+	add(g.pinnedModel)
+	for _, m := range cached {
+		add(m)
+	}
+	if len(cached) == 0 {
+		add(guessGroqChatModel)
+		add(guessGroqChatFallbackModel)
+	}
+	if len(out) > 4 {
+		out = out[:4]
+	}
+	return out
+}
+
+func (g *GroqChatClient) listModels(ctx context.Context, apiKey string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, groqModelsEndpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var parsed struct {
+		Data []struct {
+			ID     string `json:"id"`
+			Active *bool  `json:"active"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, m := range parsed.Data {
+		if m.ID != "" && (m.Active == nil || *m.Active) {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids, nil
 }
 
 type groqChatMessage struct {
@@ -119,18 +237,40 @@ func (g *GroqChatClient) GenerateText(ctx context.Context, systemPrompt, userPro
 	return "", lastErr
 }
 
+func isModelUnavailable(status int, err error) bool {
+	if status == http.StatusNotFound {
+		return true
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "model_not_found") || strings.Contains(low, "decommissioned") ||
+		(status == http.StatusBadRequest && strings.Contains(low, "model"))
+}
+
 func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, mime string) (string, int, error) {
-	out, status, err := g.callOnce(ctx, g.model, apiKey, system, user, mime)
-	if err == nil {
-		return out, status, nil
+	var lastStatus int
+	var lastErr error
+	for i, model := range g.candidateModels(ctx, apiKey) {
+		out, status, err := g.callOnce(ctx, model, apiKey, system, user, mime)
+		if err == nil {
+			if i > 0 {
+				logger.Info("[GROQ-LLM] Работает модель %s", model)
+			}
+			return out, status, nil
+		}
+		lastStatus, lastErr = status, err
+		if !isModelUnavailable(status, err) {
+			return "", status, err
+		}
+		logger.Warn("[GROQ-LLM] Модель %s недоступна (HTTP %d), пробую следующую", model, status)
+		// Список мог устареть — при следующем вызове запросим заново
+		g.mu.Lock()
+		g.modelsLoaded = time.Time{}
+		g.mu.Unlock()
 	}
-	// Модель выведена из обращения / не найдена / отклонила запрос — пробуем запасную
-	if g.fallbackModel != "" && g.fallbackModel != g.model &&
-		(status == http.StatusNotFound || status == http.StatusBadRequest || status == http.StatusServiceUnavailable) {
-		logger.Warn("[GROQ-LLM] Модель %s вернула HTTP %d: пробую %s", g.model, status, g.fallbackModel)
-		return g.callOnce(ctx, g.fallbackModel, apiKey, system, user, mime)
+	if lastErr == nil {
+		lastErr = fmt.Errorf("нет доступных моделей Groq")
 	}
-	return "", status, err
+	return "", lastStatus, lastErr
 }
 
 func (g *GroqChatClient) callOnce(ctx context.Context, model, apiKey, system, user, mime string) (string, int, error) {
