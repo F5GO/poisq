@@ -42,6 +42,12 @@ type guardedProvider struct {
 	breaker *httpclient.CircuitBreaker
 }
 
+// QueryExpander подсказывает дополнительные варианты запроса (например, через LLM).
+// Реализация живёт в пакете ai; результаты используются только как поисковые запросы.
+type QueryExpander interface {
+	ExpandQuery(ctx context.Context, q SearchQuery) ([]SearchQuery, error)
+}
+
 // TournamentOrchestrator управляет конкурентным опросом 5 баз текстов песен.
 type TournamentOrchestrator struct {
 	providers []*guardedProvider
@@ -50,6 +56,12 @@ type TournamentOrchestrator struct {
 	keyPool   *keypool.Manager
 	timeout   time.Duration
 	tolerance time.Duration
+	expander  QueryExpander
+}
+
+// SetQueryExpander подключает ИИ-расширение запросов (используется как последняя фаза умного поиска).
+func (t *TournamentOrchestrator) SetQueryExpander(e QueryExpander) {
+	t.expander = e
 }
 
 // NewTournamentOrchestrator инициализирует 5 провайдеров (LRCLIB, Яндекс Музыка, Musixmatch, NetEase, Genius)
@@ -155,6 +167,41 @@ func (t *TournamentOrchestrator) RunTournament(ctx context.Context, q SearchQuer
 			if winner != nil && info != nil && info.ConsensusOK && info.HasFullLRC {
 				logger.Info("[TOURNAMENT] Умный поиск: подтверждённый LRC найден на варианте %d/%d", i+1, len(variants))
 				break
+			}
+		}
+	}
+
+	// Фаза ИИ: детерминированные варианты не помогли — спрашиваем LLM, как трек может быть записан в базах
+	if t.expander != nil && ctx.Err() == nil && !(winner != nil && info != nil && info.ConsensusOK && info.HasFullLRC) {
+		aiCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+		aiVariants, aiErr := t.expander.ExpandQuery(aiCtx, q)
+		cancel()
+		if aiErr != nil {
+			logger.Warn("[TOURNAMENT] ИИ-подсказки вариантов недоступны: %v", aiErr)
+		} else {
+			tried := map[string]struct{}{strings.ToLower(q.Artist) + "|" + strings.ToLower(q.Title): {}}
+			for _, v := range GenerateQueryVariants(q, 4) {
+				tried[strings.ToLower(v.Artist)+"|"+strings.ToLower(v.Title)] = struct{}{}
+			}
+			n := 0
+			for _, vq := range aiVariants {
+				k := strings.ToLower(vq.Artist) + "|" + strings.ToLower(vq.Title)
+				if _, ok := tried[k]; ok {
+					continue
+				}
+				tried[k] = struct{}{}
+				n++
+				if n > 3 || ctx.Err() != nil {
+					break
+				}
+				label := fmt.Sprintf("ИИ-вариант %d: «%s — %s»", n, vq.Artist, vq.Title)
+				more := t.runPhase(ctx, vq, q, label)
+				candidates = mergeCandidates(candidates, more)
+				winner, info = t.choose(candidates, q)
+				if winner != nil && info != nil && info.ConsensusOK && info.HasFullLRC {
+					logger.Info("[TOURNAMENT] ИИ-поиск: подтверждённый LRC найден на варианте %d", n)
+					break
+				}
 			}
 		}
 	}

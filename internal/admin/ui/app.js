@@ -344,8 +344,21 @@ function initViewControls() {
   // Поиск в сайдбаре караоке
   document.getElementById("karaoke-search-input")?.addEventListener("input", (e) => {
     clearTimeout(state.karaokeSearchTimer);
-    state.karaokeSearchTimer = setTimeout(() => {
-      renderKaraokeSidebar(e.target.value.trim());
+    state.karaokeSearchTimer = setTimeout(async () => {
+      const text = e.target.value.trim();
+      if (!text) {
+        state.karaokeSearchResults = null;
+        renderKaraokeSidebar();
+        return;
+      }
+      // Умный поиск на сервере: регистр, МакSим/Максим/Maksim, раскладка, опечатки
+      try {
+        const res = await fetchApi(`/tracks?limit=250&q=${encodeURIComponent(text)}`);
+        state.karaokeSearchResults = res.tracks || [];
+      } catch (err) {
+        state.karaokeSearchResults = null;
+      }
+      renderKaraokeSidebar(text);
     }, 200);
   });
 }
@@ -856,9 +869,10 @@ function renderKaraokeSidebar(filterText = "") {
   if (!container) return;
 
   const q = filterText.toLowerCase();
-  const list = state.tracks.filter(t => 
-    !q || 
-    (t.title && t.title.toLowerCase().includes(q)) || 
+  // При непустом запросе используем результат серверного умного поиска (если он уже получен)
+  const list = (q && state.karaokeSearchResults) ? state.karaokeSearchResults : state.tracks.filter(t =>
+    !q ||
+    (t.title && t.title.toLowerCase().includes(q)) ||
     (t.artist && t.artist.toLowerCase().includes(q))
   );
 

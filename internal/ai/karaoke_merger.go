@@ -28,11 +28,11 @@ import (
 type KaraokePipeline struct {
 	transcoder *AudioTranscoder
 	whisper    *GroqWhisperClient
-	gemini     *GeminiClient
+	gemini     TextGenerator
 }
 
 // NewKaraokePipeline создает новый экземпляр генератора караоке.
-func NewKaraokePipeline(transcoder *AudioTranscoder, whisper *GroqWhisperClient, gemini *GeminiClient) *KaraokePipeline {
+func NewKaraokePipeline(transcoder *AudioTranscoder, whisper *GroqWhisperClient, gemini TextGenerator) *KaraokePipeline {
 	return &KaraokePipeline{
 		transcoder: transcoder,
 		whisper:    whisper,
