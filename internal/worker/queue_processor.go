@@ -227,7 +227,7 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 		}
 
 		// Шаг 1: Запуск параллельного LRC-турнира по 5 источникам
-		qp.reportStep(job.ID, "tournament", "Этап 1: Параллельный опрос 5 внешних провайдеров (LRCLIB, NetEase, QQMusic, Musixmatch, Genius)...")
+		qp.reportStep(job.ID, "tournament", "Этап 1: Умный поиск по базам (LRCLIB, Яндекс Музыка, NetEase, Genius) с вариантами написания и сверкой текстов...")
 		var tErr error
 		tRes, tErr = qp.tournament.RunTournament(ctx, q)
 		if tErr != nil && !errors.Is(tErr, lyrics.ErrNotFound) {
@@ -236,6 +236,9 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 
 		if tRes != nil && tRes.Winner != nil {
 			qp.reportStep(job.ID, "tournament", "Победитель турнира: "+tRes.Winner.ProviderID+" (тип: "+string(tRes.Winner.Lyrics.Kind)+")")
+			if tRes.Consensus != nil && tRes.Consensus.Reason != "" {
+				qp.reportStep(job.ID, "consensus_vote", "Консенсус источников: "+tRes.Consensus.Reason)
+			}
 		} else {
 			qp.reportStep(job.ID, "tournament", "Внешние базы не вернули готовый LRC-тайминг")
 		}
