@@ -1,5 +1,5 @@
 // Package lyrics предоставляет систему поиска, ранжирования и сохранения текстов песен (Lyrics)
-// по 5 мировым и региональным источникам (LRCLIB, Яндекс Музыка, Musixmatch, NetEase, Genius).
+// по 4 мировым и региональным источникам (LRCLIB, Яндекс Музыка, NetEase, Genius).
 //
 // Данный файл tournament.go реализует параллельный каскад опроса 5 провайдеров (Fan-Out / LRC Tournament)
 // с защитой каждого источника через Circuit Breaker (отключение на 3 минуты при сбоях),
@@ -64,7 +64,7 @@ func (t *TournamentOrchestrator) SetQueryExpander(e QueryExpander) {
 	t.expander = e
 }
 
-// NewTournamentOrchestrator инициализирует 5 провайдеров (LRCLIB, Яндекс Музыка, Musixmatch, NetEase, Genius)
+// NewTournamentOrchestrator инициализирует 4 провайдера (LRCLIB, Яндекс Музыка, NetEase, Genius)
 // с индивидуальными ограничителями скорости и автоматическими выключателями (Circuit Breaker на 3 минуты).
 func NewTournamentOrchestrator(cacheRepo *db.ProviderCacheRepository, keyPool *keypool.Manager) *TournamentOrchestrator {
 	timeout := 6 * time.Second
@@ -77,7 +77,6 @@ func NewTournamentOrchestrator(cacheRepo *db.ProviderCacheRepository, keyPool *k
 
 	lrclibProv := NewLrclibProvider(timeout, tolerance)
 	yandexProv := NewYandexProvider(timeout, tolerance, envYandexToken)
-	musixmatchProv := NewMusixmatchProvider(timeout)
 	neteaseProv := NewNetEaseProvider(timeout, tolerance)
 	geniusProv := NewGeniusProvider(timeout)
 
@@ -102,20 +101,6 @@ func NewTournamentOrchestrator(cacheRepo *db.ProviderCacheRepository, keyPool *k
 			limiter: httpclient.NewProviderLimiter(2, 300*time.Millisecond),
 			breaker: httpclient.NewCircuitBreaker(3, 3*time.Minute),
 		},
-	}
-
-	// Анонимный desktop-API Musixmatch (apic-desktop) с сентября 2026 отдаёт на любой запрос один и тот же
-	// «ложный» трек (Drake — NOKIA), поэтому по умолчанию источник отключён и не тратит секунды турнира.
-	// Включить обратно (например, если появится рабочий токен/хост): LYRICS_MUSIXMATCH=true.
-	if strings.EqualFold(os.Getenv("LYRICS_MUSIXMATCH"), "true") {
-		providers = append(providers, &guardedProvider{
-			prov:    musixmatchProv,
-			limiter: httpclient.NewProviderLimiter(2, 350*time.Millisecond),
-			breaker: httpclient.NewCircuitBreaker(3, 3*time.Minute),
-		})
-		logger.Info("[TOURNAMENT] Musixmatch включён (LYRICS_MUSIXMATCH=true)")
-	} else {
-		logger.Info("[TOURNAMENT] Musixmatch отключён по умолчанию (desktop-API отдаёт подставной трек); включить: LYRICS_MUSIXMATCH=true")
 	}
 
 	return &TournamentOrchestrator{
