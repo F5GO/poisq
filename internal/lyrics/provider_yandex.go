@@ -241,7 +241,10 @@ func (p *YandexProvider) fetchLyricsEndpointWithAuth(ctx context.Context, trackI
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "YandexMusic/2024.01.1 (Android; Google Pixel)")
+	// Заголовки как у эталонной клиентской библиотеки yandex-music-api: подпись выдана ключом Android-приложения,
+	// сервер ожидает соответствующий идентификатор клиента.
+	req.Header.Set("User-Agent", "Yandex-Music-API")
+	req.Header.Set("X-Yandex-Music-Client", "YandexMusicAndroid/24023621")
 	req.Header.Set("Authorization", "OAuth "+p.getToken())
 
 	resp, err := p.client.Do(req)
@@ -251,7 +254,8 @@ func (p *YandexProvider) fetchLyricsEndpointWithAuth(ctx context.Context, trackI
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, httpStatusError("yandex", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		return nil, fmt.Errorf("yandex: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var data yandexTrackLyricsResponse
