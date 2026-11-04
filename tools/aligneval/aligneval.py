@@ -303,6 +303,46 @@ def groq_words(wav16, lang_iso, api_key):
     return [(w["word"], float(w["start"]), float(w["end"])) for w in r.json().get("words", [])]
 
 
+def snap_edges_to_voice(results, rms, frame=0.01, rel_thr=0.12, run_s=0.12, min_move=0.15):
+    """Привязывает края строк к реальному голосу (огибающая вокала после Demucs).
+    Whisper и выравниватели растягивают слова на тишину: первое слово «приклеивается» к концу предыдущей
+    строки, последнее тянется через проигрыш. Здесь старт строки сдвигается к первому устойчиво звучащему
+    кадру (после настоящего конца предыдущей строки), а конец подрезается до последнего звучащего кадра.
+    Если в интервале строки голоса нет совсем, строка не трогается и помечается."""
+    if not rms:
+        return results
+    thr = rel_thr * percentile(rms, 0.95)
+    need = max(1, int(run_s / frame))
+    n = len(rms)
+
+    def voiced_run(k):  # с кадра k подряд звучит need кадров
+        return k + need <= n and all(rms[j] > thr for j in range(k, k + need))
+
+    prev_real_end = 0.0
+    for r in results:
+        if r["start"] is None:
+            continue
+        s, e = r["start"], r["end"]
+        scan_from = max(s, prev_real_end + 0.05)
+        i0, i1 = int(scan_from / frame), min(n, int(e / frame) + 1)
+        first = next((k for k in range(i0, i1) if voiced_run(k)), None)
+        if first is None:
+            r["status"] += " (голоса нет!)"
+            r["voice_start"] = r["voice_end"] = None
+            prev_real_end = e
+            continue
+        last = next((k for k in range(i1 - 1, first - 1, -1) if k - need + 1 >= 0 and voiced_run(k - need + 1)), first)
+        new_s, new_e = first * frame, (last + 1) * frame
+        if new_s - s >= min_move and new_s < e - 0.3:
+            r["status"] += " (старт по голосу %+.2f)" % (new_s - s)
+            r["start"] = new_s
+        if e - new_e >= 0.3 and new_e > r["start"] + 0.3:
+            r["end"] = new_e
+        r["voice_start"], r["voice_end"] = new_s, new_e
+        prev_real_end = r["end"]
+    return results
+
+
 def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key):
     """Подход «распознавание → якоря → точное выравнивание»:
     1) Whisper по вокалу даёт, что и когда спето (устойчиво к повторам и проигрышам);
@@ -559,6 +599,7 @@ def main():
         iso = {"Russian": "ru", "English": "en"}.get(lang, "")
         t1 = time.time()
         results, asr = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key)
+        results = snap_edges_to_voice(results, vocal_rms(wavs["vocals"]))
         print(f"[asr-anchor] заняло {time.time() - t1:.1f} сек; слов в распознавании: {len(asr)}")
         # Что реально звучит (карта по Whisper): фразы, разделённые паузами > 1.2 сек
         print("[asr-anchor] что слышит Whisper на вокале (фразы по паузам):")
