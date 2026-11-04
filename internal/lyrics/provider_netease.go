@@ -9,29 +9,34 @@ package lyrics
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/F5GO/poisq/internal/logger"
 	"io"
 	"math"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
 
-const neteaseBaseURL = "https://music.163.com/api"
+const neteaseBaseURL = "https://music.163.com/weapi"
 
 type neteaseSearchResult struct {
 	Songs []struct {
 		ID       int64  `json:"id"`
 		Name     string `json:"name"`
-		Duration int64  `json:"duration"` // в миллисекундах
+		Duration int64  `json:"duration"` // в миллисекундах (старый формат)
+		DT       int64  `json:"dt"`       // в миллисекундах (weapi)
 		Artists  []struct {
 			Name string `json:"name"`
 		} `json:"artists"`
+		AR []struct {
+			Name string `json:"name"`
+		} `json:"ar"`
 		Album struct {
 			Name string `json:"name"`
 		} `json:"album"`
+		AL struct {
+			Name string `json:"name"`
+		} `json:"al"`
 	} `json:"songs"`
 }
 
@@ -108,11 +113,15 @@ func (p *NetEaseProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyrics
 		return nil, err
 	}
 
-	lyricEndpoint := fmt.Sprintf("%s/song/lyric?id=%d&lv=1&kv=1&tv=-1", neteaseBaseURL, songID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, lyricEndpoint, nil)
+	form, err := neteaseWeapiForm(map[string]any{"id": songID, "tv": -1, "lv": -1, "rv": -1, "kv": -1, "_nmclfl": 1}, "")
 	if err != nil {
 		return nil, err
 	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, neteaseBaseURL+"/song/lyric", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	setNetEaseHeaders(req)
 
 	resp, err := p.client.Do(req)
@@ -177,14 +186,18 @@ func (p *NetEaseProvider) Fetch(ctx context.Context, query SearchQuery) (*Lyrics
 }
 
 func (p *NetEaseProvider) searchSong(ctx context.Context, q SearchQuery) (int64, string, string, string, time.Duration, error) {
-	form := url.Values{}
-	form.Set("s", strings.TrimSpace(q.Artist+" "+q.Title))
-	form.Set("type", "1")
-	form.Set("offset", "0")
-	form.Set("total", "true")
-	form.Set("limit", "8")
+	form, err := neteaseWeapiForm(map[string]any{
+		"s":      strings.TrimSpace(q.Artist + " " + q.Title),
+		"type":   1,
+		"limit":  8,
+		"offset": 0,
+		"total":  true,
+	}, "")
+	if err != nil {
+		return 0, "", "", "", 0, err
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, neteaseBaseURL+"/search/get/web", strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, neteaseBaseURL+"/cloudsearch/pc", strings.NewReader(form.Encode()))
 	if err != nil {
 		return 0, "", "", "", 0, err
 	}
@@ -229,8 +242,21 @@ func (p *NetEaseProvider) searchSong(ctx context.Context, q SearchQuery) (int64,
 				artists = append(artists, a.Name)
 			}
 		}
+		for _, a := range s.AR {
+			if a.Name != "" {
+				artists = append(artists, a.Name)
+			}
+		}
 		candArtist := strings.Join(artists, ", ")
-		candDur := time.Duration(s.Duration) * time.Millisecond
+		durMs := s.Duration
+		if durMs == 0 {
+			durMs = s.DT
+		}
+		candDur := time.Duration(durMs) * time.Millisecond
+		albumName := s.Album.Name
+		if albumName == "" {
+			albumName = s.AL.Name
+		}
 
 		if q.Duration > 0 && candDur > 0 {
 			diff := math.Abs(float64(q.Duration - candDur))
@@ -239,13 +265,13 @@ func (p *NetEaseProvider) searchSong(ctx context.Context, q SearchQuery) (int64,
 			}
 		}
 
-		score := ScoreCandidate(q, candArtist, s.Name, s.Album.Name, candDur, KindLRC, "", p.tolerance)
+		score := ScoreCandidate(q, candArtist, s.Name, albumName, candDur, KindLRC, "", p.tolerance)
 		if score.Accepted && score.Total > bestScore {
 			bestScore = score.Total
 			bestID = s.ID
 			bestArtist = candArtist
 			bestTitle = s.Name
-			bestAlbum = s.Album.Name
+			bestAlbum = albumName
 			bestDur = candDur
 		}
 	}
@@ -254,7 +280,7 @@ func (p *NetEaseProvider) searchSong(ctx context.Context, q SearchQuery) (int64,
 		if n := len(data.Result.Songs); n > 0 {
 			first := data.Result.Songs[0]
 			logger.Info("[NETEASE] Найдено песен: %d, но ни одна не прошла фильтр; первая: «%s» (%dс) для запроса «%s — %s»",
-				n, first.Name, first.Duration/1000, q.Artist, q.Title)
+				n, first.Name, (first.Duration+first.DT)/1000, q.Artist, q.Title)
 		}
 		return 0, "", "", "", 0, ErrNotFound
 	}
