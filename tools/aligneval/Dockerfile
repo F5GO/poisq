@@ -8,7 +8,11 @@ RUN apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null \
 # CPU-сборка PyTorch (работает на CPU без AVX2), затем Demucs и Qwen3-ForcedAligner
 RUN pip install -q numpy torch torchaudio --index-url https://download.pytorch.org/whl/cpu \
         --extra-index-url https://pypi.org/simple \
-    && pip install -q demucs soundfile qwen-asr
+    && pip install -q demucs soundfile qwen-asr \
+    && pip install -q "audio-separator[cpu]"
+
+# модели audio-separator кэшируются в примонтированный том (скачиваются при первом запуске)
+ENV AUDIO_SEPARATOR_MODEL_DIR=/root/.cache/audio-separator-models
 
 COPY aligneval.py /app/aligneval.py
 ENTRYPOINT ["python", "/app/aligneval.py"]
