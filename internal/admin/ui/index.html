@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   
   <!-- Модульная дизайн-система -->
-  <link rel="stylesheet" href="/styles.css?v=2.4.0" />
+  <link rel="stylesheet" href="/styles.css?v=2.5.0" />
 </head>
 <body>
   
@@ -176,7 +176,7 @@
             <div class="header-actions">
               <button class="btn btn-primary hidden" id="btn-create-ai-lrc" title="Создать синхронизированный .lrc тайминг через AI (Groq Whisper)">Сгенерировать .lrc</button>
               <button class="btn btn-secondary" id="btn-enqueue-tournament">Найти текст</button>
-              <button class="btn btn-secondary" id="btn-toggle-editor">Редактор .lrc</button>
+              <button class="btn btn-secondary" id="btn-toggle-editor">Редактор таймингов</button>
               <button class="btn btn-danger-outline hidden" id="btn-delete-lyrics" title="Удалить текст песни и файл .lrc с диска">Удалить текст</button>
             </div>
           </div>
@@ -185,6 +185,33 @@
           <div id="view-karaoke" class="karaoke-viewport">
             <div class="lyrics-stream" id="lyrics-stream">
               <div class="lyric-line inactive">Выберите трек слева для просмотра текста песни</div>
+            </div>
+          </div>
+
+          <!-- Редактор таймингов: список строк + крупная волна с метками -->
+          <div id="view-timeline" class="tl-viewport hidden">
+            <div class="tl-toolbar">
+              <button class="btn btn-secondary" id="tl-add" title="Добавить строку в текущей позиции курсора">+ Строка</button>
+              <button class="btn btn-secondary" id="tl-undo" title="Отменить (Ctrl/Cmd+Z)" disabled>Отменить</button>
+              <button class="btn btn-secondary" id="tl-redo" title="Повторить (Ctrl/Cmd+Shift+Z)" disabled>Повторить</button>
+              <button class="btn btn-secondary" id="tl-open-raw" title="Править весь текст .lrc как обычный текст">Править текстом</button>
+              <span class="tl-spacer"></span>
+              <span class="tl-dirty hidden" id="tl-dirty">Есть несохранённые изменения</span>
+              <button class="btn btn-secondary" id="tl-revert" disabled>Отменить изменения</button>
+              <button class="btn btn-primary" id="tl-save" disabled>Сохранить</button>
+            </div>
+            <div class="tl-rows" id="tl-rows"></div>
+            <div class="tl-wave-panel">
+              <div class="tl-wave-toolbar">
+                <span class="mono tl-time-label" id="tl-time-label">00:00.00 / 00:00.00</span>
+                <button class="btn btn-secondary tl-small" id="tl-play-marker" title="Играть с позиции за 2 секунды до выбранной метки (Пробел: пауза)">▶ с метки</button>
+                <span class="tl-hint">Метку можно тянуть мышью или двигать стрелками (Shift — точнее; в поле строки — Alt+стрелки). Колесо — прокрутка, Ctrl/⌘+колесо — масштаб.</span>
+                <span class="tl-spacer"></span>
+                <button class="btn-step" id="tl-zoom-out" title="Уменьшить масштаб">−</button>
+                <input type="range" id="tl-zoom" min="0" max="1" step="0.001" value="0.5" class="volume-slider tl-zoom" title="Масштаб волны" />
+                <button class="btn-step" id="tl-zoom-in" title="Увеличить масштаб">+</button>
+              </div>
+              <div class="tl-wave-wrap"><canvas id="tl-canvas" aria-label="Волна трека с метками строк"></canvas></div>
             </div>
           </div>
 
@@ -478,6 +505,7 @@
   <!-- Контейнер Toast-уведомлений -->
   <div id="toast-container" class="toast-container"></div>
 
-  <script src="/app.js?v=2.4.0"></script>
+  <script src="/app.js?v=2.5.0"></script>
+  <script src="/timeline-editor.js?v=2.5.2"></script>
 </body>
 </html>
