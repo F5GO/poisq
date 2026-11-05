@@ -326,7 +326,7 @@ def fix_stretched_starts(results, rms, lines_tokens, frame=0.01):
     Если интервал строки заметно длиннее ожидаемого для такого текста, старт берётся как «конец − ожидаемая
     длительность» и уточняется по ближайшему резкому нарастанию громкости."""
     for r in results:
-        if r["start"] is None:
+        if r["start"] is None or r.get("filled"):
             continue
         exp = expected_line_dur(lines_tokens[r["line"]])
         span = r["asr_end"] - r["start"]
@@ -478,10 +478,19 @@ def repair_items(model, wav, items, lines_tokens, lang, work):
     return items, starts_idx, fixed
 
 
-def fetch_lrclib(artist, title, work):
-    """Ищет текст в LRCLIB. Если есть синхронизированная версия, строки берутся из неё (их потом можно
-    сравнить с нашим результатом как с приблизительным эталоном), иначе простой текст.
-    Пишет work/fetched.txt (строки) и work/lrclib_synced.lrc (если есть). Возвращает путь к fetched.txt."""
+def audio_duration(path):
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                             capture_output=True, text=True, timeout=30).stdout.strip()
+        return float(out)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def fetch_lrclib(artist, title, work, dur=0.0):
+    """Ищет текст в LRCLIB; из записей с таймингом берёт ту, чья длительность ближе всего к вашему файлу
+    (иначе эталон относится к другой версии трека). Пишет work/fetched.txt (строки без пустых),
+    work/fetched_times.json (время первой метки каждой строки или null), work/lrclib_synced.lrc."""
     import urllib.parse
     import urllib.request
 
@@ -491,26 +500,94 @@ def fetch_lrclib(artist, title, work):
         items = json.loads(r.read().decode("utf-8"))
     if not items:
         sys.exit(f"LRCLIB: ничего не найдено для «{artist} — {title}»")
-    pick = next((i for i in items if i.get("syncedLyrics")), None) or next((i for i in items if i.get("plainLyrics")), None)
+
+    def dist(i):
+        d = float(i.get("duration") or 0)
+        return abs(d - dur) if dur and d else 1e6
+
+    synced_items = sorted((i for i in items if i.get("syncedLyrics")), key=dist)
+    plain_items = sorted((i for i in items if i.get("plainLyrics")), key=dist)
+    pick = (synced_items or plain_items or [None])[0]
     if not pick:
         sys.exit(f"LRCLIB: у найденных записей нет текста для «{artist} — {title}»")
-    stamp = re.compile(r"\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]")
+    stamp = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]")
     synced = pick.get("syncedLyrics") or ""
     body = synced or pick.get("plainLyrics") or ""
-    lines = [stamp.sub("", l).strip() for l in body.splitlines()]
-    lines = [l for l in lines if l]
+    lines, times = [], []
+    for raw in body.splitlines():
+        m = stamp.search(raw)
+        t = stamp.sub("", raw).strip()
+        if not t:
+            continue
+        lines.append(t)
+        if m and synced:
+            frac = m.group(3) or "0"
+            times.append(int(m.group(1)) * 60 + int(m.group(2)) + int(frac) / (10 ** len(frac)))
+        else:
+            times.append(None)
     path = os.path.join(work, "fetched.txt")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+    with open(os.path.join(work, "fetched_times.json"), "w", encoding="utf-8") as f:
+        json.dump(times if synced else [], f)
     sp = os.path.join(work, "lrclib_synced.lrc")
     if synced:
         with open(sp, "w", encoding="utf-8") as f:
             f.write(synced)
     elif os.path.exists(sp):
         os.remove(sp)
-    print(f"[lrclib] {pick.get('artistName')} — {pick.get('trackName')} ({pick.get('duration')} с): {len(lines)} строк, "
-          f"{'с таймингом' if synced else 'только текст'}")
+    pd = float(pick.get("duration") or 0)
+    warn = ""
+    if dur and pd and abs(pd - dur) > 4:
+        warn = f"  ВНИМАНИЕ: длительность записи LRCLIB {pd:.0f} с, у вашего файла {dur:.0f} с: вероятно, другая версия, эталон ненадёжен"
+    print(f"[lrclib] {pick.get('artistName')} — {pick.get('trackName')} ({pd:.0f} с): {len(lines)} строк, "
+          f"{'с таймингом' if synced else 'только текст'}{warn}")
     return path
+
+
+def fill_gaps(model, voc16, results, lines_tokens, lang_name, work, rms, frame=0.01):
+    """Строки, которых Whisper не расшифровал (скат, подпевки, речитатив), раньше выпадали из LRC.
+    Здесь подряд идущие такие строки выравниваются Qwen в промежутке между найденными соседями; результат
+    принимается, только если в интервале строки достаточно голоса, и помечается как «неуверенно»."""
+    n = len(results)
+    total = len(rms) * frame
+    thr = 0.12 * percentile(rms, 0.95) if rms else 0.0
+    i = 0
+    while i < n:
+        if results[i]["start"] is not None:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and results[j + 1]["start"] is None:
+            j += 1
+        prev = next((results[k] for k in range(i - 1, -1, -1) if results[k]["start"] is not None), None)
+        nxt = next((results[k] for k in range(j + 1, n) if results[k]["start"] is not None), None)
+        t0 = prev["end"] if prev else 0.0
+        t1 = nxt["start"] if nxt else total
+        toks = [w for k in range(i, j + 1) for w in lines_tokens[k]]
+        if toks and 1.0 <= t1 - t0 <= 150.0:
+            tmp = os.path.join(work, f"gap_{i}.wav")
+            run(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(t0), "-t", str(t1 - t0), "-i", voc16, "-ac", "1", "-ar", "16000", tmp])
+            try:
+                res = model.align(audio=tmp, text=" ".join(toks), language=lang_name)
+                sub = [(float(it.start_time) + t0, float(it.end_time) + t0) for it in res[0]]
+                if len(sub) == len(toks):
+                    pos = 0
+                    for k in range(i, j + 1):
+                        c = len(lines_tokens[k])
+                        if not c:
+                            continue
+                        st, en = sub[pos][0], sub[pos + c - 1][1]
+                        pos += c
+                        seg = rms[int(st / frame):int(en / frame) + 1]
+                        ratio = (sum(1 for v in seg if v > thr) / len(seg)) if seg else 0.0
+                        if ratio >= 0.35 and en - st >= 0.2:
+                            results[k].update({"status": "заполнено выравниванием (неуверенно, голос %.0f%%)" % (ratio * 100),
+                                               "start": st, "end": en, "asr_start": st, "asr_end": en, "filled": True})
+            except Exception as e:  # noqa: BLE001
+                print(f"   пропуск строк {i + 1}–{j + 1}: выравнивание в промежутке не удалось: {e}")
+        i = j + 1
+    return results
 
 
 def main():
@@ -541,12 +618,24 @@ def main():
         if "|" not in args.fetch:
             sys.exit('--fetch ожидает формат "Исполнитель|Название"')
         fa, ft = args.fetch.split("|", 1)
-        args.text = fetch_lrclib(fa.strip(), ft.strip(), args.work)
+        args.text = fetch_lrclib(fa.strip(), ft.strip(), args.work, audio_duration(args.audio))
     no_gold = bool(args.text)
+    has_ref = not no_gold
     if no_gold:
         stamp = re.compile(r"\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]")
         raw_text = open(args.text, encoding="utf-8", errors="replace").read()
-        gold_all = [(0.0, stamp.sub("", l).strip()) for l in raw_text.splitlines() if stamp.sub("", l).strip()]
+        texts_ = [stamp.sub("", l).strip() for l in raw_text.splitlines() if stamp.sub("", l).strip()]
+        times_ = []
+        if args.fetch:
+            try:
+                times_ = json.load(open(os.path.join(args.work, "fetched_times.json"), encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                times_ = []
+        if times_ and len(times_) == len(texts_) and all(t is not None for t in times_):
+            has_ref = True
+            gold_all = list(zip(times_, texts_))
+        else:
+            gold_all = [(0.0, t) for t in texts_]
     else:
         if not args.gold_lrc:
             sys.exit("нужен эталонный LRC или --text файл")
@@ -678,6 +767,7 @@ def main():
         t1 = time.time()
         results, asr = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key)
         _rms = vocal_rms(wavs["vocals"])
+        results = fill_gaps(model, wavs["vocals"], results, lines_tokens, lang, args.work, _rms)
         results = fix_stretched_starts(results, _rms, lines_tokens)
         results = snap_edges_to_voice(results, _rms)
         print(f"[asr-anchor] заняло {time.time() - t1:.1f} сек; слов в распознавании: {len(asr)}")
@@ -695,7 +785,7 @@ def main():
             json.dump([{"word": w, "start": st, "end": en} for w, st, en in asr], f, ensure_ascii=False, indent=1)
         found = [r for r in results if r["start"] is not None]
         print(f"[asr-anchor] найдено в записи строк: {len(found)} из {len(results)}")
-        errs, lrc_lines, per_line = [], [], []
+        errs, lrc_lines, per_line, wa_errs = [], [], [], []
         for r in results:
             line_text = " ".join(lines_tokens[r["line"]])
             if r["start"] is None:
@@ -704,9 +794,11 @@ def main():
             q = max(0.0, r["start"] - args.lead)
             lrc_lines.append("[%02d:%05.2f] %s" % (int(q // 60), q % 60, gold[r["line"]][1]))
             err_txt = ""
-            if not no_gold:
+            if has_ref:
                 e_ = r["start"] - gold[r["line"]][0]
                 errs.append(e_)
+                if not r.get("filled"):
+                    wa_errs.append(r["asr_start"] - gold[r["line"]][0])
                 per_line.append((r["line"] + 1, e_, line_text[:30]))
                 err_txt = "  ош %+.2f" % e_
             print("   строка %2d  %7.2f–%7.2f  (якорь Whisper %7.2f–%7.2f)%s %-28s %s" % (
@@ -722,16 +814,12 @@ def main():
             print("[asr-anchor] общий сдвиг эталона %+.2f с; строки, сильнее всего выбивающиеся из него (ош − сдвиг):" % off)
             for n_, e_, t_ in sorted(worst):
                 print("   строка %2d  %+.2f  %s" % (n_, e_ - off, t_))
-        sp = os.path.join(args.work, "lrclib_synced.lrc")
-        if args.fetch and os.path.exists(sp):
-            ref = parse_lrc(open(sp, encoding="utf-8", errors="replace").read())
-            pred = [(r["start"], " ".join(lines_tokens[r["line"]])) for r in results if r["start"] is not None]
-            e2 = eval_lrc_pair([(s_, " ".join(tokens(l))) for s_, l in ref], pred)
-            if e2:
-                m2 = line_metrics(e2)
-                report["vs_lrclib"] = m2
-                print("[vs LRCLIB] (приблизительный эталон: чужой тайминг мог быть неточным) совпало строк %d из %d: %s" % (
-                    len(e2), len(ref), json.dumps(m2, ensure_ascii=False)))
+        if has_ref and no_gold and errs:
+            print("[asr-anchor] (эталон — тайминг LRCLIB, приблизительный; сравнение по номерам строк, найдено %d из %d)" % (len(errs), len(results)))
+            if wa_errs:
+                mw = line_metrics(wa_errs)
+                report["whisper_start_only"] = mw
+                print("[asr-anchor] для сравнения: старт строго по Whisper без наших правок:", json.dumps(mw, ensure_ascii=False))
 
     with open(os.path.join(args.work, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)

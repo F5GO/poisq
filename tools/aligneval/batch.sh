@@ -31,5 +31,6 @@ done
 echo; echo "################ СВОДКА ################"
 for d in "$OUT"/*/; do
   echo "--- $d"
-  grep -E "^\[lrclib\]|найдено в записи|vs LRCLIB|НЕТ В ЗАПИСИ|растянуто|голоса нет|старт по голосу" "$d/run.log" | cut -c1-200
+  grep -E "^\[lrclib\]|найдено в записи|метрики|для сравнения|эталон —|НЕТ В ЗАПИСИ|голоса нет|заполнено|Traceback|Error|error" "$d/run.log" | cut -c1-420
+  tail -n 3 "$d/run.log" | cut -c1-300
 done
