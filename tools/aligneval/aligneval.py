@@ -337,6 +337,7 @@ def fix_stretched_starts(results, rms, lines_tokens, frame=0.01):
             if new_s > r["start"] + 0.5 and new_s < r["end"] - 0.3:
                 r["status"] += " (растянуто %.1f с вместо ~%.1f: старт %+.2f)" % (span, exp, new_s - r["start"])
                 r["start"] = new_s
+                r["stretch_fixed"] = True
     return results
 
 
@@ -597,7 +598,8 @@ def fill_gaps(model, voc16, results, lines_tokens, lang_name, work, rms, frame=0
                         pos += c
                         seg = rms[int(st / frame):int(en / frame) + 1]
                         ratio = (sum(1 for v in seg if v > thr) / len(seg)) if seg else 0.0
-                        if ratio >= 0.35 and en - st >= 0.2:
+                        exp_ = expected_line_dur(lines_tokens[k])
+                        if ratio >= 0.35 and 0.4 * exp_ <= en - st <= 2.2 * exp_:
                             results[k].update({"status": "заполнено выравниванием (неуверенно, голос %.0f%%)" % (ratio * 100),
                                                "start": st, "end": en, "asr_start": st, "asr_end": en, "filled": True})
             except Exception as e:  # noqa: BLE001
@@ -833,6 +835,10 @@ def main():
         if has_ref and no_gold and errs:
             print("[asr-anchor] (эталон — тайминг LRCLIB, приблизительный; сравнение по номерам строк, найдено %d из %d)" % (len(errs), len(results)))
             variants = {"whisper": [], "qwen": [], "hybrid": [], "final": []}
+            guards = (0.6, 0.9, 1.3)
+            for gt in guards:
+                variants["guardW%.1f" % gt] = []
+                variants["guardH%.1f" % gt] = []
             for r in results:
                 if r["start"] is None or r.get("filled"):
                     continue
@@ -842,6 +848,11 @@ def main():
                 variants["qwen"].append((q_ if q_ is not None else r["asr_start"]) - g_)
                 variants["hybrid"].append((r["asr_start"] if (q_ is None or r.get("clamped")) else q_) - g_)
                 variants["final"].append(r["start"] - g_)
+                hyb_ = r["asr_start"] if (q_ is None or r.get("clamped")) else q_
+                for gt in guards:
+                    far_ = abs(r["start"] - r["asr_start"]) > gt and not r.get("stretch_fixed")
+                    variants["guardW%.1f" % gt].append((r["asr_start"] if far_ else r["start"]) - g_)
+                    variants["guardH%.1f" % gt].append((hyb_ if far_ else r["start"]) - g_)
             print("[asr-anchor] СРАВНЕНИЕ ВАРИАНТОВ СТАРТА (после вычета общего сдвига эталона; медиана |ош|, доля в ±0.3 с, p90):")
             for name_, e_list in variants.items():
                 if not e_list:
