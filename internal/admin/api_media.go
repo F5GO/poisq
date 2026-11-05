@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/metadata"
 	"github.com/F5GO/poisq/internal/proxy"
@@ -41,39 +42,7 @@ func (s *AdminServer) handleTrackStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	root := ""
-	if s.guard != nil {
-		root = s.guard.Root()
-	}
-
-	searchTarget := track.FilePath
-	if s.guard != nil {
-		if safePath, err := s.guard.ValidateTarget(track.FilePath, false); err == nil {
-			searchTarget = safePath
-		} else {
-			searchTarget = filepath.Join(root, strings.TrimPrefix(track.FilePath, "/"))
-		}
-	}
-
-	found := metadata.FindAudioFileAnywhere(root, searchTarget)
-	if found == "" && searchTarget != track.FilePath {
-		found = metadata.FindAudioFileAnywhere(root, track.FilePath)
-	}
-
-	// Проверяем путь из navidrome.db, если в poisq.db путь относительный
-	if found == "" && s.openNavDB != nil {
-		if navDB, err := s.openNavDB(); err == nil && navDB != nil {
-			libRoot := queryLibraryRoot(navDB, root)
-			mfRow := findMediaFileRow(navDB, trackID, "", "")
-			_ = navDB.Close()
-			if p := strings.TrimSpace(mfRow["path"]); p != "" {
-				found = metadata.FindAudioFileAnywhere(libRoot, p)
-				if found == "" {
-					found = metadata.FindAudioFileAnywhere(root, filepath.Join(libRoot, p))
-				}
-			}
-		}
-	}
+	found := s.resolveAudioPath(track, trackID)
 
 	if found != "" {
 		if s.guard != nil {
@@ -114,6 +83,47 @@ func (s *AdminServer) handleTrackStream(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSONError(w, http.StatusNotFound, "audio file not found")
+}
+
+// resolveAudioPath находит аудиофайл трека на диске: сначала по пути из poisq.db (с учётом того,
+// что медиатека могла быть смонтирована по иному пути), затем по пути из navidrome.db.
+// Возвращает пустую строку, если локального файла нет.
+func (s *AdminServer) resolveAudioPath(track *db.TrackRecord, trackID string) string {
+	root := ""
+	if s.guard != nil {
+		root = s.guard.Root()
+	}
+
+	searchTarget := track.FilePath
+	if s.guard != nil {
+		if safePath, err := s.guard.ValidateTarget(track.FilePath, false); err == nil {
+			searchTarget = safePath
+		} else {
+			searchTarget = filepath.Join(root, strings.TrimPrefix(track.FilePath, "/"))
+		}
+	}
+
+	found := metadata.FindAudioFileAnywhere(root, searchTarget)
+	if found == "" && searchTarget != track.FilePath {
+		found = metadata.FindAudioFileAnywhere(root, track.FilePath)
+	}
+
+	// Проверяем путь из navidrome.db, если в poisq.db путь относительный
+	if found == "" && s.openNavDB != nil {
+		if navDB, err := s.openNavDB(); err == nil && navDB != nil {
+			libRoot := queryLibraryRoot(navDB, root)
+			mfRow := findMediaFileRow(navDB, trackID, "", "")
+			_ = navDB.Close()
+			if p := strings.TrimSpace(mfRow["path"]); p != "" {
+				found = metadata.FindAudioFileAnywhere(libRoot, p)
+				if found == "" {
+					found = metadata.FindAudioFileAnywhere(root, filepath.Join(libRoot, p))
+				}
+			}
+		}
+	}
+
+	return found
 }
 
 // handleLocalCover безопасно отдает локальный файл обложки для предпросмотра и сравнения в Staging.

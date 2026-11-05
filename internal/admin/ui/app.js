@@ -50,6 +50,7 @@ const state = {
   totalSec: 0,
   lyrics: [],
   activeLyricIndex: -1,
+  editorMode: "karaoke",
 
   // Дебаунс
   searchDebounceTimer: null,
@@ -903,6 +904,11 @@ function renderKaraokeSidebar(filterText = "") {
 }
 
 async function openTrackInKaraoke(trackId) {
+  if (window.TimelineEditor && window.TimelineEditor.isDirty() &&
+      state.selectedTrack && state.selectedTrack.id !== trackId &&
+      !confirm("В редакторе таймингов есть несохранённые изменения. Перейти к другому треку без сохранения?")) {
+    return;
+  }
   let track = state.tracks.find(t => t.id === trackId);
 
   try {
@@ -999,6 +1005,12 @@ async function openTrackInKaraoke(trackId) {
     state.audioEl.load();
     state.isPlaying = false;
     updatePlayIcons();
+  }
+
+  window.TimelineEditor?.load(track, state.lyrics, hasValidLrcTimestamps);
+  if (state.editorMode === "timeline" && state.audioEl) {
+    state.audioEl.preload = "metadata";
+    state.audioEl.load();
   }
 
   renderLyricsTeleprompter();
@@ -1129,35 +1141,49 @@ function updatePlayerUI() {
   }
 }
 
-function toggleLrcEditor() {
-  const tele = document.getElementById("view-karaoke");
-  const raw = document.getElementById("view-raw-editor");
+// Режимы правой области: "karaoke" (суфлёр), "timeline" (редактор с волной), "raw" (сырой текст .lrc)
+function setEditorMode(mode) {
+  state.editorMode = mode;
+  document.getElementById("view-karaoke")?.classList.toggle("hidden", mode !== "karaoke");
+  document.getElementById("view-timeline")?.classList.toggle("hidden", mode !== "timeline");
+  document.getElementById("view-raw-editor")?.classList.toggle("hidden", mode !== "raw");
   const btn = document.getElementById("btn-toggle-editor");
+  if (btn) btn.textContent = mode === "karaoke" ? "Редактор таймингов" : "Режим суфлёра";
 
-  if (raw.classList.contains("hidden")) {
-    raw.classList.remove("hidden");
-    tele.classList.add("hidden");
-    if (btn) btn.textContent = "Режим суфлера";
-  } else {
-    raw.classList.add("hidden");
-    tele.classList.remove("hidden");
-    if (btn) btn.textContent = "Редактор .lrc";
+  if (window.TimelineEditor) {
+    if (mode === "timeline") {
+      // Для перемотки по метке плееру нужны метаданные трека (до первого Play их нет при preload="none")
+      const a = state.audioEl;
+      if (a && a.src && isNaN(a.duration) && a.preload !== "metadata") {
+        a.preload = "metadata";
+        a.load();
+      }
+      window.TimelineEditor.show();
+    } else {
+      window.TimelineEditor.hide();
+    }
   }
 }
 
-async function saveRawLrc() {
+function toggleLrcEditor() {
+  setEditorMode((state.editorMode || "karaoke") === "karaoke" ? "timeline" : "karaoke");
+}
+
+function openRawEditor() {
+  const ta = document.getElementById("raw-lrc-textarea");
+  // Если в таймлайн-редакторе есть несохранённые правки, показываем именно их
+  if (ta && window.TimelineEditor && window.TimelineEditor.isDirty()) {
+    ta.value = window.TimelineEditor.currentLrc();
+  }
+  setEditorMode("raw");
+}
+
+// Записывает LRC в базу и рядом с аудиофайлом. Возвращает true при успехе.
+async function persistLrcContent(content) {
   if (!state.selectedTrack) {
     showToast("Трек не выбран", "error");
-    return;
+    return false;
   }
-
-  const textarea = document.getElementById("raw-lrc-textarea");
-  const content = textarea ? textarea.value.trim() : "";
-  if (!content) {
-    showToast("Текст LRC не может быть пустым", "error");
-    return;
-  }
-
   try {
     const res = await fetchApi("/lyrics/save", "POST", {
       trackId: state.selectedTrack.id,
@@ -1175,14 +1201,37 @@ async function saveRawLrc() {
     state.selectedTrack.lyricsBody = content;
     state.selectedTrack.lyricsStatus = res.status || "verified";
     state.lyrics = parseLRC(content);
+    const raw = document.getElementById("raw-lrc-textarea");
+    if (raw) raw.value = content;
     document.getElementById("btn-delete-lyrics")?.classList.remove("hidden");
+    document.getElementById("btn-create-ai-lrc")?.classList.add("hidden");
 
     renderLyricsTeleprompter();
     updatePlayerUI();
-    toggleLrcEditor();
     loadTracks();
+    return true;
   } catch (err) {
     showToast(`Ошибка сохранения: ${err.message}`, "error");
+    return false;
+  }
+}
+
+async function saveRawLrc() {
+  if (!state.selectedTrack) {
+    showToast("Трек не выбран", "error");
+    return;
+  }
+
+  const textarea = document.getElementById("raw-lrc-textarea");
+  const content = textarea ? textarea.value.trim() : "";
+  if (!content) {
+    showToast("Текст LRC не может быть пустым", "error");
+    return;
+  }
+
+  if (await persistLrcContent(content)) {
+    window.TimelineEditor?.load(state.selectedTrack, state.lyrics, true);
+    setEditorMode("karaoke");
   }
 }
 
