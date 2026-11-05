@@ -381,6 +381,33 @@ def snap_edges_to_voice(results, rms, frame=0.01, rel_thr=0.12, run_s=0.12, min_
     return results
 
 
+def apply_start_guard(results, thr=0.9, trust_median=0.5):
+    """Защита от больших расхождений между итоговым стартом и стартом Whisper. Включается только когда
+    Whisper на этом треке в целом надёжен (медиана |итог − Whisper| ≤ trust_median): тогда строки, где итог
+    ушёл от Whisper дальше thr, возвращаются к старту Qwen (если он не упёрся в край окна) или Whisper.
+    Строки с осознанной коррекцией растянутых не трогаются. Не требует эталона. Возвращает (кол-во, медиана)."""
+    rows = [r for r in results if r["start"] is not None and not r.get("filled") and not r.get("stretch_fixed")]
+    if len(rows) < 5:
+        return 0, None
+    med = statistics.median(abs(r["start"] - r["asr_start"]) for r in rows)
+    if med > trust_median:
+        return 0, med
+    changed, prev_start = 0, -1.0
+    for r in results:
+        if r["start"] is None:
+            continue
+        if r in rows and abs(r["start"] - r["asr_start"]) > thr:
+            q = r.get("qwen_start")
+            cand = r["asr_start"] if (q is None or r.get("clamped")) else q
+            if cand > prev_start + 0.01:
+                r["status"] += " (защита: старт %+.2f)" % (cand - r["start"])
+                r["start"] = cand
+                r["end"] = max(r["end"], cand + 0.2)
+                changed += 1
+        prev_start = r["start"]
+    return changed, med
+
+
 def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key):
     """Подход «распознавание → якоря → точное выравнивание»:
     1) Whisper по вокалу даёт, что и когда спето (устойчиво к повторам и проигрышам);
@@ -788,6 +815,15 @@ def main():
         results = fill_gaps(model, wavs["vocals"], results, lines_tokens, lang, args.work, _rms)
         results = fix_stretched_starts(results, _rms, lines_tokens)
         results = snap_edges_to_voice(results, _rms)
+        for r_ in results:
+            r_["start_pre"] = r_["start"]
+        g_changed, g_med = apply_start_guard(results)
+        if g_med is None:
+            print("[asr-anchor] защита старта: слишком мало строк для оценки")
+        elif g_changed or g_med <= 0.5:
+            print("[asr-anchor] защита старта: Whisper надёжен (медиана |итог−Whisper| %.2f с), возвращено строк: %d" % (g_med, g_changed))
+        else:
+            print("[asr-anchor] защита старта не применяется: Whisper на этом треке ненадёжен (медиана |итог−Whisper| %.2f с)" % g_med)
         print(f"[asr-anchor] заняло {time.time() - t1:.1f} сек; слов в распознавании: {len(asr)}")
         # Что реально звучит (карта по Whisper): фразы, разделённые паузами > 1.2 сек
         print("[asr-anchor] что слышит Whisper на вокале (фразы по паузам):")
@@ -834,7 +870,7 @@ def main():
                 print("   строка %2d  %+.2f  %s" % (n_, e_ - off, t_))
         if has_ref and no_gold and errs:
             print("[asr-anchor] (эталон — тайминг LRCLIB, приблизительный; сравнение по номерам строк, найдено %d из %d)" % (len(errs), len(results)))
-            variants = {"whisper": [], "qwen": [], "hybrid": [], "final": []}
+            variants = {"whisper": [], "qwen": [], "hybrid": [], "final": [], "auto": []}
             guards = (0.6, 0.9, 1.3)
             for gt in guards:
                 variants["guardW%.1f" % gt] = []
@@ -847,12 +883,14 @@ def main():
                 variants["whisper"].append(r["asr_start"] - g_)
                 variants["qwen"].append((q_ if q_ is not None else r["asr_start"]) - g_)
                 variants["hybrid"].append((r["asr_start"] if (q_ is None or r.get("clamped")) else q_) - g_)
-                variants["final"].append(r["start"] - g_)
+                variants["final"].append(r.get("start_pre", r["start"]) - g_)
+                variants["auto"].append(r["start"] - g_)
                 hyb_ = r["asr_start"] if (q_ is None or r.get("clamped")) else q_
                 for gt in guards:
-                    far_ = abs(r["start"] - r["asr_start"]) > gt and not r.get("stretch_fixed")
-                    variants["guardW%.1f" % gt].append((r["asr_start"] if far_ else r["start"]) - g_)
-                    variants["guardH%.1f" % gt].append((hyb_ if far_ else r["start"]) - g_)
+                    st_ = r.get("start_pre", r["start"])
+                    far_ = abs(st_ - r["asr_start"]) > gt and not r.get("stretch_fixed")
+                    variants["guardW%.1f" % gt].append((r["asr_start"] if far_ else st_) - g_)
+                    variants["guardH%.1f" % gt].append((hyb_ if far_ else st_) - g_)
             print("[asr-anchor] СРАВНЕНИЕ ВАРИАНТОВ СТАРТА (после вычета общего сдвига эталона; медиана |ош|, доля в ±0.3 с, p90):")
             for name_, e_list in variants.items():
                 if not e_list:
