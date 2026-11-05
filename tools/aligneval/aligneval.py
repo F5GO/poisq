@@ -408,6 +408,7 @@ def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_
         if t1 - t0 < 0.8:
             t0 = max(0.0, a_start - 0.5)
         status, start, end = "ASR", a_start, a_end
+        qwen_start, clamped = None, False
         tmp = os.path.join(work, f"anchor_{i}.wav")
         run(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(t0), "-t", str(t1 - t0), "-i", voc16, "-ac", "1", "-ar", "16000", tmp])
         try:
@@ -415,6 +416,7 @@ def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_
             sub = [(it.text, float(it.start_time) + t0, float(it.end_time) + t0) for it in res[0]]
             if len(sub) == len(toks) and abs(sub[0][1] - a_start) <= 3.0:
                 status, start, end = "ASR+выравнивание", sub[0][1], sub[-1][2]
+                qwen_start, clamped = sub[0][1], abs(sub[0][1] - t0) < 0.08
         except Exception as e:  # noqa: BLE001
             print(f"   строка {i + 1}: выравнивание в окне не удалось: {e}")
         if start < prev_end - 0.3:  # перекрытие с предыдущей строкой: берём якорь Whisper, сдвинутый за её конец
@@ -423,7 +425,7 @@ def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_
         end = max(end, start + 0.2)
         prev_end = end
         results.append({"line": i, "status": status, "start": start, "end": end, "matched": len(got), "of": len(toks),
-                        "asr_start": a_start, "asr_end": a_end})
+                        "asr_start": a_start, "asr_end": a_end, "qwen_start": qwen_start, "clamped": clamped})
     return results, asr
 
 
@@ -830,10 +832,25 @@ def main():
                 print("   строка %2d  %+.2f  %s" % (n_, e_ - off, t_))
         if has_ref and no_gold and errs:
             print("[asr-anchor] (эталон — тайминг LRCLIB, приблизительный; сравнение по номерам строк, найдено %d из %d)" % (len(errs), len(results)))
-            if wa_errs:
-                mw = line_metrics(wa_errs)
-                report["whisper_start_only"] = mw
-                print("[asr-anchor] для сравнения: старт строго по Whisper без наших правок:", json.dumps(mw, ensure_ascii=False))
+            variants = {"whisper": [], "qwen": [], "hybrid": [], "final": []}
+            for r in results:
+                if r["start"] is None or r.get("filled"):
+                    continue
+                g_ = gold[r["line"]][0]
+                q_ = r.get("qwen_start")
+                variants["whisper"].append(r["asr_start"] - g_)
+                variants["qwen"].append((q_ if q_ is not None else r["asr_start"]) - g_)
+                variants["hybrid"].append((r["asr_start"] if (q_ is None or r.get("clamped")) else q_) - g_)
+                variants["final"].append(r["start"] - g_)
+            print("[asr-anchor] СРАВНЕНИЕ ВАРИАНТОВ СТАРТА (после вычета общего сдвига эталона; медиана |ош|, доля в ±0.3 с, p90):")
+            for name_, e_list in variants.items():
+                if not e_list:
+                    continue
+                o_ = statistics.median(e_list)
+                adj_ = [abs(x - o_) for x in e_list]
+                print("   %-8s строк %2d  медиана %.3f  в ±0.3с %4.1f%%  p90 %.2f" % (
+                    name_, len(e_list), statistics.median(adj_), 100.0 * sum(1 for x in adj_ if x <= 0.3) / len(adj_), percentile(adj_, 0.9)))
+                report["variant_" + name_] = {"median_abs_adj": statistics.median(adj_), "n": len(e_list)}
 
     with open(os.path.join(args.work, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
