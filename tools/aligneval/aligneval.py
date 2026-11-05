@@ -496,8 +496,22 @@ def fetch_lrclib(artist, title, work, dur=0.0):
 
     url = "https://lrclib.net/api/search?" + urllib.parse.urlencode({"artist_name": artist, "track_name": title})
     req = urllib.request.Request(url, headers={"User-Agent": "poisq-aligneval/1.0"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        items = json.loads(r.read().decode("utf-8"))
+    items, last_err = None, None
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                items = json.loads(r.read().decode("utf-8"))
+            break
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            print(f"[lrclib] попытка {attempt + 1} не удалась: {e}", flush=True)
+            time.sleep(3 * (attempt + 1))
+    if items is None:
+        cached = os.path.join(work, "fetched.txt")
+        if os.path.exists(cached):
+            print("[lrclib] сервер недоступен, использую текст из прошлого запуска в рабочей папке")
+            return cached
+        sys.exit(f"LRCLIB недоступен ({last_err}); повторите позже")
     if not items:
         sys.exit(f"LRCLIB: ничего не найдено для «{artist} — {title}»")
 
