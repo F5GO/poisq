@@ -17,6 +17,9 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends build-e
     && apt-get purge -y -qq build-essential >/dev/null && apt-get autoremove -y -qq >/dev/null \
     && rm -rf /var/lib/apt/lists/*
 
+# audioread не объявлен в зависимостях audio-separator (0.48.0), но импортируется при запуске; setuptools нужен для pkg_resources
+RUN pip install -q audioread "setuptools<81"
+
 # модели audio-separator кэшируются в примонтированный том (скачиваются при первом запуске)
 ENV AUDIO_SEPARATOR_MODEL_DIR=/root/.cache/audio-separator-models
 
