@@ -635,6 +635,36 @@ def fill_gaps(model, voc16, results, lines_tokens, lang_name, work, rms, frame=0
     return results
 
 
+def separate_with_audio_separator(mix_wav, args):
+    """Отделение вокала моделями из сообщества (Roformer/MDXC) через пакет audio-separator
+    (обёртка над моделями UVR). Опционально второй проход: модель «караоке» убирает подпевки,
+    оставляя основной голос. Возвращает путь к wav со стемом вокала."""
+    import glob
+
+    out_dir = os.path.join(args.work, "stems", "sep_" + re.sub(r"[^A-Za-z0-9_.-]", "_", args.sep_model))
+    os.makedirs(out_dir, exist_ok=True)
+
+    def pick(dirpath, stem_name):
+        files = [f for f in glob.glob(os.path.join(dirpath, "*.wav")) if f"({stem_name})" in os.path.basename(f)]
+        if not files:
+            sys.exit(f"audio-separator не создал стем «{stem_name}» в {dirpath}: {os.listdir(dirpath)}")
+        return max(files, key=os.path.getmtime)
+
+    cmd = ["audio-separator", mix_wav, "--model_filename", args.sep_model, "--output_format", "WAV",
+           "--output_dir", out_dir, "--single_stem", "Vocals"]
+    if args.sep_overlap:
+        cmd += ["--mdxc_overlap", str(args.sep_overlap)]
+    run(cmd)
+    stem = pick(out_dir, "Vocals")
+    if args.sep_karaoke_model:
+        k_dir = os.path.join(out_dir, "karaoke")
+        os.makedirs(k_dir, exist_ok=True)
+        run(["audio-separator", stem, "--model_filename", args.sep_karaoke_model, "--output_format", "WAV", "--output_dir", k_dir]
+            + (["--mdxc_overlap", str(args.sep_overlap)] if args.sep_overlap else []))
+        stem = pick(k_dir, args.sep_karaoke_stem)
+    return stem
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("audio", help="путь к аудиофайлу")
@@ -646,6 +676,13 @@ def main():
     ap.add_argument("--pred", default="", help="только сравнить с эталоном готовый LRC (например, из poisq), без моделей")
     ap.add_argument("--text", default="", help="режим без эталона: файл с текстом (по строке); метрик не будет, только aligned_*.lrc")
     ap.add_argument("--fetch", default="", help="«Исполнитель|Название»: взять текст из LRCLIB (вместо --text и эталона)")
+    ap.add_argument("--separator", choices=["demucs", "audio-separator"], default="demucs",
+                    help="чем отделять вокал: demucs (htdemucs) или модели сообщества через audio-separator")
+    ap.add_argument("--sep-model", default="vocals_mel_band_roformer.ckpt",
+                    help="имя модели audio-separator (audio-separator --list_models --list_filter=vocals)")
+    ap.add_argument("--sep-overlap", type=int, default=0, help="mdxc_overlap: меньше быстрее, больше качественнее швы (по умолчанию из модели, обычно 8)")
+    ap.add_argument("--sep-karaoke-model", default="", help="второй проход: модель «караоке» (убрать подпевки), например mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt")
+    ap.add_argument("--sep-karaoke-stem", default="Vocals", help="имя стема второго прохода, который брать (из имени файла в скобках)")
     ap.add_argument("--refine", action="store_true", help="второй проход: перевыровнять каждую строку в окне с соседями")
     ap.add_argument("--snap-onset", dest="snap_onset", action="store_true", help="подтянуть начало строк к реальному началу голоса")
     ap.add_argument("--lead", type=float, default=0.5, help="на сколько сек раньше писать время строк в итоговый LRC (по умолчанию 0.5)")
@@ -722,10 +759,13 @@ def main():
         voc16 = base + "_vocals16k.wav"
         if not os.path.exists(voc16):
             t1 = time.time()
-            run([sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs", "-o", os.path.join(args.work, "stems"), mix_wav])
-            stem = os.path.join(args.work, "stems", "htdemucs", "track_mix", "vocals.wav")
+            if args.separator == "demucs":
+                run([sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs", "-o", os.path.join(args.work, "stems"), mix_wav])
+                stem = os.path.join(args.work, "stems", "htdemucs", "track_mix", "vocals.wav")
+            else:
+                stem = separate_with_audio_separator(mix_wav, args)
             run(["ffmpeg", "-loglevel", "error", "-y", "-i", stem, "-ac", "1", "-ar", "16000", voc16])
-            print(f"Demucs: {time.time() - t1:.1f} сек")
+            print(f"Разделение вокала ({args.separator}{' ' + args.sep_model if args.separator != 'demucs' else ''}): {time.time() - t1:.1f} сек")
         wavs["vocals"] = voc16
     stage("аудио готово", t0)
 
