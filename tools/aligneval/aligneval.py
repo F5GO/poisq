@@ -694,6 +694,31 @@ def apply_ctx_to_output(results, key="ctx"):
     return changed, thr
 
 
+MMS_ARBITER_GAP = 1.0  # если итог уходит от оценки MMS дальше этого (с), решает медиана трёх независимых оценок
+
+
+def apply_mms_arbitration(results):
+    """Арбитраж по независимому выравнивателю (MMS_FA, CTC). Итог по Qwen (контекстный проход с проверкой по Whisper)
+    сохраняется, пока MMS с ним согласен. Если они расходятся больше MMS_ARBITER_GAP, берётся медиана из трёх
+    оценок: контекст Qwen, контекст MMS и прежний итог до контекстного прохода. Ошибки двух выравнивателей
+    различаются по природе, поэтому большое расхождение — надёжный признак выброса одного из них."""
+    changed, prev_start = 0, -1.0
+    for r in results:
+        if r["start"] is None:
+            continue
+        m = r.get("ctxm_start")
+        if m is not None and not r.get("filled") and not r.get("stretch_fixed") and abs(r["start"] - m) > MMS_ARBITER_GAP:
+            q = r.get("ctx_start") if r.get("ctx_start") is not None else r["start"]
+            cand = statistics.median([q, m, r.get("start_pre", r["start"])])
+            if cand > prev_start + 0.01 and abs(cand - r["start"]) > 0.05:
+                r["status"] += " (MMS %+.2f)" % (cand - r["start"])
+                r["start"] = cand
+                r["end"] = max(r["end"], cand + 0.2)
+                changed += 1
+        prev_start = r["start"]
+    return changed
+
+
 def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key, prompt="", variants=("vocals",), mix16=None, fuse="median"):
     """Подход «распознавание → якоря → точное выравнивание»:
     1) Whisper по вокалу даёт, что и когда спето (устойчиво к повторам и проигрышам);
@@ -1225,6 +1250,9 @@ def main():
         if args.ctx_align:
             ckey = "ctx2" if args.ctx_rounds >= 2 else "ctx"
             n_ctx, ctx_thr = apply_ctx_to_output(results, ckey)
+            if args.mms_ctx:
+                n_mms = apply_mms_arbitration(results)
+                print(f"[asr-anchor] арбитраж по MMS: изменено строк {n_mms}")
             print(f"[asr-anchor] итоговое время из контекстного выравнивания ({ckey}): строк {n_ctx}; "
                   f"порог проверки по Whisper {ctx_thr:.1f} с ({'Whisper надёжен' if ctx_thr <= CTX_TRUST else 'Whisper на треке неточен, проверка ослаблена'})")
         if g_med is None:
