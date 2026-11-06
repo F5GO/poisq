@@ -40,11 +40,32 @@ services:
       SYNC_INTERVAL: "2m"
       ENRICH_SQLITE_FULLTEXT: "true"
       LOG_LEVEL: "info"
+      # Точный тайминг караоке через сервис выравнивания (профиль "aligner" ниже).
+      # Включите, когда запустите сервис: docker compose --profile aligner up -d
+      # ALIGNER_URL: "http://aligner:4540"
+      # ALIGNER_TOKEN: "change-me"        # если задан и у сервиса
+      # ALIGNER_MUSIC_PATH: "/music"      # только если путь к медиатеке в сервисе другой
     volumes:
       # Общий том данных с Navidrome для доступа к navidrome.db (WAL) и хранения poisq.db
       - navidrome_data:/data
       # Доступ к папке с музыкой для атомарной записи .lrc, cover.jpg и тегов по стандарту Picard (Staging)
       - /path/to/your/music:/music:rw
 
+  # Сервис акустического выравнивания: точное время строк .lrc и уверенность по строкам (см. aligner/README.md).
+  # Запускается по профилю: docker compose --profile aligner up -d. Нужны ключ Groq в Studio и ~4 ГБ на модели.
+  aligner:
+    image: ghcr.io/f5go/poisq-aligner:latest
+    container_name: poisq-aligner
+    profiles: ["aligner"]
+    restart: unless-stopped
+    environment:
+      MUSIC_ROOT: "/music"
+      ALIGNER_THREADS: "6"        # на общем NAS оставьте несколько ядер Navidrome и poisq
+      # ALIGNER_TOKEN: "change-me"
+    volumes:
+      - /path/to/your/music:/music:ro   # тот же путь, что у poisq, только чтение
+      - aligner_cache:/cache            # модели, вокальные стемы, результаты
+
 volumes:
   navidrome_data:
+  aligner_cache:
