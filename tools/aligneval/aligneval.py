@@ -519,26 +519,49 @@ def fuse_hits(hits, mode="median", width=0.35):
     return (statistics.median(starts), statistics.median(ends), max(h[2] for h in hits), len(hits), starts[-1] - starts[0])
 
 
-def ctx_align_lines(model, voc16, results, lines_tokens, lang_name, work):
+CTX_TRUST = 1.2  # ctx принимается, только если не уходит от якоря Whisper дальше этого (с)
+
+
+def ctx_ok(r, key="ctx_start"):
+    """Результат контекстного выравнивания пригоден как граница/итог: он есть и не уходит от якоря Whisper дальше CTX_TRUST."""
+    v = r.get(key)
+    return v is not None and r.get("asr_start") is not None and abs(v - r["asr_start"]) <= CTX_TRUST
+
+
+def ctx_align_lines(model, voc16, results, lines_tokens, lang_name, work, gap=4.0, rnd=1):
     """Проход 2: уточнение строки в окне вместе с соседями (предыдущая + текущая + следующая).
     Выравниватель обязан распределить весь текст по всему аудио окна. Когда в окне только одна строка,
     хвост предыдущей и пауза перед ней «прилипают» к её первому слову (старт получается слишком ранним).
     Если в окне есть и текст соседей, это аудио отходит им, а время берётся только у средней строки.
-    Границы окна задаются якорями Whisper (проход 1). Результат: r['ctx_start'], r['ctx_end']."""
+    Сосед включается, только если пауза до него не больше gap с (иначе окно захватывает проигрыш и далёкие повторы).
+    Раунд 1: границы окна по якорям Whisper; раунд 2: по уточнённым временам соседей (если те приняты).
+    Результат: r['ctx_start'/'ctx_end'] (раунд 1) или r['ctx2_start'/'ctx2_end'] (раунд 2)."""
     n, ok = len(results), 0
+    suffix = "ctx" if rnd == 1 else "ctx2"
+
+    def span(r):  # (начало, конец) строки для границ окна
+        if rnd >= 2 and ctx_ok(r, "ctx_start"):
+            return r["ctx_start"], r.get("ctx_end") or r["asr_end"]
+        return r["asr_start"], r["asr_end"]
+
     for i, r in enumerate(results):
         if r["start"] is None or r.get("filled"):
             continue
+        ms, me = span(r)
         prev = results[i - 1] if i > 0 and results[i - 1]["start"] is not None else None
         nxt = results[i + 1] if i + 1 < n and results[i + 1]["start"] is not None else None
-        t0 = max(0.0, (prev["asr_start"] - 0.7) if prev else (r["asr_start"] - 2.0))
-        t1 = (nxt["asr_end"] + 0.7) if nxt else (r["asr_end"] + 2.0)
+        if prev is not None and ms - span(prev)[1] > gap:
+            prev = None
+        if nxt is not None and span(nxt)[0] - me > gap:
+            nxt = None
+        t0 = max(0.0, (span(prev)[0] - 0.7) if prev else (ms - 2.0))
+        t1 = (span(nxt)[1] + 0.7) if nxt else (me + 2.0)
         if t1 - t0 < 0.8 or t1 - t0 > 45.0:
             continue
         tp = lines_tokens[i - 1] if prev else []
         tn = lines_tokens[i + 1] if nxt else []
         mine = lines_tokens[i]
-        tmp = os.path.join(work, f"ctx_{i}.wav")
+        tmp = os.path.join(work, f"{suffix}_{i}.wav")
         run(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(t0), "-t", str(t1 - t0), "-i", voc16, "-ac", "1", "-ar", "16000", tmp])
         try:
             res = model.align(audio=tmp, text=" ".join(tp + mine + tn), language=lang_name)
@@ -548,10 +571,28 @@ def ctx_align_lines(model, voc16, results, lines_tokens, lang_name, work):
             continue
         if len(sub) != len(tp) + len(mine) + len(tn):
             continue
-        r["ctx_start"], r["ctx_end"] = sub[len(tp)][0], sub[len(tp) + len(mine) - 1][1]
+        r[suffix + "_start"], r[suffix + "_end"] = sub[len(tp)][0], sub[len(tp) + len(mine) - 1][1]
         ok += 1
-    print(f"[asr-anchor] контекстное выравнивание: уточнено строк {ok}")
+    print(f"[asr-anchor] контекстное выравнивание, раунд {rnd}: уточнено строк {ok}")
     return results
+
+
+def apply_ctx_to_output(results, key="ctx"):
+    """Итоговый старт = результат контекстного выравнивания, если он согласуется с якорем Whisper (CTX_TRUST),
+    иначе остаётся прежний итог. Старты не должны идти назад относительно предыдущей строки."""
+    changed, prev_start = 0, -1.0
+    for r in results:
+        if r["start"] is None:
+            continue
+        if not r.get("filled") and not r.get("stretch_fixed") and ctx_ok(r, key + "_start"):
+            cand = r[key + "_start"]
+            if cand > prev_start + 0.01:
+                r["status"] += " (ctx %+.2f)" % (cand - r["start"])
+                r["start"] = cand
+                r["end"] = max(r.get(key + "_end") or r["end"], cand + 0.2)
+                changed += 1
+        prev_start = r["start"]
+    return changed
 
 
 def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key, prompt="", variants=("vocals",), mix16=None, fuse="median"):
@@ -864,6 +905,10 @@ def main():
                     help="версии распознавания для голосования через запятую: " + ",".join(ASR_VARIANTS) + " (кэшируются в рабочей папке)")
     ap.add_argument("--ctx-align", dest="ctx_align", action="store_true",
                     help="проход 2: выравнивать строку в окне вместе с соседями (против «приклеенных» стартов), метрики вариантов ctx/med4")
+    ap.add_argument("--ctx-gap", dest="ctx_gap", type=float, default=4.0,
+                    help="контекстное окно включает соседнюю строку, только если пауза до неё не больше этого (с)")
+    ap.add_argument("--ctx-rounds", dest="ctx_rounds", type=int, default=1, choices=[1, 2],
+                    help="1 или 2 раунда контекстного выравнивания (во втором границы окон берутся из уточнённых соседей)")
     ap.add_argument("--fuse", choices=["median", "mode"], default="median",
                     help="как сливать версии распознавания: median (медиана всех) или mode (самая плотная группа, выбросы отбрасываются)")
     ap.add_argument("--whisper-prompt", dest="whisper_prompt", action="store_true",
@@ -1055,7 +1100,9 @@ def main():
         results, asr, per_variant = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key,
                                                      wprompt if "prompt" in avars else "", avars, mix16_, args.fuse)
         if args.ctx_align:
-            results = ctx_align_lines(model, wavs["vocals"], results, lines_tokens, lang, args.work)
+            results = ctx_align_lines(model, wavs["vocals"], results, lines_tokens, lang, args.work, args.ctx_gap, 1)
+            if args.ctx_rounds >= 2:
+                results = ctx_align_lines(model, wavs["vocals"], results, lines_tokens, lang, args.work, args.ctx_gap, 2)
         _rms = vocal_rms(wavs["vocals"])
         results = fill_gaps(model, wavs["vocals"], results, lines_tokens, lang, args.work, _rms)
         results = fix_stretched_starts(results, _rms, lines_tokens)
@@ -1063,6 +1110,10 @@ def main():
         for r_ in results:
             r_["start_pre"] = r_["start"]
         g_changed, g_med = apply_start_guard(results)
+        if args.ctx_align:
+            ckey = "ctx2" if args.ctx_rounds >= 2 else "ctx"
+            n_ctx = apply_ctx_to_output(results, ckey)
+            print(f"[asr-anchor] итоговое время из контекстного выравнивания ({ckey}): строк {n_ctx}")
         if g_med is None:
             print("[asr-anchor] защита старта: слишком мало строк для оценки")
         elif g_changed or g_med <= 0.5:
@@ -1110,7 +1161,7 @@ def main():
                 "line": ln, "text": " ".join(lines_tokens[ln]), "ref": gold[ln][0] if has_ref else None,
                 "found": r["start"] is not None, "filled": bool(r.get("filled")), "stretch_fixed": bool(r.get("stretch_fixed")),
                 "asr": r.get("asr_start"), "asr_end": r.get("asr_end"), "qwen": r.get("qwen_start"), "clamped": r.get("clamped"),
-                "ctx": r.get("ctx_start"), "ctx_end": r.get("ctx_end"), "pre": r.get("start_pre"), "final": r["start"], "end": r["end"],
+                "ctx": r.get("ctx_start"), "ctx_end": r.get("ctx_end"), "ctx2": r.get("ctx2_start"), "pre": r.get("start_pre"), "final": r["start"], "end": r["end"],
                 "support": r.get("support"), "of": r.get("of_variants"), "spread": r.get("spread"),
                 "variants": {n: (per_variant[n][ln][0] if per_variant[n][ln] else None) for n in per_variant},
             })
@@ -1131,7 +1182,9 @@ def main():
             print("[asr-anchor] (эталон — тайминг LRCLIB, приблизительный; сравнение по номерам строк, найдено %d из %d)" % (len(errs), len(results)))
             variants = {"whisper": [], "qwen": [], "hybrid": [], "final": [], "auto": [], "med3": []}
             if args.ctx_align:
-                variants["ctx"], variants["med4"] = [], []
+                variants["ctx"], variants["med4"], variants["ctx_gated"], variants["OUT (в LRC)"] = [], [], [], []
+                if args.ctx_rounds >= 2:
+                    variants["ctx2"], variants["ctx2_gated"] = [], []
             guards = (0.6, 0.9, 1.3)
             for gt in guards:
                 variants["guardW%.1f" % gt] = []
@@ -1149,6 +1202,12 @@ def main():
                 if args.ctx_align:
                     c_ = r.get("ctx_start", q_ if q_ is not None else r["asr_start"])
                     variants["ctx"].append(c_ - g_)
+                    variants["ctx_gated"].append((r["ctx_start"] if ctx_ok(r, "ctx_start") else r.get("start_pre", r["start"])) - g_)
+                    variants["OUT (в LRC)"].append(r["start"] - g_)
+                    if args.ctx_rounds >= 2:
+                        c2_ = r.get("ctx2_start", c_)
+                        variants["ctx2"].append(c2_ - g_)
+                        variants["ctx2_gated"].append((r["ctx2_start"] if ctx_ok(r, "ctx2_start") else r.get("start_pre", r["start"])) - g_)
                     variants["med4"].append(statistics.median([r["asr_start"], q_ if q_ is not None else r["asr_start"],
                                                                c_, r.get("start_pre", r["start"])]) - g_)
                 variants["med3"].append(statistics.median([r["asr_start"], q_ if q_ is not None else r["asr_start"],

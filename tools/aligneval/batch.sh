@@ -59,6 +59,6 @@ done
 echo; echo "################ СВОДКА ################"
 for d in "$OUT"/*/; do
   echo "--- $d"
-  grep -a -E "^\[lrclib\]|найдено в записи|контекстное выравнивание|распознавание «|^\[asr-anchor\] метрики|СРАВНЕНИЕ ВАРИАНТОВ|защита старта|^   (whisper|qwen|hybrid|final|auto|med3|ctx|med4|guard|asr:|fused|fz:)|Traceback|Error:" "$d/run.log" | cut -c1-400
+  grep -a -E "^\[lrclib\]|найдено в записи|контекстное выравнивание|итоговое время|распознавание «|^\[asr-anchor\] метрики|СРАВНЕНИЕ ВАРИАНТОВ|защита старта|^   (whisper|qwen|hybrid|final|auto|med3|ctx|ctx2|ctx_gated|ctx2_gated|OUT|med4|guard|asr:|fused|fz:)|Traceback|Error:" "$d/run.log" | cut -c1-400
   grep -a -A8 "общий сдвиг эталона" "$d/run.log" | cut -c1-160
 done
