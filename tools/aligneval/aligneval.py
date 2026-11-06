@@ -497,7 +497,29 @@ def apply_start_guard(results, thr=0.9, trust_median=0.5):
     return changed, med
 
 
-def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key, prompt="", variants=("vocals",), mix16=None):
+def fuse_hits(hits, mode="median", width=0.35):
+    """Слияние оценок строки от разных версий распознавания. hits: [(начало, конец, найдено слов)].
+    median — медиана всех; mode — медиана самой плотной группы версий (старты в пределах ±width с):
+    версии-выбросы с общим смещением или ошибкой в несколько секунд в итог не попадают.
+    Возвращает (начало, конец, найдено слов, версий в группе, разброс начала в группе)."""
+    starts = sorted(h[0] for h in hits)
+    if mode == "mode" and len(hits) >= 3:
+        best = None
+        for h in hits:
+            grp = [g for g in hits if abs(g[0] - h[0]) <= width]
+            spread = max(g[0] for g in grp) - min(g[0] for g in grp)
+            key = (len(grp), -spread)
+            if best is None or key > best[0]:
+                best = (key, grp)
+        grp = best[1]
+        if len(grp) >= 2:
+            return (statistics.median(g[0] for g in grp), statistics.median(g[1] for g in grp),
+                    max(g[2] for g in hits), len(grp), max(g[0] for g in grp) - min(g[0] for g in grp))
+    ends = sorted(h[1] for h in hits)
+    return (statistics.median(starts), statistics.median(ends), max(h[2] for h in hits), len(hits), starts[-1] - starts[0])
+
+
+def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key, prompt="", variants=("vocals",), mix16=None, fuse="median"):
     """Подход «распознавание → якоря → точное выравнивание»:
     1) Whisper по вокалу даёт, что и когда спето (устойчиво к повторам и проигрышам);
     2) слова эталона сопоставляются с распознанными строго по порядку; строки без пары считаются «не найденными в записи»;
@@ -519,10 +541,7 @@ def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_
         if not hits:
             fused.append(None)
             continue
-        starts = sorted(h[0] for h in hits)
-        ends = sorted(h[1] for h in hits)
-        fused.append((statistics.median(starts), statistics.median(ends), max(h[2] for h in hits),
-                      len(hits), starts[-1] - starts[0]))
+        fused.append(fuse_hits(hits, fuse))
 
     results, prev_end = [], 0.0
     for i, toks in enumerate(lines_tokens):
@@ -806,6 +825,8 @@ def main():
     ap.add_argument("--sep-karaoke-stem", default="Vocals", help="имя стема второго прохода, который брать (из имени файла в скобках)")
     ap.add_argument("--asr-variants", dest="asr_variants", default="vocals",
                     help="версии распознавания для голосования через запятую: " + ",".join(ASR_VARIANTS) + " (кэшируются в рабочей папке)")
+    ap.add_argument("--fuse", choices=["median", "mode"], default="median",
+                    help="как сливать версии распознавания: median (медиана всех) или mode (самая плотная группа, выбросы отбрасываются)")
     ap.add_argument("--whisper-prompt", dest="whisper_prompt", action="store_true",
                     help="передать Whisper начало текста песни как подсказку (prompt)")
     ap.add_argument("--refine", action="store_true", help="второй проход: перевыровнять каждую строку в окне с соседями")
@@ -990,7 +1011,7 @@ def main():
         if "mix" in avars and not os.path.exists(mix16_):
             run(["ffmpeg", "-loglevel", "error", "-y", "-i", mix_wav, "-ac", "1", "-ar", "16000", mix16_])
         results, asr, per_variant = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key,
-                                                     wprompt if "prompt" in avars else "", avars, mix16_)
+                                                     wprompt if "prompt" in avars else "", avars, mix16_, args.fuse)
         _rms = vocal_rms(wavs["vocals"])
         results = fill_gaps(model, wavs["vocals"], results, lines_tokens, lang, args.work, _rms)
         results = fix_stretched_starts(results, _rms, lines_tokens)
@@ -1080,6 +1101,14 @@ def main():
             if len(per_variant) > 1:
                 variants["fused"] = [r["asr_start"] - gold[r["line"]][0] for r in results
                                      if r["start"] is not None and not r.get("filled")]
+                for fm in ("median", "mode"):
+                    e_f = []
+                    for ln in range(len(lines_tokens)):
+                        hs = [per_variant[n][ln] for n in per_variant if per_variant[n][ln]]
+                        if hs:
+                            e_f.append(fuse_hits(hs, fm)[0] - gold[ln][0])
+                    if e_f:
+                        variants["fz:" + fm] = e_f
             print("[asr-anchor] СРАВНЕНИЕ ВАРИАНТОВ СТАРТА (после вычета общего сдвига эталона; медиана |ош|, доля в ±0.3 с, p90):")
             for name_, e_list in variants.items():
                 if not e_list:
