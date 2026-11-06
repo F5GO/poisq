@@ -285,19 +285,20 @@ def match_ref_to_asr(ref, asr, min_sim=0.6, gap_ref=-0.95, gap_asr=-0.4):
     return out
 
 
-def make_whisper_prompt(raw_lines, max_chars=700):
-    """Подсказка для Whisper: первые уникальные строки текста (до ~224 токенов). Помогает распознавать
-    пение, имена и редкие слова; на повторах не должна подсказывать лишнего, поэтому строки без дублей."""
+def make_whisper_prompt(raw_lines, max_bytes=800):
+    """Подсказка для Whisper: первые уникальные строки текста. Groq ограничивает подсказку 896 БАЙТАМИ UTF-8
+    (русская буква = 2 байта), поэтому длина считается в байтах. Строки без дублей."""
     seen, out, total = set(), [], 0
     for l in raw_lines:
         k = " ".join(tokens(l))
         if not k or k in seen:
             continue
         seen.add(k)
-        if total + len(l) + 1 > max_chars:
+        size = len(l.strip().encode("utf-8")) + 1
+        if total + size > max_bytes:
             break
         out.append(l.strip())
-        total += len(l) + 1
+        total += size
     return " ".join(out)
 
 
