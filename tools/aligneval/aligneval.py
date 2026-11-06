@@ -1050,7 +1050,7 @@ def main():
                 print("   строка %2d  %+.2f  %s" % (n_, e_ - off, t_))
         if has_ref and no_gold and errs:
             print("[asr-anchor] (эталон — тайминг LRCLIB, приблизительный; сравнение по номерам строк, найдено %d из %d)" % (len(errs), len(results)))
-            variants = {"whisper": [], "qwen": [], "hybrid": [], "final": [], "auto": []}
+            variants = {"whisper": [], "qwen": [], "hybrid": [], "final": [], "auto": [], "med3": []}
             guards = (0.6, 0.9, 1.3)
             for gt in guards:
                 variants["guardW%.1f" % gt] = []
@@ -1065,6 +1065,8 @@ def main():
                 variants["hybrid"].append((r["asr_start"] if (q_ is None or r.get("clamped")) else q_) - g_)
                 variants["final"].append(r.get("start_pre", r["start"]) - g_)
                 variants["auto"].append(r["start"] - g_)
+                variants["med3"].append(statistics.median([r["asr_start"], q_ if q_ is not None else r["asr_start"],
+                                                           r.get("start_pre", r["start"])]) - g_)
                 hyb_ = r["asr_start"] if (q_ is None or r.get("clamped")) else q_
                 for gt in guards:
                     st_ = r.get("start_pre", r["start"])
