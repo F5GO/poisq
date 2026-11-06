@@ -21,6 +21,7 @@ import (
 
 	"github.com/F5GO/poisq/internal/admin"
 	"github.com/F5GO/poisq/internal/ai"
+	"github.com/F5GO/poisq/internal/aligner"
 	"github.com/F5GO/poisq/internal/config"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/keypool"
@@ -136,6 +137,16 @@ func main() {
 		jobRepo, trackRepo, cacheRepo, keyPoolMgr, tournament, lyricsCleaner, karaokePipeline, lrcWriter,
 	)
 
+	confidenceRepo := db.NewConfidenceRepository(poisqDB)
+	var alignerClient *aligner.Client
+	if cfg.AlignerURL != "" {
+		alignerClient = aligner.NewClient(cfg.AlignerURL, cfg.AlignerToken)
+		queueWorker.SetAligner(alignerClient, confidenceRepo, pathGuard.Root(), cfg.AlignerMusicPath)
+		log.Printf("[INFO] Акустическое выравнивание включено: сервис %s (проверка связи выполняется при первой задаче)", cfg.AlignerURL)
+	} else {
+		log.Printf("[INFO] ALIGNER_URL не задан: караоке-тайминг строится облачным режимом Groq Whisper + Gemini")
+	}
+
 	// 5. Быстрая загрузка поискового словаря из SQLite Navidrome (без блокировки старта серверов)
 	if sqliteDB, err := db.OpenDatabase(cfg.NavidromeDBPath); err == nil {
 		if items, err := db.LoadLibraryVocabulary(sqliteDB); err == nil {
@@ -172,6 +183,8 @@ func main() {
 	)
 	adminHandler.SetMetadataArbiter(metadataArbiter)
 	adminHandler.SetPoisqDB(poisqDB)
+	adminHandler.SetConfidenceRepository(confidenceRepo)
+	adminHandler.SetAlignerClient(alignerClient)
 	if cfg.NavidromeURL != nil {
 		adminHandler.SetNavidromeURL(cfg.NavidromeURL.String())
 	}

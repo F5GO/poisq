@@ -27,10 +27,22 @@ func (s *AdminServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	alignerState := map[string]any{"configured": s.alignerCli != nil}
+	if s.alignerCli != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		err := s.alignerCli.Healthy(ctx)
+		cancel()
+		alignerState["ok"] = err == nil
+		if err != nil {
+			alignerState["error"] = err.Error()
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stats":        stats,
 		"workerPaused": s.worker.IsPaused(),
 		"serverTime":   time.Now().Unix(),
+		"aligner":      alignerState,
 	})
 }
 
