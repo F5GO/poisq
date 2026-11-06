@@ -1,0 +1,85 @@
+{
+ "id": "9cecfefd64f7479b",
+ "track_id": "nickelback-sample",
+ "status": "done",
+ "progress": [
+  {
+   "t": 0.0,
+   "msg": "Старт конвейера выравнивания (строк: 60)"
+  },
+  {
+   "t": 187.8,
+   "msg": "Готово: строк 60, неуверенных 15"
+  }
+ ],
+ "error": "",
+ "error_code": "",
+ "created": 1793972000.0,
+ "started": 1793972001.0,
+ "finished": 1793972200.0,
+ "result": {
+  "lines": [
+   {
+    "index": 0,
+    "text": "Never made it as a wise man",
+    "start": 0.48,
+    "end": 2.48,
+    "lrc_time": 0.0,
+    "confidence": "high",
+    "reason": "",
+    "estimated": false
+   },
+   {
+    "index": 1,
+    "text": "I couldn't cut it as a poor man stealing",
+    "start": 3.2,
+    "end": 5.44,
+    "lrc_time": 2.7,
+    "confidence": "high",
+    "reason": "",
+    "estimated": false
+   },
+   {
+    "index": 2,
+    "text": "Tired of living like a blind man",
+    "start": 5.84,
+    "end": 8.08,
+    "lrc_time": 5.34,
+    "confidence": "medium",
+    "reason": "второй выравниватель расходится на 0.3 с",
+    "estimated": false
+   },
+   {
+    "index": 5,
+    "text": "This is how you remind me",
+    "start": 17.08,
+    "end": 20.51,
+    "lrc_time": 16.58,
+    "confidence": "low",
+    "reason": "второй, независимый выравниватель расходится на 5.0 с; строка повторяется в песне 6 раз, а оценки расходятся; оценки времени расходятся на 5.1 с; время выбрано арбитражем двух выравнивателей",
+    "estimated": false
+   },
+   {
+    "index": 56,
+    "text": "Yeah, yeah, are we having fun yet?",
+    "start": 197.793,
+    "end": 201.62,
+    "lrc_time": 197.293,
+    "confidence": "low",
+    "reason": "второй, независимый выравниватель расходится на 7.9 с; строка повторяется в песне 3 раз, а оценки расходятся; оценки времени расходятся на 9.2 с; время выбрано арбитражем двух выравнивателей",
+    "estimated": false
+   }
+  ],
+  "lrc": "[00:00.00]Never made it as a wise man\n[00:02.70]I couldn't cut it as a poor man stealing\n[00:05.34]Tired of living like a blind man\n[00:07.58]I'm sick of sight without a sense of feeling\n[00:10.69]And this is how you remind me\n[00:16.58]This is how you remind me\n[00:20.02]Of what I really am\n[00:22.40]This is how you remind me\n[00:25.61]Of what I really am\n[00:27.78]It's not like you to say \"Sorry\"\n[00:30.68]I was waiting on a different story\n[00:33.44]This time, I'm mistaken\n[00:36.35]For handing you a heart worth breaking\n[00:38.53]And I've been wrong, I've been down\n[00:41.71]Been to the bottom of every bottle\n[00:44.77]These five words in my head\n[00:47.42]Scream, \"Are we having fun yet?\"\n[00:50.65]Yeah, yeah, yeah, no, no\n[00:56.08]Yeah, yeah, yeah, no, no\n[01:01.26]It's not like you didn't know that\n[01:03.46]I said, \"I love you,\" and I swear, I still do\n[01:07.01]And it must have been so bad\n[01:09.74]'Cause living with me must have damn near killed you\n[01:12.39]And this is how you remind me\n[01:15.94]Of what I really am\n[01:18.30]This is how you remind me\n[01:21.55]Of what I really am\n[01:23.67]It's not like you to say \"Sorry\"\n[01:26.45]I was waiting on a different story\n[01:29.30]This time, I'm mistaken\n[01:32.19]For handing you a heart worth breaking\n[01:34.39]And I've been wrong, I've been down\n[01:37.73]Been to the bottom of every bottle\n[01:40.60]These five words in my head\n[01:43.22]Scream, \"Are we having fun yet?\"\n[01:45.69]Yeah, yeah, yeah, no, no\n[01:54.95]Yeah, yeah, yeah, no, no\n[01:57.04]Yeah, yeah, yeah, no, no\n[01:57.66]Yeah, yeah, yeah, no, no\n[02:19.69]Never made it as a wise man\n[02:22.35]I couldn't cut it as a poor man stealing\n[02:25.03]And this is how you remind me\n[02:30.85]This is how you remind me\n[02:36.28]This is how you remind me\n[02:39.66]Of what I really am\n[02:42.06]This is how you remind me\n[02:45.27]Of what I really am\n[02:47.40]It's not like you to say \"Sorry\"\n[02:50.29]I was waiting on a different story\n[02:53.24]This time I'm mistaken\n[02:55.85]For handing you a heart worth breaking\n[02:58.25]And I've been wrong, I've been down\n[03:01.41]Been to the bottom of every bottle\n[03:04.47]These five words in my head\n[03:07.02]Scream, \"Are we having fun yet?\"\n[03:11.65]Yeah, yeah, are we having fun yet?\n[03:17.29]Yeah, yeah, are we having fun yet?\n[03:21.92]Yeah, yeah, are we having fun yet?\n[03:26.47]Yeah, yeah\n[03:33.78]No, no",
+  "summary": {
+   "lines": 60,
+   "high": 39,
+   "medium": 6,
+   "low": 15,
+   "estimated": 0,
+   "low_ratio": 0.25,
+   "median_gap_to_mms": 0.085,
+   "seconds": 208.4
+  }
+ }
+}
