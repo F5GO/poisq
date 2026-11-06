@@ -20,6 +20,10 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends build-e
 # audioread не объявлен в зависимостях audio-separator (0.48.0), но импортируется при запуске; setuptools нужен для pkg_resources
 RUN pip install -q audioread "setuptools<81"
 
+# torchvision здесь не нужен (только аудио), а после установки audio-separator его бинарные операторы
+# перестают соответствовать torch: transformers (через qwen-asr) при импорте падает с «torchvision::nms does not exist»
+RUN pip uninstall -y -q torchvision || true
+
 # модели audio-separator кэшируются в примонтированный том (скачиваются при первом запуске)
 ENV AUDIO_SEPARATOR_MODEL_DIR=/root/.cache/audio-separator-models
 
