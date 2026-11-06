@@ -519,6 +519,41 @@ def fuse_hits(hits, mode="median", width=0.35):
     return (statistics.median(starts), statistics.median(ends), max(h[2] for h in hits), len(hits), starts[-1] - starts[0])
 
 
+def ctx_align_lines(model, voc16, results, lines_tokens, lang_name, work):
+    """Проход 2: уточнение строки в окне вместе с соседями (предыдущая + текущая + следующая).
+    Выравниватель обязан распределить весь текст по всему аудио окна. Когда в окне только одна строка,
+    хвост предыдущей и пауза перед ней «прилипают» к её первому слову (старт получается слишком ранним).
+    Если в окне есть и текст соседей, это аудио отходит им, а время берётся только у средней строки.
+    Границы окна задаются якорями Whisper (проход 1). Результат: r['ctx_start'], r['ctx_end']."""
+    n, ok = len(results), 0
+    for i, r in enumerate(results):
+        if r["start"] is None or r.get("filled"):
+            continue
+        prev = results[i - 1] if i > 0 and results[i - 1]["start"] is not None else None
+        nxt = results[i + 1] if i + 1 < n and results[i + 1]["start"] is not None else None
+        t0 = max(0.0, (prev["asr_start"] - 0.7) if prev else (r["asr_start"] - 2.0))
+        t1 = (nxt["asr_end"] + 0.7) if nxt else (r["asr_end"] + 2.0)
+        if t1 - t0 < 0.8 or t1 - t0 > 45.0:
+            continue
+        tp = lines_tokens[i - 1] if prev else []
+        tn = lines_tokens[i + 1] if nxt else []
+        mine = lines_tokens[i]
+        tmp = os.path.join(work, f"ctx_{i}.wav")
+        run(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(t0), "-t", str(t1 - t0), "-i", voc16, "-ac", "1", "-ar", "16000", tmp])
+        try:
+            res = model.align(audio=tmp, text=" ".join(tp + mine + tn), language=lang_name)
+            sub = [(float(it.start_time) + t0, float(it.end_time) + t0) for it in res[0]]
+        except Exception as e:  # noqa: BLE001
+            print(f"   строка {i + 1}: контекстное выравнивание не удалось: {e}")
+            continue
+        if len(sub) != len(tp) + len(mine) + len(tn):
+            continue
+        r["ctx_start"], r["ctx_end"] = sub[len(tp)][0], sub[len(tp) + len(mine) - 1][1]
+        ok += 1
+    print(f"[asr-anchor] контекстное выравнивание: уточнено строк {ok}")
+    return results
+
+
 def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key, prompt="", variants=("vocals",), mix16=None, fuse="median"):
     """Подход «распознавание → якоря → точное выравнивание»:
     1) Whisper по вокалу даёт, что и когда спето (устойчиво к повторам и проигрышам);
@@ -825,6 +860,8 @@ def main():
     ap.add_argument("--sep-karaoke-stem", default="Vocals", help="имя стема второго прохода, который брать (из имени файла в скобках)")
     ap.add_argument("--asr-variants", dest="asr_variants", default="vocals",
                     help="версии распознавания для голосования через запятую: " + ",".join(ASR_VARIANTS) + " (кэшируются в рабочей папке)")
+    ap.add_argument("--ctx-align", dest="ctx_align", action="store_true",
+                    help="проход 2: выравнивать строку в окне вместе с соседями (против «приклеенных» стартов), метрики вариантов ctx/med4")
     ap.add_argument("--fuse", choices=["median", "mode"], default="median",
                     help="как сливать версии распознавания: median (медиана всех) или mode (самая плотная группа, выбросы отбрасываются)")
     ap.add_argument("--whisper-prompt", dest="whisper_prompt", action="store_true",
@@ -1012,6 +1049,8 @@ def main():
             run(["ffmpeg", "-loglevel", "error", "-y", "-i", mix_wav, "-ac", "1", "-ar", "16000", mix16_])
         results, asr, per_variant = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key,
                                                      wprompt if "prompt" in avars else "", avars, mix16_, args.fuse)
+        if args.ctx_align:
+            results = ctx_align_lines(model, wavs["vocals"], results, lines_tokens, lang, args.work)
         _rms = vocal_rms(wavs["vocals"])
         results = fill_gaps(model, wavs["vocals"], results, lines_tokens, lang, args.work, _rms)
         results = fix_stretched_starts(results, _rms, lines_tokens)
@@ -1072,6 +1111,8 @@ def main():
         if has_ref and no_gold and errs:
             print("[asr-anchor] (эталон — тайминг LRCLIB, приблизительный; сравнение по номерам строк, найдено %d из %d)" % (len(errs), len(results)))
             variants = {"whisper": [], "qwen": [], "hybrid": [], "final": [], "auto": [], "med3": []}
+            if args.ctx_align:
+                variants["ctx"], variants["med4"] = [], []
             guards = (0.6, 0.9, 1.3)
             for gt in guards:
                 variants["guardW%.1f" % gt] = []
@@ -1086,6 +1127,11 @@ def main():
                 variants["hybrid"].append((r["asr_start"] if (q_ is None or r.get("clamped")) else q_) - g_)
                 variants["final"].append(r.get("start_pre", r["start"]) - g_)
                 variants["auto"].append(r["start"] - g_)
+                if args.ctx_align:
+                    c_ = r.get("ctx_start", q_ if q_ is not None else r["asr_start"])
+                    variants["ctx"].append(c_ - g_)
+                    variants["med4"].append(statistics.median([r["asr_start"], q_ if q_ is not None else r["asr_start"],
+                                                               c_, r.get("start_pre", r["start"])]) - g_)
                 variants["med3"].append(statistics.median([r["asr_start"], q_ if q_ is not None else r["asr_start"],
                                                            r.get("start_pre", r["start"])]) - g_)
                 hyb_ = r["asr_start"] if (q_ is None or r.get("clamped")) else q_
