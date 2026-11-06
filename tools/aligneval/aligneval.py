@@ -542,6 +542,75 @@ def ctx_ok(r, key="ctx_start", thr=CTX_TRUST):
     return v is not None and r.get("asr_start") is not None and abs(v - r["asr_start"]) <= thr
 
 
+_RU_TO_LAT = {"а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh", "з": "z", "и": "i", "й": "y",
+              "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f",
+              "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sh", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya"}
+
+
+class MmsAligner:
+    """Второй, независимый выравниватель: CTC-модель MMS_FA (wav2vec2 на 1100+ языков, torchaudio).
+    Совпадает по интерфейсу с Qwen3ForcedAligner (align(audio, text, language) -> [[слова со start_time/end_time]]),
+    поэтому годится для тех же контекстных окон. Выравнивание идёт по символам латиницы (русский транслитерируется).
+    Ошибки у него иные, чем у Qwen: нет регрессии по тексту, только эмиссии символов и Витерби."""
+
+    class _Item:
+        def __init__(self, text, start, end):
+            self.text, self.start_time, self.end_time = text, start, end
+
+    def __init__(self, device="cpu"):
+        import torch
+        import torchaudio
+
+        self.torch, self.torchaudio, self.device = torch, torchaudio, device
+        bundle = torchaudio.pipelines.MMS_FA
+        self.model = bundle.get_model(with_star=False).to(device).eval()
+        self.dict = bundle.get_dict(star=None)
+        self.sr = bundle.sample_rate
+
+    def _romanize(self, word):
+        out = []
+        for ch in word.lower():
+            for c in _RU_TO_LAT.get(ch, ch):
+                if c in self.dict and c != "-":
+                    out.append(c)
+        return out
+
+    def align(self, audio, text, language=None):
+        import soundfile as sf
+
+        torch, torchaudio = self.torch, self.torchaudio
+        x, sr = sf.read(audio, dtype="float32")
+        if x.ndim > 1:
+            x = x.mean(axis=1)
+        wave = torch.from_numpy(x).unsqueeze(0)
+        words = text.split()
+        chars = [self._romanize(w) for w in words]
+        targets_list = [self.dict[c] for w in chars for c in w]
+        if not targets_list or wave.size(1) < sr // 5:
+            return [[self._Item(w, 0.0, 0.0) for w in words]]
+        with torch.inference_mode():
+            emission, _ = self.model(wave.to(self.device))
+            emission = torch.log_softmax(emission, dim=-1)
+        T = emission.size(1)
+        targets = torch.tensor([targets_list], dtype=torch.int32)
+        aligned, scores = torchaudio.functional.forced_align(emission.cpu(), targets, blank=0)
+        spans = torchaudio.functional.merge_tokens(aligned[0], scores[0].exp())
+        ratio = wave.size(1) / T / self.sr
+        items, k = [], 0
+        last_end = 0.0
+        for w, cs in zip(words, chars):
+            n = len(cs)
+            if n == 0:
+                items.append(self._Item(w, last_end, last_end))
+                continue
+            seg = spans[k:k + n]
+            k += n
+            st, en = seg[0].start * ratio, seg[-1].end * ratio
+            items.append(self._Item(w, st, en))
+            last_end = en
+        return [items]
+
+
 def ctx_align_lines(model, voc16, results, lines_tokens, lang_name, work, gap=4.0, rnd=1, before=1, after=1, tag=None):
     """Проход 2: уточнение строки в окне вместе с соседями (before строк до неё и after после).
     Выравниватель обязан распределить весь текст по всему аудио окна. Когда в окне только одна строка,
@@ -937,6 +1006,8 @@ def main():
                     help="проход 2: выравнивать строку в окне вместе с соседями (против «приклеенных» стартов), метрики вариантов ctx/med4")
     ap.add_argument("--ctx-multi", dest="ctx_multi", action="store_true",
                     help="доп. окна контекста: ctxw (2+2 соседа), ctxp (только предыдущая), ctxn (только следующая); метрики и lines.json")
+    ap.add_argument("--mms-ctx", dest="mms_ctx", action="store_true",
+                    help="второй независимый выравниватель (MMS_FA, CTC) в тех же контекстных окнах: оценки ctxm (1+1) и ctxmw (2+2)")
     ap.add_argument("--ctx-gap", dest="ctx_gap", type=float, default=4.0,
                     help="контекстное окно включает соседнюю строку, только если пауза до неё не больше этого (с)")
     ap.add_argument("--ctx-rounds", dest="ctx_rounds", type=int, default=1, choices=[1, 2],
@@ -1135,6 +1206,12 @@ def main():
             results = ctx_align_lines(model, wavs["vocals"], results, lines_tokens, lang, args.work, args.ctx_gap, 1)
             if args.ctx_rounds >= 2:
                 results = ctx_align_lines(model, wavs["vocals"], results, lines_tokens, lang, args.work, args.ctx_gap, 2)
+            if args.mms_ctx:
+                t_m = time.time()
+                mms = MmsAligner(args.device if args.device in ("cpu", "mps") else "cpu")
+                print(f"[asr-anchor] модель MMS_FA загружена за {time.time() - t_m:.0f} с", flush=True)
+                for tg, bf, af in (("ctxm", 1, 1), ("ctxmw", 2, 2)):
+                    results = ctx_align_lines(mms, wavs["vocals"], results, lines_tokens, lang, args.work, args.ctx_gap, 1, bf, af, tg)
             if args.ctx_multi:
                 for tg, bf, af in (("ctxw", 2, 2), ("ctxp", 1, 0), ("ctxn", 0, 1)):
                     results = ctx_align_lines(model, wavs["vocals"], results, lines_tokens, lang, args.work, args.ctx_gap, 1, bf, af, tg)
@@ -1197,7 +1274,7 @@ def main():
                 "line": ln, "text": " ".join(lines_tokens[ln]), "ref": gold[ln][0] if has_ref else None,
                 "found": r["start"] is not None, "filled": bool(r.get("filled")), "stretch_fixed": bool(r.get("stretch_fixed")),
                 "asr": r.get("asr_start"), "asr_end": r.get("asr_end"), "qwen": r.get("qwen_start"), "clamped": r.get("clamped"),
-                "ctx": r.get("ctx_start"), "ctx_end": r.get("ctx_end"), "ctx2": r.get("ctx2_start"), "ctxw": r.get("ctxw_start"), "ctxp": r.get("ctxp_start"), "ctxn": r.get("ctxn_start"), "pre": r.get("start_pre"), "final": r["start"], "end": r["end"],
+                "ctx": r.get("ctx_start"), "ctx_end": r.get("ctx_end"), "ctx2": r.get("ctx2_start"), "ctxm": r.get("ctxm_start"), "ctxmw": r.get("ctxmw_start"), "ctxw": r.get("ctxw_start"), "ctxp": r.get("ctxp_start"), "ctxn": r.get("ctxn_start"), "pre": r.get("start_pre"), "final": r["start"], "end": r["end"],
                 "support": r.get("support"), "of": r.get("of_variants"), "spread": r.get("spread"),
                 "variants": {n: (per_variant[n][ln][0] if per_variant[n][ln] else None) for n in per_variant},
             })
