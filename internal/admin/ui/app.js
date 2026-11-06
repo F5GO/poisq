@@ -910,12 +910,14 @@ async function openTrackInKaraoke(trackId) {
     return;
   }
   let track = state.tracks.find(t => t.id === trackId);
+  let confidence = null;
 
   try {
     const res = await fetchApi(`/lyrics/cache?trackId=${encodeURIComponent(trackId)}`);
     if (res.track) {
       track = res.track;
     }
+    confidence = res.confidence || null;
   } catch (err) {
     console.warn("Не удалось получить свежие данные текстов трека:", err);
   }
@@ -1007,7 +1009,7 @@ async function openTrackInKaraoke(trackId) {
     updatePlayIcons();
   }
 
-  window.TimelineEditor?.load(track, state.lyrics, hasValidLrcTimestamps);
+  window.TimelineEditor?.load(track, state.lyrics, hasValidLrcTimestamps, confidence);
   if (state.editorMode === "timeline" && state.audioEl) {
     state.audioEl.preload = "metadata";
     state.audioEl.load();
@@ -1179,7 +1181,7 @@ function openRawEditor() {
 }
 
 // Записывает LRC в базу и рядом с аудиофайлом. Возвращает true при успехе.
-async function persistLrcContent(content) {
+async function persistLrcContent(content, extra = {}) {
   if (!state.selectedTrack) {
     showToast("Трек не выбран", "error");
     return false;
@@ -1188,7 +1190,8 @@ async function persistLrcContent(content) {
     const res = await fetchApi("/lyrics/save", "POST", {
       trackId: state.selectedTrack.id,
       content,
-      verified: true
+      verified: true,
+      ...extra
     });
 
     if (res.lrcWritten) {
@@ -1230,7 +1233,7 @@ async function saveRawLrc() {
   }
 
   if (await persistLrcContent(content)) {
-    window.TimelineEditor?.load(state.selectedTrack, state.lyrics, true);
+    window.TimelineEditor?.load(state.selectedTrack, state.lyrics, true, null);
     setEditorMode("karaoke");
   }
 }

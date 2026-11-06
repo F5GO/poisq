@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   
   <!-- Модульная дизайн-система -->
-  <link rel="stylesheet" href="/styles.css?v=2.5.0" />
+  <link rel="stylesheet" href="/styles.css?v=2.6.0" />
 </head>
 <body>
   
@@ -195,6 +195,8 @@
               <button class="btn btn-secondary" id="tl-undo" title="Отменить (Ctrl/Cmd+Z)" disabled>Отменить</button>
               <button class="btn btn-secondary" id="tl-redo" title="Повторить (Ctrl/Cmd+Shift+Z)" disabled>Повторить</button>
               <button class="btn btn-secondary" id="tl-open-raw" title="Править весь текст .lrc как обычный текст">Править текстом</button>
+              <span class="tl-flag-chip hidden" id="tl-flag-count" title="Строки, время которых система считает неуверенным: они подсвечены в списке и на волне"></span>
+              <button class="btn btn-secondary" id="tl-next-flag" title="Перейти к следующей неуверенной строке" disabled>Следующая неуверенная</button>
               <span class="tl-spacer"></span>
               <span class="tl-dirty hidden" id="tl-dirty">Есть несохранённые изменения</span>
               <button class="btn btn-secondary" id="tl-revert" disabled>Отменить изменения</button>
@@ -505,7 +507,7 @@
   <!-- Контейнер Toast-уведомлений -->
   <div id="toast-container" class="toast-container"></div>
 
-  <script src="/app.js?v=2.5.0"></script>
-  <script src="/timeline-editor.js?v=2.5.2"></script>
+  <script src="/app.js?v=2.6.0"></script>
+  <script src="/timeline-editor.js?v=2.6.0"></script>
 </body>
 </html>
