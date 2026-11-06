@@ -482,7 +482,7 @@
 
 .tl-row {
   display: grid;
-  grid-template-columns: 28px 96px 1fr 28px;
+  grid-template-columns: 44px 96px 1fr 28px;
   align-items: center;
   gap: 8px;
   padding: 3px 8px;
@@ -570,3 +570,27 @@
 @media (max-width: 900px) {
   .tl-hint { display: none; }
 }
+
+/* Уверенность выравнивания: подсветка сомнительных строк */
+.tl-flag-chip {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-red);
+  background: var(--color-red-bg);
+  border-radius: var(--radius-pill);
+  padding: 4px 10px;
+}
+
+.tl-row.conf-low {
+  background: var(--color-red-bg);
+  border-left: 3px solid var(--color-red);
+}
+
+.tl-row.conf-medium {
+  background: var(--color-amber-bg);
+  border-left: 3px solid var(--color-amber);
+}
+
+.tl-flag { color: var(--color-red); font-size: 11px; margin-right: 3px; cursor: help; }
+.tl-row.conf-medium .tl-flag { color: var(--color-amber); }
+.tl-num { white-space: nowrap; }

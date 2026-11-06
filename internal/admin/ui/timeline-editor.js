@@ -79,6 +79,78 @@
       .join("\n");
   }
 
+  // --- Уверенность выравнивания (подсветка сомнительных строк) ---------------------------------------------------
+  function normText(t) {
+    return String(t || "").toLowerCase().replace(/ё/g, "е").match(/[\p{L}\p{N}]+/gu)?.join(" ") || "";
+  }
+
+  // Сопоставляет сохранённые пометки сервиса со строками редактора: тот же текст и время рядом (±1.5 с), по очереди.
+  function applyConfidence(lines, confidence) {
+    const entries = (confidence && Array.isArray(confidence.lines) ? confidence.lines : []).map((e) => ({ e, used: false, n: normText(e.text) }));
+    ed.hasConfidence = entries.length > 0;
+    for (const l of lines) {
+      l.conf = null;
+      l.auto = ed.hasConfidence ? l.sec : null; // исходное автоматическое время: от него считаются ручные правки
+      l.autoText = l.text;
+      if (!ed.hasConfidence) continue;
+      const n = normText(l.text);
+      let best = null;
+      for (const c of entries) {
+        if (c.used || c.n !== n) continue;
+        const d = Math.abs((c.e.sec || 0) - l.sec);
+        if (d <= 1.5 && (best === null || d < best.d)) best = { c, d };
+      }
+      if (best) {
+        best.c.used = true;
+        if (best.c.e.level === "low" || best.c.e.level === "medium") l.conf = { level: best.c.e.level, reason: best.c.e.reason || "" };
+      }
+    }
+  }
+
+  // Строка остаётся помеченной, пока её время и текст не тронуты (после правки пометка снимается как «проверено»)
+  function isFlagged(l) {
+    return !!(l.conf && l.auto != null && Math.abs(l.sec - l.auto) < 0.05 && l.text === l.autoText);
+  }
+
+  function flaggedLines() {
+    return ed.lines.filter(isFlagged);
+  }
+
+  function refreshFlags() {
+    const box = rowsEl();
+    if (box) {
+      for (const l of ed.lines) {
+        const row = rowById(l.id);
+        if (!row) continue;
+        const f = isFlagged(l);
+        row.classList.toggle("conf-low", f && l.conf.level === "low");
+        row.classList.toggle("conf-medium", f && l.conf.level === "medium");
+        const badge = row.querySelector(".tl-flag");
+        if (badge) {
+          badge.classList.toggle("hidden", !f);
+          badge.title = f ? l.conf.reason || "Время этой строки неуверенное: проверьте на слух" : "";
+        }
+      }
+    }
+    const low = flaggedLines().filter((l) => l.conf.level === "low").length;
+    const med = flaggedLines().length - low;
+    const chip = document.getElementById("tl-flag-count");
+    if (chip) {
+      chip.classList.toggle("hidden", !ed.hasConfidence || low + med === 0);
+      chip.textContent = `Проверить: ${low}` + (med ? ` (+${med} спорных)` : "");
+    }
+    document.getElementById("tl-next-flag")?.toggleAttribute("disabled", low + med === 0);
+  }
+
+  function nextFlagged() {
+    const flagged = flaggedLines();
+    if (!flagged.length) return;
+    const cur = lineById(ed.selectedId);
+    const after = cur ? flagged.find((l) => l.sec > cur.sec + 0.001) : null;
+    const pick = after || flagged[0];
+    select(pick.id, { center: true, seek: true });
+  }
+
   function duration() {
     if (ed.wave && ed.wave.duration > 0) return ed.wave.duration;
     return state.totalSec || 0;
@@ -92,7 +164,7 @@
   // Рабочая копия, история, dirty
   // ---------------------------------------------------------------------------
   function snapshot() {
-    return ed.lines.map((l) => ({ id: l.id, sec: l.sec, text: l.text }));
+    return ed.lines.map((l) => ({ id: l.id, sec: l.sec, text: l.text, auto: l.auto, autoText: l.autoText, conf: l.conf }));
   }
 
   function sortLines() {
@@ -139,12 +211,14 @@
   // ---------------------------------------------------------------------------
   // Загрузка трека
   // ---------------------------------------------------------------------------
-  function load(track, lyrics, hasTimestamps) {
+  function load(track, lyrics, hasTimestamps, confidence) {
     ed.track = track;
     ed.nextId = 1;
     ed.synthetic = !hasTimestamps && (lyrics || []).length > 0;
     ed.lines = (lyrics || []).map((l) => ({ id: ed.nextId++, sec: l.sec, text: l.text }));
     sortLines();
+    ed.lastConfidence = hasTimestamps ? confidence : null;
+    applyConfidence(ed.lines, ed.lastConfidence);
     ed.original = ed.synthetic ? "" : buildLrc(ed.lines);
     ed.selectedId = null;
     ed.wave = null;
@@ -155,6 +229,16 @@
     updateToolbar();
     if (ed.visible) startWave();
     draw();
+  }
+
+  // После сохранения «исходным автоматическим временем» становится сохранённое, дальше правки считаются от него
+  function rebaseAfterSave() {
+    for (const l of ed.lines) {
+      if (l.auto != null) {
+        l.auto = l.sec;
+        l.autoText = l.text;
+      }
+    }
   }
 
   async function startWave() {
@@ -202,8 +286,8 @@
       ed.lines
         .map(
           (l, i) => `
-      <div class="tl-row${l.id === ed.selectedId ? " selected" : ""}" data-id="${l.id}">
-        <span class="tl-num mono">${i + 1}</span>
+      <div class="tl-row${l.id === ed.selectedId ? " selected" : ""}${isFlagged(l) ? " conf-" + l.conf.level : ""}" data-id="${l.id}">
+        <span class="tl-num mono"><span class="tl-flag${isFlagged(l) ? "" : " hidden"}" title="${escapeHtml(isFlagged(l) ? l.conf.reason || "Время этой строки неуверенное: проверьте на слух" : "")}">⚠</span>${i + 1}</span>
         <input class="tl-time mono" value="${fmtTime(l.sec)}" spellcheck="false" aria-label="Время строки ${i + 1}" />
         <input class="tl-text" value="${escapeHtml(l.text).replace(/"/g, "&quot;")}" aria-label="Текст строки ${i + 1}" />
         <button class="tl-del" title="Удалить строку" aria-label="Удалить строку ${i + 1}">✕</button>
@@ -270,6 +354,7 @@
     if (l) {
       l.text = e.target.value;
       updateToolbar();
+      refreshFlags();
       draw();
     }
   }
@@ -300,6 +385,7 @@
         e.target.value = fmtTime(l.sec);
       }
       commit();
+      refreshFlags();
       if (id === ed.selectedId) centerOn(l.sec);
       draw();
     }
@@ -368,7 +454,7 @@
 
   function addLine() {
     const sec = Math.round((state.currentSec || 0) * 100) / 100;
-    const line = { id: ed.nextId++, sec, text: "" };
+    const line = { id: ed.nextId++, sec, text: "", conf: null, auto: null, autoText: "" };
     ed.lines.push(line);
     sortLines();
     ed.selectedId = line.id;
@@ -389,13 +475,22 @@
       showToast("Нечего сохранять: нет ни одной строки с текстом", "error");
       return;
     }
-    const ok = await persistLrcContent(content);
+    // Обратная связь для сервиса: оставшиеся помеченные строки и ручные правки времени «было → стало»
+    const corrections = ed.lines
+      .filter((l) => l.auto != null && l.text === l.autoText && Math.abs(l.sec - l.auto) >= 0.05)
+      .map((l) => ({ text: l.text.trim(), from: Math.round(Math.max(0, l.auto) * 100) / 100, to: Math.round(l.sec * 100) / 100, confidence: l.conf ? l.conf.level : "high" }));
+    const confidence = flaggedLines().map((l) => ({ text: l.text.trim(), sec: Math.round(l.sec * 100) / 100, level: l.conf.level, reason: l.conf.reason }));
+    const extra = ed.hasConfidence ? { confidence, corrections } : {};
+    const ok = await persistLrcContent(content, extra);
     if (ok) {
       ed.original = buildLrc(ed.lines);
       ed.synthetic = false;
+      rebaseAfterSave();
       renderRows();
       markSelectedRow(false);
       updateToolbar();
+      refreshFlags();
+      if (corrections.length) showToast(`Сохранено правок времени: ${corrections.length} (они пригодятся для улучшения точности)`, "info");
     }
   }
 
@@ -407,6 +502,7 @@
       ed.lines = JSON.parse(ed.history[0]);
     } else {
       ed.lines = parseLRC(ed.original).map((l) => ({ id: ed.nextId++, sec: l.sec, text: l.text }));
+      applyConfidence(ed.lines, ed.lastConfidence);
     }
     ed.selectedId = null;
     resetHistory();
@@ -422,6 +518,7 @@
     document.getElementById("tl-redo")?.toggleAttribute("disabled", ed.histIdx >= ed.history.length - 1);
     document.getElementById("tl-dirty")?.classList.toggle("hidden", !dirty);
     document.getElementById("tl-play-marker")?.toggleAttribute("disabled", !ed.track);
+    refreshFlags();
   }
 
   // ---------------------------------------------------------------------------
@@ -485,6 +582,7 @@
       violet: v("--poisq-violet", "#7C3AED"),
       surface: v("--bg-surface", "#FFFFFF"),
       red: v("--color-red", "#EF4444"),
+      amber: v("--color-amber", "#F59E0B"),
     };
     ed.colorsAt = now;
     return ed.colors;
@@ -601,8 +699,10 @@
       if (x < -200 || x > W + 4) return;
       const selected = l.id === ed.selectedId;
       if (selected) return; // выделенную рисуем последней, поверх остальных
-      ctx.strokeStyle = col.violet;
-      ctx.globalAlpha = 0.45;
+      const flagged = isFlagged(l);
+      const mcol = flagged ? (l.conf.level === "low" ? col.red : col.amber) : col.violet;
+      ctx.strokeStyle = mcol;
+      ctx.globalAlpha = flagged ? 0.85 : 0.45;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(Math.round(x) + 0.5, RULER_H);
@@ -613,9 +713,9 @@
       const next = ed.lines[i + 1];
       const room = next ? xOf(next.sec) - x - 6 : W - x;
       if (room > 26) {
-        ctx.fillStyle = col.violet;
+        ctx.fillStyle = mcol;
         ctx.globalAlpha = 0.85;
-        let label = `${i + 1} ${l.text}`;
+        let label = `${flagged ? "⚠ " : ""}${i + 1} ${l.text}`;
         while (label.length > 3 && ctx.measureText(label).width > room) label = label.slice(0, -2);
         ctx.fillText(label, x + 4, H - 10);
         ctx.globalAlpha = 1;
@@ -742,6 +842,7 @@
         ed.drag.moved = true;
         syncRowTime(l.id);
         updateToolbar();
+        refreshFlags();
         draw();
       }
       // автопрокрутка у краёв
@@ -802,6 +903,7 @@
     setPlayhead(sec);
     if (xOf(sec) < 20 || xOf(sec) > ed.cssW - 20) centerOn(sec);
     updateToolbar();
+    refreshFlags();
     draw();
     return true;
   }
@@ -895,6 +997,7 @@
     document.getElementById("tl-save")?.addEventListener("click", save);
     document.getElementById("tl-revert")?.addEventListener("click", revert);
     document.getElementById("tl-play-marker")?.addEventListener("click", playFromMarker);
+    document.getElementById("tl-next-flag")?.addEventListener("click", nextFlagged);
     document.getElementById("tl-zoom")?.addEventListener("input", onZoomSlider);
     document.getElementById("tl-zoom-in")?.addEventListener("click", () => setZoom(ed.pxPerSec * 1.5));
     document.getElementById("tl-zoom-out")?.addEventListener("click", () => setZoom(ed.pxPerSec / 1.5));
