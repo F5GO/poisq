@@ -285,17 +285,36 @@ def match_ref_to_asr(ref, asr, min_sim=0.6, gap_ref=-0.95, gap_asr=-0.4):
     return out
 
 
-def groq_words(wav16, lang_iso, api_key):
+def make_whisper_prompt(raw_lines, max_chars=700):
+    """Подсказка для Whisper: первые уникальные строки текста (до ~224 токенов). Помогает распознавать
+    пение, имена и редкие слова; на повторах не должна подсказывать лишнего, поэтому строки без дублей."""
+    seen, out, total = set(), [], 0
+    for l in raw_lines:
+        k = " ".join(tokens(l))
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        if total + len(l) + 1 > max_chars:
+            break
+        out.append(l.strip())
+        total += len(l) + 1
+    return " ".join(out)
+
+
+def groq_words(wav16, lang_iso, api_key, prompt=""):
     """Whisper large-v3 на ЧИСТОМ вокале: слова с таймкодами (грубая карта «что и когда спето»)."""
     import requests
 
+    data = {"model": "whisper-large-v3", "response_format": "verbose_json", "temperature": "0",
+            "language": lang_iso, "timestamp_granularities[]": "word"}
+    if prompt:
+        data["prompt"] = prompt
     with open(wav16, "rb") as f:
         r = requests.post(
             "https://api.groq.com/openai/v1/audio/transcriptions",
             headers={"Authorization": "Bearer " + api_key},
             files={"file": ("vocals.wav", f, "audio/wav")},
-            data={"model": "whisper-large-v3", "response_format": "verbose_json", "temperature": "0",
-                  "language": lang_iso, "timestamp_granularities[]": "word"},
+            data=data,
             timeout=180,
         )
     if r.status_code != 200:
@@ -408,12 +427,12 @@ def apply_start_guard(results, thr=0.9, trust_median=0.5):
     return changed, med
 
 
-def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key):
+def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key, prompt=""):
     """Подход «распознавание → якоря → точное выравнивание»:
     1) Whisper по вокалу даёт, что и когда спето (устойчиво к повторам и проигрышам);
     2) слова эталона сопоставляются с распознанными строго по порядку; строки без пары считаются «не найденными в записи»;
     3) для найденных строк время уточняется Qwen3-ForcedAligner в коротком окне вокруг якоря."""
-    asr = groq_words(voc16, lang_iso, api_key)
+    asr = groq_words(voc16, lang_iso, api_key, prompt)
     asr_tokens = [(" ".join(tokens(w)), st, en) for w, st, en in asr]
     asr_tokens = [t for t in asr_tokens if t[0]]
     ref = [w for t in lines_tokens for w in t]
@@ -667,6 +686,21 @@ def separate_with_audio_separator(mix_wav, args):
     return stem
 
 
+def karaoke_pass(stem, args):
+    """Второй проход «караоке» поверх готового стема вокала (например, от Demucs): модель убирает подпевки и
+    оставляет основной голос. Для CPU без AVX2 подходят лёгкие ONNX-модели (UVR_MDXNET_KARA_2.onnx)."""
+    import glob
+
+    k_dir = os.path.join(args.work, "stems", "karaoke_" + re.sub(r"[^A-Za-z0-9_.-]", "_", args.sep_karaoke_model))
+    os.makedirs(k_dir, exist_ok=True)
+    os.makedirs(os.environ.get("AUDIO_SEPARATOR_MODEL_DIR", "/root/.cache/audio-separator-models"), exist_ok=True)
+    run(["audio-separator", stem, "--model_filename", args.sep_karaoke_model, "--output_format", "WAV", "--output_dir", k_dir])
+    files = [f for f in glob.glob(os.path.join(k_dir, "*.wav")) if f"({args.sep_karaoke_stem})" in os.path.basename(f)]
+    if not files:
+        sys.exit(f"караоке-проход не создал стем «{args.sep_karaoke_stem}» в {k_dir}: {os.listdir(k_dir)}")
+    return max(files, key=os.path.getmtime)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("audio", help="путь к аудиофайлу")
@@ -685,6 +719,8 @@ def main():
     ap.add_argument("--sep-overlap", type=int, default=0, help="mdxc_overlap: меньше быстрее, больше качественнее швы (по умолчанию из модели, обычно 8)")
     ap.add_argument("--sep-karaoke-model", default="", help="второй проход: модель «караоке» (убрать подпевки), например mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt")
     ap.add_argument("--sep-karaoke-stem", default="Vocals", help="имя стема второго прохода, который брать (из имени файла в скобках)")
+    ap.add_argument("--whisper-prompt", dest="whisper_prompt", action="store_true",
+                    help="передать Whisper начало текста песни как подсказку (prompt)")
     ap.add_argument("--refine", action="store_true", help="второй проход: перевыровнять каждую строку в окне с соседями")
     ap.add_argument("--snap-onset", dest="snap_onset", action="store_true", help="подтянуть начало строк к реальному началу голоса")
     ap.add_argument("--lead", type=float, default=0.5, help="на сколько сек раньше писать время строк в итоговый LRC (по умолчанию 0.5)")
@@ -762,10 +798,13 @@ def main():
         if not os.path.exists(voc16):
             t1 = time.time()
             if args.separator == "demucs":
-                run([sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs", "-o", os.path.join(args.work, "stems"), mix_wav])
                 stem = os.path.join(args.work, "stems", "htdemucs", "track_mix", "vocals.wav")
+                if not os.path.exists(stem):  # стем Demucs уже есть в рабочей папке: не пересчитываем (6-7 минут)
+                    run([sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs", "-o", os.path.join(args.work, "stems"), mix_wav])
             else:
                 stem = separate_with_audio_separator(mix_wav, args)
+            if args.separator == "demucs" and args.sep_karaoke_model:
+                stem = karaoke_pass(stem, args)
             run(["ffmpeg", "-loglevel", "error", "-y", "-i", stem, "-ac", "1", "-ar", "16000", voc16])
             print(f"Разделение вокала ({args.separator}{' ' + args.sep_model if args.separator != 'demucs' else ''}): {time.time() - t1:.1f} сек")
         wavs["vocals"] = voc16
@@ -852,7 +891,10 @@ def main():
             sys.exit("--asr-anchor требует вариант vocals")
         iso = {"Russian": "ru", "English": "en"}.get(lang, "")
         t1 = time.time()
-        results, asr = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key)
+        wprompt = make_whisper_prompt([l for _, l in gold]) if args.whisper_prompt else ""
+        if wprompt:
+            print(f"[asr-anchor] подсказка для Whisper: {len(wprompt)} символов")
+        results, asr = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key, wprompt)
         _rms = vocal_rms(wavs["vocals"])
         results = fill_gaps(model, wavs["vocals"], results, lines_tokens, lang, args.work, _rms)
         results = fix_stretched_starts(results, _rms, lines_tokens)
