@@ -847,7 +847,9 @@ def main():
     ap.add_argument("--work", default="/work", help="рабочая папка (кэш стемов и результаты)")
     ap.add_argument("--lang", default="", help="Russian/English/... (по умолчанию определяется по тексту)")
     ap.add_argument("--variants", default="vocals,mix", help="что выравнивать: vocals, mix")
-    ap.add_argument("--device", default="cpu")
+    ap.add_argument("--device", default="cpu", help="устройство для Qwen-выравнивателя: cpu или mps (Apple Silicon)")
+    ap.add_argument("--demucs-device", dest="demucs_device", default="",
+                    help="устройство для Demucs: пусто (авто: cuda или cpu), cpu или mps (Apple Silicon; нужен PYTORCH_ENABLE_MPS_FALLBACK=1)")
     ap.add_argument("--pred", default="", help="только сравнить с эталоном готовый LRC (например, из poisq), без моделей")
     ap.add_argument("--text", default="", help="режим без эталона: файл с текстом (по строке); метрик не будет, только aligned_*.lrc")
     ap.add_argument("--fetch", default="", help="«Исполнитель|Название»: взять текст из LRCLIB (вместо --text и эталона)")
@@ -945,7 +947,10 @@ def main():
             if args.separator == "demucs":
                 stem = os.path.join(args.work, "stems", "htdemucs", "track_mix", "vocals.wav")
                 if not os.path.exists(stem):  # стем Demucs уже есть в рабочей папке: не пересчитываем (6-7 минут)
-                    run([sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs", "-o", os.path.join(args.work, "stems"), mix_wav])
+                    dcmd = [sys.executable, "-m", "demucs", "--two-stems=vocals", "-n", "htdemucs", "-o", os.path.join(args.work, "stems")]
+                    if args.demucs_device:
+                        dcmd += ["-d", args.demucs_device]
+                    run(dcmd + [mix_wav])
             else:
                 stem = separate_with_audio_separator(mix_wav, args)
             if args.separator == "demucs" and args.sep_karaoke_model:
