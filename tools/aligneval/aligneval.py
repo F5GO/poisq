@@ -643,6 +643,8 @@ def separate_with_audio_separator(mix_wav, args):
 
     out_dir = os.path.join(args.work, "stems", "sep_" + re.sub(r"[^A-Za-z0-9_.-]", "_", args.sep_model))
     os.makedirs(out_dir, exist_ok=True)
+    # audio-separator не создаёт папку моделей сам и падает, если её нет в смонтированном кэше
+    os.makedirs(os.environ.get("AUDIO_SEPARATOR_MODEL_DIR", "/root/.cache/audio-separator-models"), exist_ok=True)
 
     def pick(dirpath, stem_name):
         files = [f for f in glob.glob(os.path.join(dirpath, "*.wav")) if f"({stem_name})" in os.path.basename(f)]
