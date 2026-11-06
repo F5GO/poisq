@@ -136,6 +136,26 @@ func initPoisqSchema(sqliteDB *sql.DB) error {
 		value_json TEXT NOT NULL DEFAULT '{}',
 		created_at INTEGER NOT NULL DEFAULT 0
 	);
+
+	-- Уверенность акустического выравнивания по строкам (для подсветки сомнительных строк в редакторе)
+	CREATE TABLE IF NOT EXISTS lrc_confidence (
+		track_id TEXT PRIMARY KEY,
+		lines_json TEXT NOT NULL DEFAULT '[]',
+		summary_json TEXT NOT NULL DEFAULT '{}',
+		updated_at INTEGER NOT NULL DEFAULT 0
+	);
+
+	-- Ручные правки таймингов в редакторе (было -> стало): настоящий эталон для проверки и настройки выравнивания
+	CREATE TABLE IF NOT EXISTS lrc_corrections (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		track_id TEXT NOT NULL,
+		line_text TEXT NOT NULL,
+		auto_sec REAL NOT NULL,
+		corrected_sec REAL NOT NULL,
+		confidence TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS idx_lrc_corrections_track ON lrc_corrections(track_id);
 	`
 	_, err := sqliteDB.Exec(schema)
 	return err
@@ -151,7 +171,7 @@ func ResetDatabase(db *sql.DB, keepAPIKeys bool) error {
 	}
 	defer tx.Rollback()
 
-	tables := []string{"staging_changes", "tracks", "lyrics_jobs", "provider_cache"}
+	tables := []string{"staging_changes", "tracks", "lyrics_jobs", "provider_cache", "lrc_confidence", "lrc_corrections"}
 	if !keepAPIKeys {
 		tables = append(tables, "api_keys")
 	}

@@ -8,6 +8,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/F5GO/poisq/internal/ai"
+	"github.com/F5GO/poisq/internal/aligner"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/keypool"
 	"github.com/F5GO/poisq/internal/logger"
@@ -32,6 +34,12 @@ type QueueProcessor struct {
 	karaoke    *ai.KaraokePipeline
 	lrcWriter  *lyrics.AtomicLRCWriter
 	tracker    *JobTelemetryTracker
+
+	aligner     *aligner.Client // сервис акустического выравнивания (nil — используется облачный режим)
+	confidence  *db.ConfidenceRepository
+	alignerFrom string // префикс пути к музыке внутри poisq
+	alignerTo   string // тот же каталог внутри контейнера выравнивания
+	alignerPoll time.Duration
 
 	mu       sync.RWMutex
 	isPaused bool
@@ -62,6 +70,23 @@ func NewQueueProcessor(
 		wakeCh:     make(chan struct{}, 1),
 	}
 }
+
+// SetAligner подключает сервис акустического выравнивания. Если заданы pathFrom/pathTo, путь к аудиофайлу
+// переписывается из префикса poisq в префикс контейнера выравнивания (когда каталоги монтируются по-разному).
+func (qp *QueueProcessor) SetAligner(c *aligner.Client, confidence *db.ConfidenceRepository, pathFrom, pathTo string) {
+	qp.aligner = c
+	qp.confidence = confidence
+	qp.alignerFrom = strings.TrimRight(pathFrom, "/")
+	qp.alignerTo = strings.TrimRight(pathTo, "/")
+}
+
+// QuotaWaitError — задача должна подождать (например, исчерпан часовой лимит Groq), а не провалиться.
+type QuotaWaitError struct {
+	Wait time.Duration
+	Msg  string
+}
+
+func (e *QuotaWaitError) Error() string { return e.Msg }
 
 // GetJobLogs возвращает форматированные строки лога выполнения для конкретной задачи.
 func (qp *QueueProcessor) GetJobLogs(jobID int64) []string {
@@ -151,6 +176,14 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 		jobStarted := time.Now()
 
 		if err := qp.executeJob(ctx, job); err != nil {
+			var qw *QuotaWaitError
+			if errors.As(err, &qw) {
+				retryAt := time.Now().Add(qw.Wait).Unix()
+				qp.tracker.RecordStep(job.ID, "waiting", "⏳ "+qw.Msg)
+				_ = qp.jobRepo.MarkWaitingQuota(job.ID, retryAt, qw.Msg)
+				logger.Info("[WORKER] Задача #%d переведена в ожидание на %s: %s", job.ID, qw.Wait.Round(time.Second), qw.Msg)
+				return
+			}
 			if errors.Is(err, db.ErrNoAvailableKeys) {
 				if job.JobType == "whisper_karaoke" && (qp.keyPool == nil || !qp.keyPool.HasKeys("groq")) {
 					msg := "Отсутствует ключ Groq Cloud в пуле. Добавьте его во вкладке «Ключи API»."
@@ -307,6 +340,19 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 		}
 	}
 
+	// Новый путь: акустическое выравнивание в отдельном сервисе (Demucs + ансамбль Whisper + контекстное выравнивание).
+	// Если сервис не настроен или недоступен, работает прежний облачный режим (Groq Whisper + Gemini).
+	if qp.aligner != nil && (job.JobType == "whisper_karaoke" || job.JobType == "full_pipeline") && refPlain != "" {
+		aErr := qp.runAcousticAlign(ctx, job, track, refPlain)
+		if aErr == nil {
+			return nil
+		}
+		if !errors.Is(aErr, aligner.ErrUnavailable) || qp.karaoke == nil {
+			return aErr
+		}
+		qp.reportStep(job.ID, "aligner_fallback", "⚠ Сервис выравнивания недоступен ("+aErr.Error()+"): используется облачный режим Groq Whisper + Gemini")
+	}
+
 	if qp.karaoke != nil && (job.JobType == "whisper_karaoke" || job.JobType == "full_pipeline") {
 		logger.Info("[WORKER] [Задача #%d] Старт караоке-пайплайна (Groq Whisper + Gemini) для «%s — %s»...", job.ID, track.Artist, track.Title)
 
@@ -439,4 +485,119 @@ func selectBestText(lyr *lyrics.Lyrics) string {
 		return lyr.SyncedLyrics
 	}
 	return lyr.PlainLyrics
+}
+
+// confidenceLine — запись уверенности, которую читает редактор Studio.
+type confidenceLine struct {
+	Text   string  `json:"text"`
+	Sec    float64 `json:"sec"` // время строки в .lrc (после опережения)
+	Level  string  `json:"level"`
+	Reason string  `json:"reason,omitempty"`
+}
+
+// alignerLowRatioLimit — доля неуверенных строк, выше которой текст не считается подтверждённым.
+const alignerLowRatioLimit = 0.25
+
+// alignerQuotaWait — на сколько откладывать задачу при исчерпании часового лимита Groq.
+const alignerQuotaWait = 20 * time.Minute
+
+// pollInterval — как часто опрашивать сервис выравнивания (по умолчанию 5 секунд).
+func (qp *QueueProcessor) pollInterval() time.Duration {
+	if qp.alignerPoll > 0 {
+		return qp.alignerPoll
+	}
+	return 5 * time.Second
+}
+
+func (qp *QueueProcessor) mapAlignerPath(p string) string {
+	if qp.alignerFrom != "" && qp.alignerTo != "" && strings.HasPrefix(p, qp.alignerFrom+"/") {
+		return qp.alignerTo + p[len(qp.alignerFrom):]
+	}
+	return p
+}
+
+// splitLyricsLines превращает сохранённый текст (обычный или с таймкодами) в список строк для выравнивания.
+func splitLyricsLines(raw string) []string {
+	var out []string
+	for _, l := range strings.Split(lyrics.StripLRCTimestamps(raw), "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// runAcousticAlign выравнивает известный текст по аудио в сервисе выравнивания и сохраняет .lrc с уверенностью по строкам.
+func (qp *QueueProcessor) runAcousticAlign(ctx context.Context, job *db.LyricsJobRecord, track *db.TrackRecord, refPlain string) error {
+	lines := splitLyricsLines(refPlain)
+	if len(lines) < 3 {
+		return fmt.Errorf("в тексте слишком мало строк для выравнивания (%d)", len(lines))
+	}
+	if qp.keyPool == nil {
+		return db.ErrNoAvailableKeys
+	}
+	leased, err := qp.keyPool.Acquire("groq")
+	if err != nil {
+		return err
+	}
+
+	qp.reportStep(job.ID, "aligner", fmt.Sprintf("Этап 2: акустическое выравнивание в сервисе poisq-aligner (строк текста: %d). Занимает несколько минут...", len(lines)))
+	started := time.Now()
+	res, err := qp.aligner.Run(ctx, aligner.SubmitRequest{
+		AudioPath: qp.mapAlignerPath(track.FilePath),
+		Lines:     lines,
+		Lang:      track.LangCode,
+		TrackID:   track.ID,
+		GroqKey:   leased.PlainKey,
+	}, qp.pollInterval(), func(msg string) { qp.reportStep(job.ID, "aligner", msg) })
+	if err != nil {
+		var je *aligner.JobError
+		switch {
+		case errors.As(err, &je) && je.Code == "quota":
+			qp.keyPool.ReportRateLimit429(leased.ID, je.Message)
+			return &QuotaWaitError{Wait: alignerQuotaWait, Msg: "Исчерпан лимит Groq Whisper (аудио-секунды в час). Повтор через " + alignerQuotaWait.String()}
+		case errors.As(err, &je) && je.Code == "invalid_key":
+			qp.keyPool.ReportInvalid(leased.ID, 401, je.Message)
+			return db.ErrNoAvailableKeys
+		case errors.Is(err, aligner.ErrJobLost):
+			return fmt.Errorf("сервис выравнивания потерял задачу (перезапуск?): повтор: %w", err)
+		}
+		return err
+	}
+	qp.keyPool.ReportSuccess(leased.ID)
+
+	// уверенность по строкам для редактора
+	conf := make([]confidenceLine, 0, len(res.Lines))
+	for _, l := range res.Lines {
+		conf = append(conf, confidenceLine{Text: l.Text, Sec: l.LRCTime, Level: l.Confidence, Reason: l.Reason})
+	}
+	if qp.confidence != nil {
+		linesJSON, _ := json.Marshal(conf)
+		summaryJSON, _ := json.Marshal(res.Summary)
+		if cErr := qp.confidence.Set(track.ID, string(linesJSON), string(summaryJSON)); cErr != nil {
+			logger.Warn("[WORKER] [Задача #%d] Не удалось сохранить уверенность по строкам: %v", job.ID, cErr)
+		}
+	}
+
+	s := res.Summary
+	qp.reportStep(job.ID, "aligner_done", fmt.Sprintf("Выравнивание завершено за %s: строк %d, уверенно %d, спорных %d, неуверенно %d",
+		time.Since(started).Round(time.Second), s.Lines, s.High, s.Medium, s.Low))
+	verified := s.Lines > 0 && s.LowRatio <= alignerLowRatioLimit
+	if !verified {
+		warn := fmt.Sprintf("⚠ Низкая достоверность тайминга: %d из %d строк неуверенные, проверьте их в редакторе (они подсвечены)", s.Low, s.Lines)
+		qp.tracker.RecordStep(job.ID, "low_confidence", warn)
+		logger.Warn("[WORKER] [Задача #%d] %s", job.ID, warn)
+	}
+
+	if cErr := qp.cacheRepo.Upsert(db.ProviderCacheRecord{
+		TrackID:   track.ID,
+		Provider:  "poisq",
+		Kind:      "lrc",
+		Score:     100.0,
+		RawLyrics: res.LRC,
+	}); cErr != nil {
+		logger.Warn("[WORKER] [Задача #%d] Не удалось записать provider_cache: %v", job.ID, cErr)
+	}
+	qp.reportStep(job.ID, "saving", "Этап 3: запись синхронизированного .lrc на диск (источник: poisq)...")
+	return qp.saveWinningLyrics(track, "poisq", lyrics.KindLRC, res.LRC, track.LangCode, verified)
 }

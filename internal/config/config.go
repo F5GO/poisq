@@ -56,6 +56,16 @@ type Config struct {
 
 	// EnableDebugAPI — флаг включения диагностических эндпоинтов /_smart/* (по умолчанию false для безопасности).
 	EnableDebugAPI bool
+
+	// AlignerURL — адрес сервиса акустического выравнивания poisq-aligner (например, "http://aligner:4540").
+	// Пусто — сервис не используется, караоке-тайминг строится облачным режимом Groq Whisper + Gemini.
+	AlignerURL string
+
+	// AlignerToken — необязательный токен доступа к сервису выравнивания (заголовок Authorization: Bearer).
+	AlignerToken string
+
+	// AlignerMusicPath — путь к медиатеке внутри контейнера выравнивания, если он отличается от MUSIC_PATH.
+	AlignerMusicPath string
 }
 
 // Load считывает конфигурацию из переменных окружения или устанавливает значения по умолчанию.
@@ -109,6 +119,9 @@ func Load() (*Config, error) {
 		AliasesFile:          aliasesFile,
 		AliasesSyncURL:       aliasesSyncURL,
 		EnableDebugAPI:       enableDebugAPI,
+		AlignerURL:           strings.TrimSpace(getEnv("ALIGNER_URL", "")),
+		AlignerToken:         getEnv("ALIGNER_TOKEN", ""),
+		AlignerMusicPath:     strings.TrimSpace(getEnv("ALIGNER_MUSIC_PATH", "")),
 	}
 
 	return cfg, nil
