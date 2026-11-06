@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/F5GO/poisq/internal/ai"
+	"github.com/F5GO/poisq/internal/aligner"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/keypool"
 	"github.com/F5GO/poisq/internal/lyrics"
@@ -28,20 +29,22 @@ var embeddedUI embed.FS
 
 // AdminServer объединяет все сервисы и репозитории для работы веб-интерфейса на порту :4535.
 type AdminServer struct {
-	tracksRepo  *db.TrackRepository
-	stagingRepo *db.StagingRepository
-	jobRepo     *db.JobRepository
-	cacheRepo   *db.ProviderCacheRepository
-	keyPool     *keypool.Manager
-	scanner     *metadata.LibraryScanner
-	stagingSvc  *tagger.StagingService
-	lrcWriter   *lyrics.AtomicLRCWriter
-	worker      *worker.QueueProcessor
-	guard       *security.PathGuard
+	tracksRepo   *db.TrackRepository
+	stagingRepo  *db.StagingRepository
+	jobRepo      *db.JobRepository
+	cacheRepo    *db.ProviderCacheRepository
+	keyPool      *keypool.Manager
+	scanner      *metadata.LibraryScanner
+	stagingSvc   *tagger.StagingService
+	lrcWriter    *lyrics.AtomicLRCWriter
+	worker       *worker.QueueProcessor
+	guard        *security.PathGuard
 	openNavDB    func() (*sql.DB, error)
 	poisqDB      *sql.DB
 	arbiter      *ai.MetadataArbiter
 	navidromeURL string
+	confidence   *db.ConfidenceRepository
+	alignerCli   *aligner.Client
 	handler      http.Handler
 }
 

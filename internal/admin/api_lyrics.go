@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/F5GO/poisq/internal/aligner"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/lyrics"
@@ -69,6 +70,7 @@ func (s *AdminServer) handleLyricsCache(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"track":      track,
 		"candidates": cached,
+		"confidence": s.confidenceFor(track.ID),
 	})
 }
 
@@ -83,6 +85,10 @@ func (s *AdminServer) handleLyricsSave(w http.ResponseWriter, r *http.Request) {
 		Source   string `json:"source"`
 		Content  string `json:"content"`
 		Verified bool   `json:"verified"`
+		// Confidence — актуальная уверенность по строкам после правок в редакторе (необязательно).
+		Confidence json.RawMessage `json:"confidence"`
+		// Corrections — ручные правки времени строк «было → стало» (необязательно).
+		Corrections []db.Correction `json:"corrections"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body")
@@ -124,6 +130,8 @@ func (s *AdminServer) handleLyricsSave(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	s.storeEditorFeedback(track.ID, req.Confidence, req.Corrections)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":     status,
@@ -174,6 +182,9 @@ func (s *AdminServer) handleLyricsDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	_ = s.cacheRepo.DeleteAllByTrack(track.ID)
+	if s.confidence != nil {
+		_ = s.confidence.Delete(track.ID)
+	}
 
 	logger.Info("[API] Удален текст и файл .lrc для трека «%s — %s» (%s)", track.Artist, track.Title, track.ID)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -387,4 +398,54 @@ func (s *AdminServer) smartSearchTracks(status, query string, limit int) ([]db.T
 	}
 	logger.Info("[STUDIO-SEARCH] запрос %q: найдено %d из %d треков", query, len(ranked), len(rows))
 	return s.tracksRepo.ListByIDs(order)
+}
+
+// SetConfidenceRepository подключает хранилище уверенности по строкам и ручных правок.
+func (s *AdminServer) SetConfidenceRepository(repo *db.ConfidenceRepository) {
+	s.confidence = repo
+}
+
+// SetAlignerClient подключает клиент сервиса выравнивания (nil — сервис не настроен); нужен для статуса в /health.
+func (s *AdminServer) SetAlignerClient(c *aligner.Client) {
+	s.alignerCli = c
+}
+
+// confidenceFor возвращает сохранённую уверенность трека в виде {lines, summary} или nil.
+func (s *AdminServer) confidenceFor(trackID string) any {
+	if s.confidence == nil {
+		return nil
+	}
+	rec, err := s.confidence.Get(trackID)
+	if err != nil || rec == nil {
+		return nil
+	}
+	var lines, summary json.RawMessage = json.RawMessage(rec.LinesJSON), json.RawMessage(rec.SummaryJSON)
+	return map[string]any{"lines": lines, "summary": summary, "updatedAt": rec.UpdatedAt}
+}
+
+// storeEditorFeedback сохраняет из запроса сохранения актуальную уверенность и ручные правки времени.
+// Ошибки только логируются: сам .lrc уже записан, обратная связь не должна ломать сохранение.
+func (s *AdminServer) storeEditorFeedback(trackID string, confidence json.RawMessage, corrections []db.Correction) {
+	if s.confidence == nil {
+		return
+	}
+	if len(confidence) > 0 && string(confidence) != "null" {
+		var probe []map[string]any
+		if json.Unmarshal(confidence, &probe) == nil {
+			if err := s.confidence.Set(trackID, string(confidence), "{}"); err != nil {
+				logger.Warn("[API] Не удалось сохранить уверенность по строкам трека %s: %v", trackID, err)
+			}
+		}
+	}
+	if len(corrections) > 0 {
+		clean := make([]db.Correction, 0, len(corrections))
+		for _, c := range corrections {
+			if strings.TrimSpace(c.LineText) != "" {
+				clean = append(clean, c)
+			}
+		}
+		if err := s.confidence.AddCorrections(trackID, clean); err != nil {
+			logger.Warn("[API] Не удалось сохранить правки таймингов трека %s: %v", trackID, err)
+		}
+	}
 }
