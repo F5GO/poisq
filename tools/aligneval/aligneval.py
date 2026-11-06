@@ -16,6 +16,9 @@ import subprocess
 import sys
 import time
 
+LANG_ISO = {"Russian": "ru", "English": "en", "German": "de", "French": "fr", "Spanish": "es", "Italian": "it",
+            "Portuguese": "pt", "Ukrainian": "uk", "Polish": "pl", "Dutch": "nl", "Turkish": "tr", "Swedish": "sv",
+            "Japanese": "ja", "Korean": "ko", "Chinese": "zh"}
 MAX_SEC = 295.0  # лимит Qwen3-ForcedAligner: 300 сек на вызов
 
 
@@ -306,17 +309,24 @@ def groq_words(wav16, lang_iso, api_key, prompt="", model="whisper-large-v3"):
     """Whisper на ЧИСТОМ вокале: слова с таймкодами (грубая карта «что и когда спето»). Повторяет запрос при 429."""
     import requests
 
-    data = {"model": model, "response_format": "verbose_json", "temperature": "0",
-            "language": lang_iso, "timestamp_granularities[]": "word"}
+    data = {"model": model, "response_format": "verbose_json", "temperature": "0", "timestamp_granularities[]": "word"}
+    if lang_iso:
+        data["language"] = lang_iso
     if prompt:
         data["prompt"] = prompt
     r = None
+    # Groq принимает файлы до 25 МБ: длинные дорожки (WAV 16 кГц моно ~1.9 МБ/мин) сжимаем в FLAC без потерь
+    upload, fname, mime, tmp_flac = wav16, "vocals.wav", "audio/wav", None
+    if os.path.getsize(wav16) > 20 * 1024 * 1024:
+        tmp_flac = wav16 + ".upload.flac"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", wav16, "-c:a", "flac", "-compression_level", "8", tmp_flac], check=True)
+        upload, fname, mime = tmp_flac, "vocals.flac", "audio/flac"
     for attempt in range(5):
-        with open(wav16, "rb") as f:
+        with open(upload, "rb") as f:
             r = requests.post(
                 "https://api.groq.com/openai/v1/audio/transcriptions",
                 headers={"Authorization": "Bearer " + api_key},
-                files={"file": ("vocals.wav", f, "audio/wav")},
+                files={"file": (fname, f, mime)},
                 data=data,
                 timeout=240,
             )
@@ -325,6 +335,8 @@ def groq_words(wav16, lang_iso, api_key, prompt="", model="whisper-large-v3"):
         wait = min(60.0, float(r.headers.get("retry-after", 10)) + 1)
         print(f"   Groq 429 (лимит), жду {wait:.0f} с…", flush=True)
         time.sleep(wait)
+    if tmp_flac and os.path.exists(tmp_flac):
+        os.remove(tmp_flac)
     if r.status_code != 200:
         sys.exit(f"Groq HTTP {r.status_code}: {r.text[:300]}")
     return [(w["word"], float(w["start"]), float(w["end"])) for w in r.json().get("words", [])]
@@ -1029,6 +1041,9 @@ def main():
                     help="версии распознавания для голосования через запятую: " + ",".join(ASR_VARIANTS) + " (кэшируются в рабочей папке)")
     ap.add_argument("--ctx-align", dest="ctx_align", action="store_true",
                     help="проход 2: выравнивать строку в окне вместе с соседями (против «приклеенных» стартов), метрики вариантов ctx/med4")
+    ap.add_argument("--max-sec", dest="max_sec", type=float, default=MAX_SEC,
+                    help="сколько секунд трека обрабатывать (по умолчанию 295: предел Qwen на вызов при проходе по всей дорожке; "
+                         "с --only-anchor предела нет, можно ставить 1500 и больше)")
     ap.add_argument("--ctx-multi", dest="ctx_multi", action="store_true",
                     help="доп. окна контекста: ctxw (2+2 соседа), ctxp (только предыдущая), ctxn (только следующая); метрики и lines.json")
     ap.add_argument("--mms-ctx", dest="mms_ctx", action="store_true",
@@ -1093,11 +1108,11 @@ def main():
     base = os.path.join(args.work, "track")
     mix_wav = base + "_mix.wav"
     if not os.path.exists(mix_wav):
-        run(["ffmpeg", "-loglevel", "error", "-y", "-i", args.audio, "-t", str(MAX_SEC), "-ac", "2", "-ar", "44100", mix_wav])
-    stage("микс подготовлен (первые %d сек)" % MAX_SEC, t0)
+        run(["ffmpeg", "-loglevel", "error", "-y", "-i", args.audio, "-t", str(args.max_sec), "-ac", "2", "-ar", "44100", mix_wav])
+    stage("микс подготовлен (первые %d сек)" % args.max_sec, t0)
 
     # Эталонные строки только внутри обрезанного окна
-    gold = list(gold_all) if no_gold else [(s, l) for s, l in gold_all if s < MAX_SEC - 8]
+    gold = list(gold_all) if no_gold else [(s, l) for s, l in gold_all if s < args.max_sec - 8]
     lines_tokens = [tokens(l) for _, l in gold]
     keep = [i for i, t in enumerate(lines_tokens) if t]
     gold = [gold[i] for i in keep]
@@ -1212,7 +1227,7 @@ def main():
             sys.exit("для --asr-anchor задайте GROQ_API_KEY (docker run -e GROQ_API_KEY)")
         if "vocals" not in wavs:
             sys.exit("--asr-anchor требует вариант vocals")
-        iso = {"Russian": "ru", "English": "en"}.get(lang, "")
+        iso = LANG_ISO.get(lang, "")
         t1 = time.time()
         wprompt = make_whisper_prompt([l for _, l in gold]) if (args.whisper_prompt or "prompt" in args.asr_variants) else ""
         if wprompt:
@@ -1300,7 +1315,7 @@ def main():
             ln = r["line"]
             dump.append({
                 "line": ln, "text": " ".join(lines_tokens[ln]), "ref": gold[ln][0] if has_ref else None,
-                "found": r["start"] is not None, "filled": bool(r.get("filled")), "stretch_fixed": bool(r.get("stretch_fixed")),
+                "found": r["start"] is not None, "status": r.get("status"), "filled": bool(r.get("filled")), "stretch_fixed": bool(r.get("stretch_fixed")),
                 "asr": r.get("asr_start"), "asr_end": r.get("asr_end"), "qwen": r.get("qwen_start"), "clamped": r.get("clamped"),
                 "ctx": r.get("ctx_start"), "ctx_end": r.get("ctx_end"), "ctx2": r.get("ctx2_start"), "ctxm": r.get("ctxm_start"), "ctxmw": r.get("ctxmw_start"), "ctxw": r.get("ctxw_start"), "ctxp": r.get("ctxp_start"), "ctxn": r.get("ctxn_start"), "pre": r.get("start_pre"), "final": r["start"], "end": r["end"],
                 "support": r.get("support"), "of": r.get("of_variants"), "spread": r.get("spread"),
