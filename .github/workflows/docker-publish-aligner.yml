@@ -1,0 +1,67 @@
+# Сборка и публикация образа сервиса выравнивания (poisq-aligner) в GitHub Container Registry.
+# Собирается только при изменении сервиса или самого конвейера; тяжёлые слои (PyTorch) кэшируются.
+name: Build and Publish poisq-aligner Docker Image
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "aligner/**"
+      - "tools/aligneval/aligneval.py"
+      - ".github/workflows/docker-publish-aligner.yml"
+  pull_request:
+    paths:
+      - "aligner/**"
+      - "tools/aligneval/aligneval.py"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-aligner
+
+jobs:
+  test:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests (aligner service)
+        run: cd aligner && python -m unittest discover -s tests -v
+      - name: Syntax check (pipeline)
+        run: python -m py_compile tools/aligneval/aligneval.py
+
+  build-and-push:
+    name: Build & Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: aligner/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
