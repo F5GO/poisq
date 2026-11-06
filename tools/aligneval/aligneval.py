@@ -1102,6 +1102,20 @@ def main():
                 err_txt = "  ош %+.2f" % e_
             print("   строка %2d  %7.2f–%7.2f  (якорь Whisper %7.2f–%7.2f)%s %-28s %s" % (
                 r["line"] + 1, r["start"], r["end"], r["asr_start"], r["asr_end"], err_txt, r["status"], line_text[:34]))
+        # Выгрузка по каждой строке: все оценки старта и эталон. Нужна для подбора правил комбинирования «в оффлайне»
+        dump = []
+        for r in results:
+            ln = r["line"]
+            dump.append({
+                "line": ln, "text": " ".join(lines_tokens[ln]), "ref": gold[ln][0] if has_ref else None,
+                "found": r["start"] is not None, "filled": bool(r.get("filled")), "stretch_fixed": bool(r.get("stretch_fixed")),
+                "asr": r.get("asr_start"), "asr_end": r.get("asr_end"), "qwen": r.get("qwen_start"), "clamped": r.get("clamped"),
+                "ctx": r.get("ctx_start"), "ctx_end": r.get("ctx_end"), "pre": r.get("start_pre"), "final": r["start"], "end": r["end"],
+                "support": r.get("support"), "of": r.get("of_variants"), "spread": r.get("spread"),
+                "variants": {n: (per_variant[n][ln][0] if per_variant[n][ln] else None) for n in per_variant},
+            })
+        with open(os.path.join(args.work, "lines.json"), "w", encoding="utf-8") as f:
+            json.dump(dump, f, ensure_ascii=False, indent=1)
         with open(os.path.join(args.work, "aligned_asr_anchor.lrc"), "w", encoding="utf-8") as f:
             f.write("\n".join(lrc_lines) + "\n")
         if errs:
