@@ -1,13 +1,29 @@
 #!/usr/bin/env bash
-# Пакетный прогон aligneval по нескольким трекам (запускать на сервере: sudo bash batch.sh).
+# Пакетный прогон aligneval по нескольким трекам.
+# На сервере (Docker): sudo bash batch.sh.  На Mac без Docker: LOCAL=1 bash batch.sh (см. LOCAL ниже).
 # Для каждого трека своя рабочая папка (кэш Demucs сохраняется), текст берётся из LRCLIB.
 # Результат: /tmp/aligneval/batch/NN/{run.log,aligned_asr_anchor.lrc} и сводка в конце.
-MUSIC="${MUSIC:-/mnt/tank/BIGDATA/Media/Music}"
-OUT="${OUT:-/tmp/aligneval/batch}"
+# LOCAL=1 — запуск напрямую через Python из окружения $PY (по умолчанию ~/aligneval-mac/venv), без Docker:
+#   MUSIC по умолчанию /Volumes/BIGDATA/Media/Music (SMB), OUT ~/aligneval-mac/batch,
+#   ключ Groq читается из файла $GROQ_ENV (по умолчанию ~/.config/aligneval/groq.env, строка GROQ_API_KEY=...)
+LOCAL="${LOCAL:-0}"
+if [ "$LOCAL" = "1" ]; then
+  MUSIC="${MUSIC:-/Volumes/BIGDATA/Media/Music}"
+  OUT="${OUT:-$HOME/aligneval-mac/batch}"
+  PY="${PY:-$HOME/aligneval-mac/venv/bin/python}"
+  GROQ_ENV="${GROQ_ENV:-$HOME/.config/aligneval/groq.env}"
+  HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  export PYTORCH_ENABLE_MPS_FALLBACK=1
+  [ -f "$GROQ_ENV" ] && { set -a; . "$GROQ_ENV"; set +a; }
+else
+  MUSIC="${MUSIC:-/mnt/tank/BIGDATA/Media/Music}"
+  OUT="${OUT:-/tmp/aligneval/batch}"
+fi
 # ONLY="2 4 7" — только эти номера треков из списка ниже
 # дополнительные аргументы aligneval (например: SEP_ARGS="--separator audio-separator --sep-model vocals_mel_band_roformer.ckpt")
 SEP_ARGS="${SEP_ARGS:-}"
-mkdir -p "$OUT" /tmp/aligneval/cache
+mkdir -p "$OUT"
+[ "$LOCAL" = "1" ] || mkdir -p /tmp/aligneval/cache
 
 # путь относительно каталога музыки | исполнитель | название
 TRACKS=(
@@ -28,10 +44,16 @@ for entry in "${TRACKS[@]}"; do
   d=$(printf "%s/%02d" "$OUT" "$n"); mkdir -p "$d"
   IFS='|' read -r rel artist title <<<"$entry"
   echo "=== [$n/${#TRACKS[@]}] $artist — $title ($(date +%H:%M:%S))"
-  docker run --rm --env-file /tmp/aligneval/groq.env -v "$MUSIC":/music:ro -v "$d":/work \
-    -v /tmp/aligneval/cache:/root/.cache aligneval "/music/$rel" --fetch "$artist|$title" \
-    --variants vocals --asr-anchor --only-anchor $SEP_ARGS > "$d/run.log" 2>&1 \
-    || echo "   ОШИБКА, см. $d/run.log"
+  if [ "$LOCAL" = "1" ]; then
+    "$PY" "$HERE/aligneval.py" "$MUSIC/$rel" --work "$d" --fetch "$artist|$title" \
+      --variants vocals --asr-anchor --only-anchor $SEP_ARGS > "$d/run.log" 2>&1 \
+      || echo "   ОШИБКА, см. $d/run.log"
+  else
+    docker run --rm --env-file /tmp/aligneval/groq.env -v "$MUSIC":/music:ro -v "$d":/work \
+      -v /tmp/aligneval/cache:/root/.cache aligneval "/music/$rel" --fetch "$artist|$title" \
+      --variants vocals --asr-anchor --only-anchor $SEP_ARGS > "$d/run.log" 2>&1 \
+      || echo "   ОШИБКА, см. $d/run.log"
+  fi
 done
 
 echo; echo "################ СВОДКА ################"
