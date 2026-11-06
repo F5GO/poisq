@@ -520,13 +520,26 @@ def fuse_hits(hits, mode="median", width=0.35):
     return (statistics.median(starts), statistics.median(ends), max(h[2] for h in hits), len(hits), starts[-1] - starts[0])
 
 
-CTX_TRUST = 1.2  # ctx принимается, только если не уходит от якоря Whisper дальше этого (с)
+CTX_TRUST = 1.2          # ctx принимается, если не уходит от якоря Whisper дальше этого (с), когда Whisper на треке надёжен
+CTX_TRUST_LOOSE = 5.0    # то же, когда Whisper на треке в целом неточен (отсекаются только катастрофы)
+WHISPER_TRUST_MEDIAN = 0.5  # трек: медиана |ctx − Whisper| не больше этого => Whisper надёжен
 
 
-def ctx_ok(r, key="ctx_start"):
-    """Результат контекстного выравнивания пригоден как граница/итог: он есть и не уходит от якоря Whisper дальше CTX_TRUST."""
+def ctx_gate_threshold(results, key="ctx_start"):
+    """Порог принятия ctx по строкам трека. Доверие к Whisper оценивается по самому треку (без эталона):
+    медиана расхождения ctx и якоря Whisper. Если Whisper неточен (Creep: 0.74 с), строгая проверка
+    отбрасывала бы верные строки, поэтому порог ослабляется."""
+    diffs = [abs(r[key] - r["asr_start"]) for r in results
+             if r.get("start") is not None and not r.get("filled") and r.get(key) is not None and r.get("asr_start") is not None]
+    if len(diffs) < 5:
+        return CTX_TRUST
+    return CTX_TRUST if statistics.median(diffs) <= WHISPER_TRUST_MEDIAN else CTX_TRUST_LOOSE
+
+
+def ctx_ok(r, key="ctx_start", thr=CTX_TRUST):
+    """Результат контекстного выравнивания пригоден: он есть и не уходит от якоря Whisper дальше thr."""
     v = r.get(key)
-    return v is not None and r.get("asr_start") is not None and abs(v - r["asr_start"]) <= CTX_TRUST
+    return v is not None and r.get("asr_start") is not None and abs(v - r["asr_start"]) <= thr
 
 
 def ctx_align_lines(model, voc16, results, lines_tokens, lang_name, work, gap=4.0, rnd=1):
@@ -579,13 +592,14 @@ def ctx_align_lines(model, voc16, results, lines_tokens, lang_name, work, gap=4.
 
 
 def apply_ctx_to_output(results, key="ctx"):
-    """Итоговый старт = результат контекстного выравнивания, если он согласуется с якорем Whisper (CTX_TRUST),
-    иначе остаётся прежний итог. Старты не должны идти назад относительно предыдущей строки."""
+    """Итоговый старт = результат контекстного выравнивания, если он согласуется с якорем Whisper
+    (порог зависит от надёжности Whisper на треке), иначе остаётся прежний итог. Старты не идут назад."""
+    thr = ctx_gate_threshold(results, key + "_start")
     changed, prev_start = 0, -1.0
     for r in results:
         if r["start"] is None:
             continue
-        if not r.get("filled") and not r.get("stretch_fixed") and ctx_ok(r, key + "_start"):
+        if not r.get("filled") and not r.get("stretch_fixed") and ctx_ok(r, key + "_start", thr):
             cand = r[key + "_start"]
             if cand > prev_start + 0.01:
                 r["status"] += " (ctx %+.2f)" % (cand - r["start"])
@@ -593,7 +607,7 @@ def apply_ctx_to_output(results, key="ctx"):
                 r["end"] = max(r.get(key + "_end") or r["end"], cand + 0.2)
                 changed += 1
         prev_start = r["start"]
-    return changed
+    return changed, thr
 
 
 def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key, prompt="", variants=("vocals",), mix16=None, fuse="median"):
@@ -1113,8 +1127,9 @@ def main():
         g_changed, g_med = apply_start_guard(results)
         if args.ctx_align:
             ckey = "ctx2" if args.ctx_rounds >= 2 else "ctx"
-            n_ctx = apply_ctx_to_output(results, ckey)
-            print(f"[asr-anchor] итоговое время из контекстного выравнивания ({ckey}): строк {n_ctx}")
+            n_ctx, ctx_thr = apply_ctx_to_output(results, ckey)
+            print(f"[asr-anchor] итоговое время из контекстного выравнивания ({ckey}): строк {n_ctx}; "
+                  f"порог проверки по Whisper {ctx_thr:.1f} с ({'Whisper надёжен' if ctx_thr <= CTX_TRUST else 'Whisper на треке неточен, проверка ослаблена'})")
         if g_med is None:
             print("[asr-anchor] защита старта: слишком мало строк для оценки")
         elif g_changed or g_med <= 0.5:
@@ -1186,6 +1201,7 @@ def main():
                 variants["ctx"], variants["med4"], variants["ctx_gated"], variants["OUT (в LRC)"] = [], [], [], []
                 if args.ctx_rounds >= 2:
                     variants["ctx2"], variants["ctx2_gated"] = [], []
+            gate_thr = ctx_gate_threshold(results, "ctx_start") if args.ctx_align else CTX_TRUST
             guards = (0.6, 0.9, 1.3)
             for gt in guards:
                 variants["guardW%.1f" % gt] = []
@@ -1203,12 +1219,12 @@ def main():
                 if args.ctx_align:
                     c_ = r.get("ctx_start", q_ if q_ is not None else r["asr_start"])
                     variants["ctx"].append(c_ - g_)
-                    variants["ctx_gated"].append((r["ctx_start"] if ctx_ok(r, "ctx_start") else r.get("start_pre", r["start"])) - g_)
+                    variants["ctx_gated"].append((r["ctx_start"] if ctx_ok(r, "ctx_start", gate_thr) else r.get("start_pre", r["start"])) - g_)
                     variants["OUT (в LRC)"].append(r["start"] - g_)
                     if args.ctx_rounds >= 2:
                         c2_ = r.get("ctx2_start", c_)
                         variants["ctx2"].append(c2_ - g_)
-                        variants["ctx2_gated"].append((r["ctx2_start"] if ctx_ok(r, "ctx2_start") else r.get("start_pre", r["start"])) - g_)
+                        variants["ctx2_gated"].append((r["ctx2_start"] if ctx_ok(r, "ctx2_start", gate_thr) else r.get("start_pre", r["start"])) - g_)
                     variants["med4"].append(statistics.median([r["asr_start"], q_ if q_ is not None else r["asr_start"],
                                                                c_, r.get("start_pre", r["start"])]) - g_)
                 variants["med3"].append(statistics.median([r["asr_start"], q_ if q_ is not None else r["asr_start"],
