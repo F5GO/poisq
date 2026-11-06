@@ -4,6 +4,7 @@
 # Результат: /tmp/aligneval/batch/NN/{run.log,aligned_asr_anchor.lrc} и сводка в конце.
 MUSIC="${MUSIC:-/mnt/tank/BIGDATA/Media/Music}"
 OUT="${OUT:-/tmp/aligneval/batch}"
+# ONLY="2 4 7" — только эти номера треков из списка ниже
 # дополнительные аргументы aligneval (например: SEP_ARGS="--separator audio-separator --sep-model vocals_mel_band_roformer.ckpt")
 SEP_ARGS="${SEP_ARGS:-}"
 mkdir -p "$OUT" /tmp/aligneval/cache
@@ -21,7 +22,10 @@ TRACKS=(
 
 n=0
 for entry in "${TRACKS[@]}"; do
-  n=$((n+1)); d=$(printf "%s/%02d" "$OUT" "$n"); mkdir -p "$d"
+  n=$((n+1))
+  # ONLY="2 4 7" — прогнать только перечисленные номера (экономит лимиты Groq)
+  if [ -n "${ONLY:-}" ] && ! echo " $ONLY " | grep -q " $n "; then continue; fi
+  d=$(printf "%s/%02d" "$OUT" "$n"); mkdir -p "$d"
   IFS='|' read -r rel artist title <<<"$entry"
   echo "=== [$n/${#TRACKS[@]}] $artist — $title ($(date +%H:%M:%S))"
   docker run --rm --env-file /tmp/aligneval/groq.env -v "$MUSIC":/music:ro -v "$d":/work \

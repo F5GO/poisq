@@ -301,25 +301,95 @@ def make_whisper_prompt(raw_lines, max_chars=700):
     return " ".join(out)
 
 
-def groq_words(wav16, lang_iso, api_key, prompt=""):
-    """Whisper large-v3 на ЧИСТОМ вокале: слова с таймкодами (грубая карта «что и когда спето»)."""
+def groq_words(wav16, lang_iso, api_key, prompt="", model="whisper-large-v3"):
+    """Whisper на ЧИСТОМ вокале: слова с таймкодами (грубая карта «что и когда спето»). Повторяет запрос при 429."""
     import requests
 
-    data = {"model": "whisper-large-v3", "response_format": "verbose_json", "temperature": "0",
+    data = {"model": model, "response_format": "verbose_json", "temperature": "0",
             "language": lang_iso, "timestamp_granularities[]": "word"}
     if prompt:
         data["prompt"] = prompt
-    with open(wav16, "rb") as f:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/audio/transcriptions",
-            headers={"Authorization": "Bearer " + api_key},
-            files={"file": ("vocals.wav", f, "audio/wav")},
-            data=data,
-            timeout=180,
-        )
+    r = None
+    for attempt in range(5):
+        with open(wav16, "rb") as f:
+            r = requests.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": "Bearer " + api_key},
+                files={"file": ("vocals.wav", f, "audio/wav")},
+                data=data,
+                timeout=240,
+            )
+        if r.status_code != 429:
+            break
+        wait = min(60.0, float(r.headers.get("retry-after", 10)) + 1)
+        print(f"   Groq 429 (лимит), жду {wait:.0f} с…", flush=True)
+        time.sleep(wait)
     if r.status_code != 200:
         sys.exit(f"Groq HTTP {r.status_code}: {r.text[:300]}")
     return [(w["word"], float(w["start"]), float(w["end"])) for w in r.json().get("words", [])]
+
+
+ASR_VARIANTS = ("vocals", "prompt", "mix", "chunks", "turbo", "fast")
+
+
+def asr_variant_words(name, voc16, mix16, lang_iso, api_key, prompt, work):
+    """Одна «версия» распознавания. Разные входы и режимы дают разные ошибки Whisper, и при голосовании
+    они взаимно гасятся. Ответы кэшируются в work/asr_<name>.json (повторный запуск не тратит лимиты Groq)."""
+    cache = os.path.join(work, f"asr_{name}.json")
+    if os.path.exists(cache):
+        return [tuple(x) for x in json.load(open(cache, encoding="utf-8"))]
+    if name == "vocals":
+        words = groq_words(voc16, lang_iso, api_key)
+    elif name == "prompt":
+        words = groq_words(voc16, lang_iso, api_key, prompt)
+    elif name == "mix":
+        words = groq_words(mix16, lang_iso, api_key)
+    elif name == "turbo":
+        words = groq_words(voc16, lang_iso, api_key, model="whisper-large-v3-turbo")
+    elif name == "fast":
+        fast = os.path.join(work, "vocals_fast.wav")
+        run(["ffmpeg", "-loglevel", "error", "-y", "-i", voc16, "-af", "atempo=1.15", "-ac", "1", "-ar", "16000", fast])
+        words = [(w, st * 1.15, en * 1.15) for w, st, en in groq_words(fast, lang_iso, api_key)]
+    elif name == "chunks":
+        total, win, hop = audio_duration(voc16), 40.0, 30.0
+        margin = (win - hop) / 2
+        words, t = [], 0.0
+        while t < total - 1.0:
+            seg = os.path.join(work, "chunk.wav")
+            run(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(t), "-t", str(win), "-i", voc16, "-ac", "1", "-ar", "16000", seg])
+            first, last = t == 0.0, t + hop >= total - 1.0
+            lo = t if first else t + margin
+            hi = 1e9 if last else t + win - margin
+            for w, st, en in groq_words(seg, lang_iso, api_key):
+                mid = (st + en) / 2 + t
+                if lo <= mid < hi:
+                    words.append((w, st + t, en + t))
+            t += hop
+            time.sleep(1.0)
+    else:
+        sys.exit(f"неизвестный вариант распознавания: {name}")
+    json.dump(words, open(cache, "w", encoding="utf-8"), ensure_ascii=False)
+    return words
+
+
+def line_anchors(asr, lines_tokens):
+    """Для каждой строки: (начало, конец, найдено слов) по одному распознаванию или None («нет в записи»)."""
+    asr_tokens = [(" ".join(tokens(w)), st, en) for w, st, en in asr]
+    asr_tokens = [t for t in asr_tokens if t[0]]
+    ref = [w for t in lines_tokens for w in t]
+    pair = match_ref_to_asr(ref, [t[0] for t in asr_tokens])
+    out, pos = [], 0
+    for toks in lines_tokens:
+        idxs = pair[pos:pos + len(toks)]
+        pos += len(toks)
+        got = [(k, j) for k, j in enumerate(idxs) if j is not None]
+        if not toks or len(got) < max(1, (len(toks) + 1) // 2):
+            out.append(None)
+            continue
+        k0, j0 = got[0]
+        k1, j1 = got[-1]
+        out.append((max(0.0, asr_tokens[j0][1] - 0.45 * k0), asr_tokens[j1][2] + 0.45 * (len(toks) - 1 - k1), len(got)))
+    return out
 
 
 def expected_line_dur(tokens_of_line):
@@ -427,29 +497,41 @@ def apply_start_guard(results, thr=0.9, trust_median=0.5):
     return changed, med
 
 
-def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key, prompt=""):
+def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_key, prompt="", variants=("vocals",), mix16=None):
     """Подход «распознавание → якоря → точное выравнивание»:
     1) Whisper по вокалу даёт, что и когда спето (устойчиво к повторам и проигрышам);
     2) слова эталона сопоставляются с распознанными строго по порядку; строки без пары считаются «не найденными в записи»;
     3) для найденных строк время уточняется Qwen3-ForcedAligner в коротком окне вокруг якоря."""
-    asr = groq_words(voc16, lang_iso, api_key, prompt)
-    asr_tokens = [(" ".join(tokens(w)), st, en) for w, st, en in asr]
-    asr_tokens = [t for t in asr_tokens if t[0]]
-    ref = [w for t in lines_tokens for w in t]
-    pair = match_ref_to_asr(ref, [t[0] for t in asr_tokens])
+    per_variant, asr = {}, []
+    for name in variants:
+        t_v = time.time()
+        words = asr_variant_words(name, voc16, mix16, lang_iso, api_key, prompt, work)
+        per_variant[name] = line_anchors(words, lines_tokens)
+        found = sum(1 for a in per_variant[name] if a)
+        print(f"[asr-anchor] распознавание «{name}»: слов {len(words)}, найдено строк {found} из {len(lines_tokens)} ({time.time() - t_v:.0f} с)", flush=True)
+        if not asr:
+            asr = words  # первая версия — «основная» для печати карты фраз
 
-    results, pos, prev_end = [], 0, 0.0
-    for i, toks in enumerate(lines_tokens):
-        idxs = pair[pos:pos + len(toks)]
-        pos += len(toks)
-        got = [(k, j) for k, j in enumerate(idxs) if j is not None]
-        if not toks or len(got) < max(1, (len(toks) + 1) // 2):
-            results.append({"line": i, "status": "нет в записи", "start": None, "end": None, "matched": len(got), "of": len(toks)})
+    # голосование: старт/конец строки = медиана по версиям, где строка найдена; найдена хотя бы одной = есть в записи
+    fused = []
+    for i in range(len(lines_tokens)):
+        hits = [per_variant[n][i] for n in variants if per_variant[n][i]]
+        if not hits:
+            fused.append(None)
             continue
-        k0, j0 = got[0]
-        k1, j1 = got[-1]
-        a_start = max(0.0, asr_tokens[j0][1] - 0.45 * k0)
-        a_end = asr_tokens[j1][2] + 0.45 * (len(toks) - 1 - k1)
+        starts = sorted(h[0] for h in hits)
+        ends = sorted(h[1] for h in hits)
+        fused.append((statistics.median(starts), statistics.median(ends), max(h[2] for h in hits),
+                      len(hits), starts[-1] - starts[0]))
+
+    results, prev_end = [], 0.0
+    for i, toks in enumerate(lines_tokens):
+        fz = fused[i]
+        if fz is None:
+            results.append({"line": i, "status": "нет в записи", "start": None, "end": None, "matched": 0, "of": len(toks)})
+            continue
+        a_start, a_end, matched, support, spread = fz
+        got = range(matched)
         # окно не заходит левее конца предыдущей строки: строки не должны перекрываться
         t0, t1 = max(0.0, a_start - 1.5, prev_end - 0.3), a_end + 1.5
         if t1 - t0 < 0.8:
@@ -466,14 +548,17 @@ def asr_anchor_lines(model, voc16, lines_tokens, lang_name, lang_iso, work, api_
                 qwen_start, clamped = sub[0][1], abs(sub[0][1] - t0) < 0.08
         except Exception as e:  # noqa: BLE001
             print(f"   строка {i + 1}: выравнивание в окне не удалось: {e}")
+        if len(variants) > 1:
+            status += " [голосов %d/%d, разброс %.2f]" % (support, len(variants), spread)
         if start < prev_end - 0.3:  # перекрытие с предыдущей строкой: берём якорь Whisper, сдвинутый за её конец
             start = max(prev_end, a_start)
             status += " (сдвинуто)"
         end = max(end, start + 0.2)
         prev_end = end
         results.append({"line": i, "status": status, "start": start, "end": end, "matched": len(got), "of": len(toks),
-                        "asr_start": a_start, "asr_end": a_end, "qwen_start": qwen_start, "clamped": clamped})
-    return results, asr
+                        "asr_start": a_start, "asr_end": a_end, "qwen_start": qwen_start, "clamped": clamped,
+                        "support": support, "of_variants": len(variants), "spread": spread})
+    return results, asr, per_variant
 
 
 def run(cmd, **kw):
@@ -719,6 +804,8 @@ def main():
     ap.add_argument("--sep-overlap", type=int, default=0, help="mdxc_overlap: меньше быстрее, больше качественнее швы (по умолчанию из модели, обычно 8)")
     ap.add_argument("--sep-karaoke-model", default="", help="второй проход: модель «караоке» (убрать подпевки), например mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt")
     ap.add_argument("--sep-karaoke-stem", default="Vocals", help="имя стема второго прохода, который брать (из имени файла в скобках)")
+    ap.add_argument("--asr-variants", dest="asr_variants", default="vocals",
+                    help="версии распознавания для голосования через запятую: " + ",".join(ASR_VARIANTS) + " (кэшируются в рабочей папке)")
     ap.add_argument("--whisper-prompt", dest="whisper_prompt", action="store_true",
                     help="передать Whisper начало текста песни как подсказку (prompt)")
     ap.add_argument("--refine", action="store_true", help="второй проход: перевыровнять каждую строку в окне с соседями")
@@ -891,10 +978,19 @@ def main():
             sys.exit("--asr-anchor требует вариант vocals")
         iso = {"Russian": "ru", "English": "en"}.get(lang, "")
         t1 = time.time()
-        wprompt = make_whisper_prompt([l for _, l in gold]) if args.whisper_prompt else ""
+        wprompt = make_whisper_prompt([l for _, l in gold]) if (args.whisper_prompt or "prompt" in args.asr_variants) else ""
         if wprompt:
             print(f"[asr-anchor] подсказка для Whisper: {len(wprompt)} символов")
-        results, asr = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key, wprompt)
+        avars = [v.strip() for v in args.asr_variants.split(",") if v.strip()]
+        if args.whisper_prompt and "prompt" not in avars:
+            avars.append("prompt")
+        if "prompt" in avars and not wprompt:
+            wprompt = make_whisper_prompt([l for _, l in gold])
+        mix16_ = base + "_mix16k.wav"
+        if "mix" in avars and not os.path.exists(mix16_):
+            run(["ffmpeg", "-loglevel", "error", "-y", "-i", mix_wav, "-ac", "1", "-ar", "16000", mix16_])
+        results, asr, per_variant = asr_anchor_lines(model, wavs["vocals"], lines_tokens, lang, iso, args.work, key,
+                                                     wprompt if "prompt" in avars else "", avars, mix16_)
         _rms = vocal_rms(wavs["vocals"])
         results = fill_gaps(model, wavs["vocals"], results, lines_tokens, lang, args.work, _rms)
         results = fix_stretched_starts(results, _rms, lines_tokens)
@@ -975,6 +1071,13 @@ def main():
                     far_ = abs(st_ - r["asr_start"]) > gt and not r.get("stretch_fixed")
                     variants["guardW%.1f" % gt].append((r["asr_start"] if far_ else st_) - g_)
                     variants["guardH%.1f" % gt].append((hyb_ if far_ else st_) - g_)
+            for vn, anc in per_variant.items():
+                e_v = [anc[ln][0] - gold[ln][0] for ln in range(len(anc)) if anc[ln] is not None]
+                if e_v:
+                    variants["asr:" + vn] = e_v
+            if len(per_variant) > 1:
+                variants["fused"] = [r["asr_start"] - gold[r["line"]][0] for r in results
+                                     if r["start"] is not None and not r.get("filled")]
             print("[asr-anchor] СРАВНЕНИЕ ВАРИАНТОВ СТАРТА (после вычета общего сдвига эталона; медиана |ош|, доля в ±0.3 с, p90):")
             for name_, e_list in variants.items():
                 if not e_list:
