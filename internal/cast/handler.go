@@ -16,6 +16,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 // Zone — колонка в ответе приложению.
@@ -38,6 +40,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	zone := f.Get("zone")
 	ctx := r.Context()
 	method := strings.TrimSuffix(path.Base(r.URL.Path), ".view")
+	if method == "poisqCastPlay" || method == "poisqCastControl" { // опрос состояния не пишем: он идёт раз в секунду
+		logger.Info("[CAST] %s zone=%s action=%s position=%s offset=%s ids=%d client=%s from=%s",
+			method, zone, f.Get("action"), f.Get("position"), f.Get("offset"), len(f["id"]), f.Get("c"), r.RemoteAddr)
+	}
 
 	if method != "poisqCastZones" && zone == "" {
 		WriteError(w, 10, "не указан параметр zone")
