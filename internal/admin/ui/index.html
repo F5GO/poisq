@@ -14,6 +14,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#E8E9EB" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0E0F11" media="(prefers-color-scheme: dark)" />
   <title>poisq — Умный поиск музыки и текстов</title>
   
   <!-- Фирменные фавиконы и иконки poisq -->
@@ -22,13 +24,13 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/brand/apple-touch-icon.png" />
   <link rel="shortcut icon" href="/favicon.ico" />
   
-  <!-- Фирменная типографика Plus Jakarta Sans -->
+  <!-- Типографика: IBM Plex Sans (интерфейс) и IBM Plex Mono (таймкоды, числа) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   
   <!-- Модульная дизайн-система -->
-  <link rel="stylesheet" href="/styles.css?v=2.6.0" />
+  <link rel="stylesheet" href="/styles.css?v=4.0.0" />
 </head>
 <body>
   
@@ -37,7 +39,7 @@
     <div class="nav-container">
       <div class="nav-brand" id="brand-home-link" title="poisq — Умный поиск музыки и сервис текстов песен для Navidrome">
         <div class="brand-icon-wrap">
-          <img src="/assets/brand/poisq-mark-192.png" alt="poisq" class="brand-mark-img" width="32" height="32" />
+          <svg class="brand-mark-img" viewBox="0 0 28 28" aria-hidden="true"><rect x="3" y="11" width="3.5" height="6" rx="1"/><rect x="9" y="6" width="3.5" height="16" rx="1"/><rect x="15" y="9" width="3.5" height="10" rx="1"/><rect x="21" y="3" width="3.5" height="22" rx="1" class="mark-live"/></svg>
         </div>
         <div class="brand-title-wrap">
           <span class="brand-name">poisq</span>
@@ -56,7 +58,7 @@
           <span>Задачи</span>
           <span class="badge-count" id="badge-jobs-count">0</span>
         </button>
-        <button class="nav-tab" data-tab="keys">Ключи API</button>
+        <button class="nav-tab" data-tab="keys">Настройки</button>
       </nav>
 
       <div class="nav-right-cluster">
@@ -161,7 +163,7 @@
           <div class="panel-header">
             <div class="track-header-meta">
               <div class="track-cover-placeholder" id="player-cover">
-                <img src="/assets/brand/poisq-mark-192.png" alt="poisq" style="width:28px;height:28px;opacity:0.85;" />
+                <svg class="mark-ph" viewBox="0 0 28 28" width="28" height="28" aria-hidden="true"><rect x="3" y="11" width="3.5" height="6" rx="1"/><rect x="9" y="6" width="3.5" height="16" rx="1"/><rect x="15" y="9" width="3.5" height="10" rx="1"/><rect x="21" y="3" width="3.5" height="22" rx="1" class="mark-live"/></svg>
               </div>
               <div>
                 <h1 class="panel-title" id="player-title">Выберите трек из списка слева</h1>
@@ -335,12 +337,13 @@
     </section>
 
     <!-- ============================================================== -->
-    <!-- Вкладка 5: Ключи API -->
+    <!-- Вкладка 5: Настройки (ключи API, трансляция на колонки) -->
     <!-- ============================================================== -->
     <section id="panel-keys" class="tab-panel">
       <div class="panel-header">
         <div>
-          <h1 class="panel-title">Пул API-ключей</h1>
+          <h1 class="panel-title">Настройки</h1>
+          <h2 class="cast-section-title">API-ключи и токены</h2>
           <p class="panel-desc">
             Шифрование AES-256-GCM. Автоматическая ротация (LRU) и 65-секундный Cooldown при ошибке 429.
           </p>
@@ -364,6 +367,31 @@
           </tbody>
         </table>
       </div>
+
+      <h2 class="cast-section-title">Трансляция на колонки (Music Assistant)</h2>
+      <p class="panel-desc">
+        Приложение poisq может играть музыку на колонки и в комнатах через Music Assistant.
+        Токен MA добавьте в пул выше (провайдер «Music Assistant»), затем укажите адрес и выберите колонки.
+      </p>
+      <form id="form-cast" class="cast-form" autocomplete="off">
+        <div class="form-group">
+          <label class="form-label" for="cast-url">Адрес Music Assistant</label>
+          <input type="url" id="cast-url" class="form-input mono" placeholder="http://192.168.1.10:8095" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cast-provider">Источник музыки в MA</label>
+          <select id="cast-provider" class="form-select"></select>
+          <span class="form-hint">Файловый источник MA, который смотрит в ту же папку с музыкой, что и Navidrome.</span>
+        </div>
+        <fieldset class="form-group cast-players">
+          <legend class="form-label">Колонки в приложении</legend>
+          <div id="cast-players-list" class="form-hint">Колонки появятся после подключения к Music Assistant.</div>
+        </fieldset>
+        <p id="cast-status" class="form-hint" role="status"></p>
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-primary" id="btn-save-cast">Проверить и сохранить</button>
+        </div>
+      </form>
     </section>
 
   </main>
@@ -397,6 +425,7 @@
             <option value="acoustid">AcoustID (fpcalc — акустические отпечатки)</option>
             <option value="yandex">Яндекс Музыка (OAuth токен с Плюсом)</option>
             <option value="genius">Genius API (Поиск текстов андеграунда)</option>
+            <option value="music_assistant">Music Assistant (токен для трансляции на колонки)</option>
           </select>
         </div>
 

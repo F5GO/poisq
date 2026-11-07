@@ -22,6 +22,7 @@ import (
 	"github.com/F5GO/poisq/internal/admin"
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/aligner"
+	"github.com/F5GO/poisq/internal/cast"
 	"github.com/F5GO/poisq/internal/config"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/keypool"
@@ -159,7 +160,22 @@ func main() {
 	}
 
 	// 6. Запуск Публичного HTTP Reverse Proxy (:4534 — ТОЛЬКО умный поиск)
+	// Трансляция на колонки через Music Assistant: адрес и колонки — в Studio, токен — в пуле ключей
+	castService := &cast.Service{
+		DB:        poisqDB,
+		OpenNavDB: func() (*sql.DB, error) { return db.OpenDatabase(cfg.NavidromeDBPath) },
+		Token: func() (string, error) {
+			k, err := keyPoolMgr.Acquire(cast.TokenProvider)
+			if err != nil {
+				return "", err
+			}
+			return k.PlainKey, nil
+		},
+		HTTP: &http.Client{Timeout: 10 * time.Second},
+	}
+
 	proxyServer := proxy.NewServer(cfg.NavidromeURL, engine, dict, aliasMgr, cfg.EnableDebugAPI)
+	proxyServer.SetCast(castService)
 	publicHTTPServer := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           proxyServer,
@@ -185,6 +201,7 @@ func main() {
 	adminHandler.SetPoisqDB(poisqDB)
 	adminHandler.SetConfidenceRepository(confidenceRepo)
 	adminHandler.SetAlignerClient(alignerClient)
+	adminHandler.SetCast(castService)
 	if cfg.NavidromeURL != nil {
 		adminHandler.SetNavidromeURL(cfg.NavidromeURL.String())
 	}

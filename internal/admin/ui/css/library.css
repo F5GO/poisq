@@ -79,7 +79,7 @@
 .filter-pill.active {
   background: var(--color-accent-bg);
   color: var(--poisq-blue);
-  border-color: rgba(37, 99, 235, 0.35);
+  border-color: rgba(36, 56, 224, 0.35);
   font-weight: 600;
 }
 

@@ -5,6 +5,7 @@
 package proxy
 
 import (
+	"net/http/httptest"
 	"testing"
 )
 
@@ -54,5 +55,23 @@ func TestDecorateEntityName(t *testing.T) {
 				t.Errorf("DecorateEntityName(%q, %q) = %q, want %q", tt.entityName, tt.rawQuery, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestNeedsDecoratedTitles(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"/rest/search3?query=лин&c=poisq", false},
+		{"/rest/search3?query=лин&c=POISQ", false},
+		{"/rest/search3?query=лин&c=Arpeggi", true},
+		{"/rest/search3?query=лин", true},
+	}
+	for _, tc := range tests {
+		req := httptest.NewRequest("GET", tc.url, nil)
+		if got := NeedsDecoratedTitles(req); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.url, got, tc.want)
+		}
 	}
 }

@@ -1,0 +1,72 @@
+name: Poisq
+options:
+  bundleIdPrefix: app.poisq
+  developmentLanguage: en
+  deploymentTarget: { iOS: "26.1" }
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  PoisqKit: { path: PoisqKit }
+targets:
+  Poisq:
+    type: application
+    platform: iOS
+    sources: [Poisq, Shared]
+    dependencies:
+      - target: PoisqWidgets
+      - package: PoisqKit
+        product: PoisqCore
+      - package: PoisqKit
+        product: PoisqPlayback
+    info:
+      path: Poisq/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, ru]
+        UIBackgroundModes: [audio]
+        NSSupportsLiveActivities: true
+        CFBundleURLTypes:
+          - CFBundleURLName: app.poisq.ios
+            CFBundleURLSchemes: [poisq]
+        # CarPlay: сцена безвредна без entitlement (система её не запускает). Подробнее — docs/CARPLAY.md.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations:
+            # Обычная оконная сцена: без неё iOS не может открыть приложение запросом сцены (нажатие на «Сейчас играет» на экране блокировки).
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+            CPTemplateApplicationSceneSessionRoleApplication:
+              - UISceneConfigurationName: CarPlay
+                UISceneClassName: CPTemplateApplicationScene
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).CarPlaySceneDelegate
+        NSAppTransportSecurity: { NSAllowsArbitraryLoads: true } # домашние серверы по http; TODO: сузить до NSAllowsLocalNetworking + запрос подтверждения
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.poisq.ios
+        GENERATE_INFOPLIST_FILE: NO
+        # CarPlay entitlement: сейчас только для симулятора (там подпись не нужна). После получения
+        # com.apple.developer.carplay-audio замените на безусловный `CODE_SIGN_ENTITLEMENTS: Poisq/CarPlay/Poisq.entitlements`.
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Poisq/CarPlay/Poisq.entitlements
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  PoisqWidgets:
+    type: app-extension
+    platform: iOS
+    sources: [PoisqWidgets, Shared]
+    info:
+      path: PoisqWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: poisq
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, ru]
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.poisq.ios.widgets
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: PoisqWidgets/PoisqWidgets.entitlements
+        SKIP_INSTALL: YES

@@ -15,6 +15,7 @@ import (
 
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/aligner"
+	"github.com/F5GO/poisq/internal/cast"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/keypool"
 	"github.com/F5GO/poisq/internal/lyrics"
@@ -45,6 +46,7 @@ type AdminServer struct {
 	navidromeURL string
 	confidence   *db.ConfidenceRepository
 	alignerCli   *aligner.Client
+	cast         *cast.Service
 	handler      http.Handler
 }
 
@@ -107,6 +109,7 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/jobs/action", s.handleJobAction)
 
 	mux.HandleFunc("/api/v1/keys", s.handleKeysAPI)
+	mux.HandleFunc("/api/v1/cast", s.handleCast)
 	mux.HandleFunc("/api/v1/debug/fs", s.handleDebugFS)
 
 	// Встроенный фронтенд (SPA) через //go:embed с антикэшированием для динамических скриптов и стилей

@@ -1,121 +1,176 @@
 /*
- * poisq Studio — Токены дизайн-системы (Tokens & Theme Variables)
- * 
+ * poisq Studio — Токены дизайн-системы «Мастеринг» (Tokens & Theme Variables)
+ *
  * Что делает этот код и для чего он нужен:
- * Данный файл определяет дизайн-токены веб-интерфейса poisq в строгом соответствии
- * с официальным руководством по фирменному стилю бренда:
- * - Фирменная палитра: Violet (#7C3AED), Blue (#2563EB), Sky (#22B8E6), Ink (#191B2B), Slate (#666B82), Canvas (#F7F8FC), White (#FFFFFF)
- * - Трехцветный акцентный градиент: Violet -> Blue -> Sky
- * - Системные радиусы скругления Apple-inspired (карточки 16-24px, инпуты/кнопки 10-14px, чипы pill)
- * - Светлая базовая тема с поддержкой альтернативной графитовой тёмной темы.
+ * Определяет цвета, радиусы, шрифты и тени панели. Визуальная идея — приборная
+ * панель звукорежиссёра: холодно-серое шасси, чёрные «чернила» и один акцент —
+ * ультрамарин, как маркер воспроизведения. Плоские поверхности, границы 1 px,
+ * скругления 3–8 px, без стекла, градиентов и теней на карточках.
+ *
+ * Роли цвета:
+ *  - ink (чернила)  — текст, активные сегменты, маркеры строк;
+ *  - signal         — единственный акцент: главное действие, фокус, плейхед,
+ *                     активная вкладка, прогресс;
+ *  - ok / warn / err — только для статусов (готово, нужно внимание, ошибка).
+ *
+ * Контраст (WCAG 2.1): текст на панели 16.6:1, вторичный 7.6:1, приглушённый
+ * ≥ 4.6:1, акцент на панели 7.2:1, белый на акценте 7.7:1. В тёмной теме все
+ * пары ≥ 5.2:1.
  */
 
 :root {
-  /* Фирменные цвета бренда poisq */
-  --poisq-violet: #7C3AED;
-  --poisq-blue: #2563EB;
-  --poisq-sky: #22B8E6;
-  --poisq-ink: #191B2B;
-  --poisq-slate: #666B82;
-  --poisq-canvas: #F7F8FC;
-  --poisq-white: #FFFFFF;
-
-  /* Фирменные градиенты (направление: слева-снизу фиолетовый -> синий -> голубой) */
-  --brand-gradient: linear-gradient(135deg, #7C3AED 0%, #2563EB 55%, #22B8E6 100%);
-  --brand-gradient-hover: linear-gradient(135deg, #6D28D9 0%, #1D4ED8 55%, #0EA5E9 100%);
-  --brand-gradient-soft: linear-gradient(135deg, rgba(124, 58, 237, 0.08) 0%, rgba(37, 99, 235, 0.08) 55%, rgba(34, 184, 230, 0.08) 100%);
-  --brand-gradient-border: linear-gradient(135deg, rgba(124, 58, 237, 0.3) 0%, rgba(37, 99, 235, 0.3) 55%, rgba(34, 184, 230, 0.3) 100%);
-
-  /* Типографика (Plus Jakarta Sans с fallback на Apple SF Pro) */
-  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, system-ui, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-
-  /* Радиусы скруглений по брендбуку */
-  --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius-md: 12px;   /* Кнопки, поля ввода: 10–14 px */
-  --radius-lg: 18px;   /* Крупные карточки, модалки: 16–24 px */
-  --radius-xl: 24px;
-  --radius-pill: 9999px; /* Чипы, индикаторы: pill-форма */
-
-  /* Функциональные цвета */
-  --color-emerald: #10B981;
-  --color-emerald-bg: rgba(16, 185, 129, 0.1);
-  --color-amber: #F59E0B;
-  --color-amber-bg: rgba(245, 158, 11, 0.1);
-  --color-red: #EF4444;
-  --color-red-bg: rgba(239, 68, 68, 0.08);
-
-  /* Светлая тема (Базовая по брендбуку) */
-  --bg-page: #F7F8FC;
-  --bg-surface: #FFFFFF;
+  /* ---------- Светлая тема: шасси ---------- */
+  --bg-page: #E8E9EB;
+  --bg-surface: #F6F6F7;
+  --bg-surface-solid: #F6F6F7;
   --bg-surface-elevated: #FFFFFF;
-  --bg-surface-secondary: #F1F4FA;
-  --bg-subtle: #EEF2F8;
-  --bg-hover: #E8EEF7;
+  --bg-surface-secondary: #EDEEF0;
+  --bg-subtle: #E1E3E6;
+  --bg-hover: #E6E8EB;
 
-  --border-subtle: #E3E7F0;
-  --border-medium: #D0D6E4;
-  --border-active: #2563EB;
-  --border-focus: rgba(37, 99, 235, 0.25);
+  --border-subtle: #D2D5DA;
+  --border-medium: #BCC0C7;
+  --border-active: #2438E0;
+  --border-focus: rgba(36, 56, 224, 0.28);
 
-  --text-primary: #191B2B;
-  --text-secondary: #666B82;
-  --text-muted: #8F94AA;
-  --text-inverse: #FFFFFF;
+  --text-primary: #15171A;
+  --text-secondary: #474C54;
+  --text-muted: #5E646E;
+  --text-inverse: #F6F6F7;
 
-  --color-accent: #2563EB;
-  --color-accent-hover: #1D4ED8;
-  --color-accent-bg: rgba(37, 99, 235, 0.08);
+  /* ---------- Акцент signal ---------- */
+  --signal: #2438E0;          /* линии, плейхед, ссылки */
+  --signal-strong: #2438E0;   /* фон главной кнопки (белый текст 7.7:1) */
+  --signal-hover: #1B2CBF;
+  --signal-soft: #E3E6FC;
+  --signal-border: rgba(36, 56, 224, 0.35);
+  --signal-text: #1B2CBF;
 
-  /* Мягкие Apple-теней */
-  --shadow-sm: 0 1px 2px rgba(25, 27, 43, 0.04);
-  --shadow-md: 0 4px 12px rgba(25, 27, 43, 0.05), 0 1px 3px rgba(25, 27, 43, 0.03);
-  --shadow-lg: 0 12px 32px rgba(25, 27, 43, 0.08), 0 2px 6px rgba(25, 27, 43, 0.04);
-  --shadow-drawer: -8px 0 28px rgba(25, 27, 43, 0.08);
-  --shadow-modal: 0 20px 48px rgba(25, 27, 43, 0.14), 0 4px 12px rgba(25, 27, 43, 0.06);
+  /* ---------- Статусы ---------- */
+  --color-emerald: #0F7B4F;
+  --color-emerald-bg: #DDF1E7;
+  --color-emerald-border: rgba(15, 123, 79, 0.35);
+  --color-amber: #8F5400;
+  --color-amber-solid: #E9A23B;
+  --color-amber-bg: #FBEBCF;
+  --color-amber-border: rgba(143, 84, 0, 0.35);
+  --color-red: #C0262D;
+  --color-red-bg: #FADEDF;
+  --color-red-border: rgba(192, 38, 45, 0.35);
+  --color-crimson: var(--color-red);
 
-  /* Навигация */
-  --navbar-bg: rgba(255, 255, 255, 0.88);
-  --navbar-border: rgba(227, 231, 240, 0.8);
+  /* ---------- Совместимость со старыми именами ---------- */
+  --poisq-blue: var(--signal);
+  --poisq-sky: var(--signal);
+  --poisq-violet: #2B3036;     /* нейтральные маркеры строк в редакторе */
+  --poisq-pink: var(--signal);
+  --poisq-ink: var(--text-primary);
+  --poisq-slate: #5E646E;      /* цвет волны */
+  --poisq-canvas: var(--bg-page);
+  --poisq-white: #FFFFFF;
+  --color-primary: var(--signal);
+  --color-accent: var(--signal);
+  --color-accent-hover: var(--signal-hover);
+  --color-accent-bg: var(--signal-soft);
+  --color-accent-border: var(--signal-border);
+  --color-accent-text: var(--signal-text);
+  --color-action: var(--signal-strong);
+  --color-action-hover: var(--signal-hover);
+  --color-action-bg: var(--signal-soft);
+  --color-action-border: var(--signal-border);
+  --color-action-text: var(--signal-text);
 
-  /* Скроллбар */
-  --scrollbar-thumb: #D5DBE7;
-  --scrollbar-thumb-hover: #B5BED0;
+  /* Градиентов нет: старые токены превращены в сплошной цвет */
+  --brand-gradient: var(--signal);
+  --brand-gradient-hover: var(--signal-hover);
+  --brand-gradient-soft: var(--signal-soft);
+  --brand-gradient-border: var(--signal-border);
+
+  /* ---------- Типографика ---------- */
+  --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ---------- Радиусы: плотно и строго ---------- */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 8px;
+  --radius-pill: 4px;   /* чипы и бейджи — прямоугольные «ярлыки» */
+  --radius-round: 50%;
+
+  /* ---------- Тени и размытие: только у всплывающих слоёв ---------- */
+  --shadow-sm: 0 0 0 0 transparent;
+  --shadow-md: 0 0 0 0 transparent;
+  --shadow-lg: 0 8px 24px rgba(21, 23, 26, 0.12);
+  --shadow-drawer: -1px 0 0 var(--border-subtle), -16px 0 40px rgba(21, 23, 26, 0.12);
+  --shadow-modal: 0 16px 48px rgba(21, 23, 26, 0.22);
+  --shadow-action: 0 0 0 0 transparent;
+  --glass-blur: none;
+  --glass-edge: 0 0 0 0 transparent;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --navbar-bg: #F6F6F7;
+  --navbar-border: #D2D5DA;
+  --overlay: rgba(21, 23, 26, 0.4);
+
+  --scrollbar-thumb: #BCC0C7;
+  --scrollbar-thumb-hover: #9AA0A9;
+
+  color-scheme: light;
 }
 
-/* Тёмная тема (Дополнительная по брендбуку: глубокий нейтральный графит) */
+/* ---------- Тёмная тема: графит ---------- */
 [data-theme="dark"] {
-  --bg-page: #0D0F17;
-  --bg-surface: #141724;
-  --bg-surface-elevated: #1B1E30;
-  --bg-surface-secondary: #191C2B;
-  --bg-subtle: #202438;
-  --bg-hover: #262B42;
+  --bg-page: #0E0F11;
+  --bg-surface: #16181B;
+  --bg-surface-solid: #16181B;
+  --bg-surface-elevated: #1D2024;
+  --bg-surface-secondary: #1A1D20;
+  --bg-subtle: #22262A;
+  --bg-hover: #202327;
 
-  --border-subtle: #24283D;
-  --border-medium: #323854;
-  --border-active: #3B82F6;
-  --border-focus: rgba(59, 130, 246, 0.35);
+  --border-subtle: #2B2F35;
+  --border-medium: #3B4048;
+  --border-active: #9AA7FF;
+  --border-focus: rgba(154, 167, 255, 0.4);
 
-  --text-primary: #F1F4FA;
-  --text-secondary: #9BA2BD;
-  --text-muted: #6B728D;
-  --text-inverse: #191B2B;
+  --text-primary: #ECEDEF;
+  --text-secondary: #A3A8B1;
+  --text-muted: #868C96;
+  --text-inverse: #0E0F11;
 
-  --color-accent: #3B82F6;
-  --color-accent-hover: #60A5FA;
-  --color-accent-bg: rgba(59, 130, 246, 0.15);
+  --signal: #9AA7FF;
+  --signal-strong: #3F52F0;
+  --signal-hover: #5163FF;
+  --signal-soft: rgba(154, 167, 255, 0.14);
+  --signal-border: rgba(154, 167, 255, 0.4);
+  --signal-text: #9AA7FF;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.45);
-  --shadow-drawer: -8px 0 28px rgba(0, 0, 0, 0.5);
-  --shadow-modal: 0 20px 48px rgba(0, 0, 0, 0.6);
+  --color-emerald: #4CC38A;
+  --color-emerald-bg: rgba(76, 195, 138, 0.14);
+  --color-emerald-border: rgba(76, 195, 138, 0.4);
+  --color-amber: #E9A23B;
+  --color-amber-bg: rgba(233, 162, 59, 0.14);
+  --color-amber-border: rgba(233, 162, 59, 0.4);
+  --color-red: #FF7B80;
+  --color-red-bg: rgba(255, 123, 128, 0.14);
+  --color-red-border: rgba(255, 123, 128, 0.4);
 
-  --navbar-bg: rgba(20, 23, 36, 0.88);
-  --navbar-border: rgba(36, 40, 61, 0.8);
+  --poisq-violet: #C9CED6;
+  --poisq-slate: #868C96;
 
-  --scrollbar-thumb: #323854;
-  --scrollbar-thumb-hover: #454D72;
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-drawer: -1px 0 0 var(--border-subtle), -16px 0 40px rgba(0, 0, 0, 0.5);
+  --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.6);
+
+  --navbar-bg: #16181B;
+  --navbar-border: #2B2F35;
+  --overlay: rgba(0, 0, 0, 0.6);
+
+  --scrollbar-thumb: #3B4048;
+  --scrollbar-thumb-hover: #565C66;
+
+  color-scheme: dark;
 }

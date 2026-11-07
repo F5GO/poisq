@@ -139,3 +139,32 @@
   letter-spacing: 0.08em;
   font-variant-numeric: tabular-nums;
 }
+
+/* Настройки: трансляция на колонки */
+.cast-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 28px 0 8px;
+}
+
+.cast-form {
+  max-width: 560px;
+  margin-top: 16px;
+}
+
+.cast-players {
+  border: 0;
+  padding: 0;
+  margin-inline: 0;
+}
+
+.cast-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  cursor: pointer;
+}

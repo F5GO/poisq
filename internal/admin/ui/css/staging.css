@@ -55,8 +55,8 @@
   font-size: 11.5px;
   font-weight: 600;
   background: var(--color-amber-bg);
-  color: #D97706;
-  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: var(--color-amber);
+  border: 1px solid rgba(232, 147, 12, 0.25);
   white-space: nowrap;
 }
 
@@ -215,12 +215,12 @@
 .cover-ai-resolve-btn {
   background: var(--brand-gradient-soft);
   color: var(--poisq-violet);
-  border: 1px solid rgba(124, 58, 237, 0.25);
+  border: 1px solid rgba(36, 56, 224, 0.25);
   font-weight: 600;
 }
 
 .cover-ai-resolve-btn:hover {
-  background: rgba(124, 58, 237, 0.15);
+  background: rgba(36, 56, 224, 0.15);
   border-color: var(--poisq-violet);
 }
 

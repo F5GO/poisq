@@ -102,10 +102,10 @@ function showToast(message, type = "info") {
 
   if (type === "error") {
     toast.style.borderColor = "var(--color-crimson, #f43f5e)";
-    toast.style.color = "#fda4af";
+    toast.style.color = "var(--color-red)";
   } else if (type === "success") {
     toast.style.borderColor = "var(--color-emerald, #10b981)";
-    toast.style.color = "#6ee7b7";
+    toast.style.color = "var(--color-emerald)";
   }
 
   container.appendChild(toast);
@@ -171,6 +171,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initPlayerControls();
   initDrawer();
   initKeyModal();
+  initCastForm();
   loadLibraryData();
   loadKeysData();
 });
@@ -283,7 +284,10 @@ function switchTab(tabName) {
       }
     }, 2500);
   }
-  if (tabName === "keys") loadKeysData();
+  if (tabName === "keys") {
+    loadKeysData();
+    loadCastSettings();
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -462,22 +466,22 @@ function renderTracksTable(container, tracks) {
     // Интерактивный статус текста песни (клик сразу открывает караоке-плеер)
     let statusBadge = `<span class="badge-lyric-btn none" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">+ Найти текст</span>`;
     if (t.lyricsStatus === "verified") {
-      statusBadge = `<span class="badge-lyric-btn verified" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">🎤 Проверен</span>`;
+      statusBadge = `<span class="badge-lyric-btn verified" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">Проверен</span>`;
     } else if (t.lyricsStatus === "synced") {
-      statusBadge = `<span class="badge-lyric-btn synced" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">🎤 Синхронный</span>`;
+      statusBadge = `<span class="badge-lyric-btn synced" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">Синхронный</span>`;
     } else if (t.lyricsStatus === "plain") {
-      statusBadge = `<span class="badge-lyric-btn plain" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">🎤 Обычный</span>`;
+      statusBadge = `<span class="badge-lyric-btn plain" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">Обычный</span>`;
     }
 
     // Честный статус аудита медиатеки
     let auditBadge = `<span class="badge-audit-ok">✓ Готов</span>`;
     let rowClass = "";
     if (t.isMojibake) {
-      auditBadge = `<span class="badge-audit-queued">⚠️ Mojibake</span>`;
+      auditBadge = `<span class="badge-audit-queued">Mojibake</span>`;
     } else if (!t.hasCover || (t.coverWidth > 0 && t.coverWidth < 500)) {
-      auditBadge = `<span class="badge-audit-queued">🖼 Нужна обложка</span>`;
+      auditBadge = `<span class="badge-audit-queued">Нужна обложка</span>`;
     } else if (t.lyricsStatus === "none" || !t.lyricsStatus) {
-      auditBadge = `<span class="badge-audit-queued">📝 Нужен текст</span>`;
+      auditBadge = `<span class="badge-audit-queued">Нужен текст</span>`;
     } else if (t.lyricsStatus === "plain") {
       auditBadge = `<span class="badge-audit-queued">⏱ Нужен LRC</span>`;
     }
@@ -518,7 +522,7 @@ function renderArtistsGrid(container, tracks) {
               loading="lazy" 
               onerror="this.style.display='none'; const p = this.nextElementSibling; if(p) p.style.display='flex';"
             />
-            <div class="artist-avatar-placeholder" style="display:none;">👤</div>
+            <div class="artist-avatar-placeholder" style="display:none;">♪</div>
           </div>
           <div class="group-title" style="text-align: center;">${escapeHtml(name)}</div>
           <div class="group-desc" style="text-align: center;">${count} треков в медиатеке</div>
@@ -642,8 +646,8 @@ async function openTrackDrawer(trackId) {
     <div style="display: flex; gap: 16px; align-items: center;">
       <div class="drawer-cover-wrap">
         ${coverUrl 
-          ? `<img src="${coverUrl}" class="drawer-cover-img" alt="Обложка" onerror="this.parentElement.innerHTML='<div style=\\'display:flex;height:100%;align-items:center;justify-content:center;background:var(--brand-gradient-soft);\\'><img src=\\'/assets/brand/poisq-mark-192.png\\' alt=\\'poisq\\' style=\\'width:40px;height:40px;opacity:0.85;\\'/></div>'"/>` 
-          : `<div style="display:flex;height:100%;align-items:center;justify-content:center;background:var(--brand-gradient-soft);"><img src="/assets/brand/poisq-mark-192.png" alt="poisq" style="width:40px;height:40px;opacity:0.85;"/></div>`
+          ? `<img src="${coverUrl}" class="drawer-cover-img" alt="Обложка" onerror="this.parentElement.innerHTML='<div style=\\'display:flex;height:100%;align-items:center;justify-content:center;background:var(--brand-gradient-soft);\\'><svg class=\\'mark-ph\\' viewBox=\\'0 0 28 28\\' width=\\'40\\' height=\\'40\\' aria-hidden=\\'true\\'><rect x=\\'3\\' y=\\'11\\' width=\\'3.5\\' height=\\'6\\' rx=\\'1\\'/><rect x=\\'9\\' y=\\'6\\' width=\\'3.5\\' height=\\'16\\' rx=\\'1\\'/><rect x=\\'15\\' y=\\'9\\' width=\\'3.5\\' height=\\'10\\' rx=\\'1\\'/><rect x=\\'21\\' y=\\'3\\' width=\\'3.5\\' height=\\'22\\' rx=\\'1\\' class=\\'mark-live\\'/></svg></div>'"/>` 
+          : `<div style="display:flex;height:100%;align-items:center;justify-content:center;background:var(--brand-gradient-soft);"><svg class="mark-ph" viewBox="0 0 28 28" width="40" height="40" aria-hidden="true"><rect x="3" y="11" width="3.5" height="6" rx="1"/><rect x="9" y="6" width="3.5" height="16" rx="1"/><rect x="15" y="9" width="3.5" height="10" rx="1"/><rect x="21" y="3" width="3.5" height="22" rx="1" class="mark-live"/></svg></div>`
         }
       </div>
       <div>
@@ -678,7 +682,7 @@ async function openTrackDrawer(trackId) {
 
     <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
       <button class="btn btn-primary" onclick="openTrackInKaraoke('${escapeHtml(track.id)}'); document.getElementById('drawer-track-detail').classList.add('hidden');">
-        🎤 Запустить в Караоке-плеере
+        Запустить в Караоке-плеере
       </button>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
         <button class="btn btn-secondary" onclick="enqueueSingleTournament('${escapeHtml(track.id)}')">
@@ -690,7 +694,7 @@ async function openTrackDrawer(trackId) {
       </div>
       ${(content || (track.lyricsStatus && track.lyricsStatus !== "none")) ? `
         <button class="btn btn-danger-outline" onclick="deleteTrackLyrics('${escapeHtml(track.id)}')" style="margin-top: 4px;">
-          🗑 Удалить текст и .lrc файл
+          Удалить текст и .lrc файл
         </button>
       ` : ""}
     </div>
@@ -939,9 +943,9 @@ async function openTrackInKaraoke(trackId) {
       ? `/api/v1/navidrome/album-cover?album=${encodeURIComponent(track.album || "")}&artist=${encodeURIComponent(track.artist || "")}&path=${encodeURIComponent(track.folderPath)}`
       : "";
     if (coverUrl) {
-      playerCover.innerHTML = `<img src="${coverUrl}" class="player-cover-img" alt="Обложка" onerror="this.parentElement.innerHTML='<img src=\\'/assets/brand/poisq-mark-192.png\\' alt=\\'poisq\\' style=\\'width:28px;height:28px;opacity:0.85;\\'/>'"/>`;
+      playerCover.innerHTML = `<img src="${coverUrl}" class="player-cover-img" alt="Обложка" onerror="this.parentElement.innerHTML='<svg class=\\'mark-ph\\' viewBox=\\'0 0 28 28\\' width=\\'28\\' height=\\'28\\' aria-hidden=\\'true\\'><rect x=\\'3\\' y=\\'11\\' width=\\'3.5\\' height=\\'6\\' rx=\\'1\\'/><rect x=\\'9\\' y=\\'6\\' width=\\'3.5\\' height=\\'16\\' rx=\\'1\\'/><rect x=\\'15\\' y=\\'9\\' width=\\'3.5\\' height=\\'10\\' rx=\\'1\\'/><rect x=\\'21\\' y=\\'3\\' width=\\'3.5\\' height=\\'22\\' rx=\\'1\\' class=\\'mark-live\\'/></svg>'"/>`;
     } else {
-      playerCover.innerHTML = `<img src="/assets/brand/poisq-mark-192.png" alt="poisq" style="width:28px;height:28px;opacity:0.85;"/>`;
+      playerCover.innerHTML = `<svg class="mark-ph" viewBox="0 0 28 28" width="28" height="28" aria-hidden="true"><rect x="3" y="11" width="3.5" height="6" rx="1"/><rect x="9" y="6" width="3.5" height="16" rx="1"/><rect x="15" y="9" width="3.5" height="10" rx="1"/><rect x="21" y="3" width="3.5" height="22" rx="1" class="mark-live"/></svg>`;
     }
   }
 
@@ -1508,7 +1512,7 @@ async function loadStagingData() {
       const hasAi = !!propObj.aiExplanation;
       const aiBadgeHtml = `
         <div class="cover-ai-badge ${hasAi ? '' : 'hidden'}" id="ai-badge-${item.id}">
-          <span class="ai-sparkle">✨</span>
+          <span class="ai-sparkle">AI</span>
           <span><strong>AI-арбитр (${escapeHtml(propObj.releaseType || "Альбом")}):</strong> Канонический студийный альбом <em>«${escapeHtml(propObj.canonicalAlbum || propObj.album)}»</em>. ${escapeHtml(propObj.aiExplanation || "")}</span>
         </div>
       `;
@@ -1546,11 +1550,11 @@ async function loadStagingData() {
                 ` 
                 : `<div class="cover-side-img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);" onclick="openCoverLightbox(${item.id}, 0)">Нет файла</div>`
               }
-              <div class="cover-side-zoom-hint">🔍 Нажмите для увеличения</div>
+              <div class="cover-side-zoom-hint">Нажмите для увеличения</div>
               <div class="cover-side-meta" id="cur-meta-${item.id}">Файл: ${curHasCover ? "Найден" : "Отсутствует"} · ${curRes}</div>
             </div>
 
-            <div class="cover-side-card" style="border-color: rgba(16, 185, 129, 0.4);">
+            <div class="cover-side-card" style="border-color: var(--color-emerald-border);">
               <div class="cover-side-title text-emerald">Станет (Новый cover.jpg)</div>
               ${chosenCover 
                 ? `
@@ -1566,7 +1570,7 @@ async function loadStagingData() {
                 ` 
                 : `<div class="cover-side-img" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);">♪</div>`
               }
-              <div class="cover-side-zoom-hint">🔍 Нажмите для увеличения</div>
+              <div class="cover-side-zoom-hint">Нажмите для увеличения</div>
               <div class="cover-side-meta" id="prop-cover-meta-${item.id}">${propRes} · ${propSource}</div>
 
               <!-- Кнопки управления вариантами и AI СПРАВА, под новой обложкой -->
@@ -1576,7 +1580,7 @@ async function loadStagingData() {
                   id="btn-toggle-cand-${item.id}"
                   onclick="toggleCoverCandidates(${item.id}, '${escapeHtml(propArtist)}', '${escapeHtml(propAlbum)}', '${escapeHtml(path)}')"
                 >
-                  📷 Другие варианты обложек <span id="cand-count-${item.id}"></span>
+                  Другие варианты обложек <span id="cand-count-${item.id}"></span>
                 </button>
                 <button 
                   class="cover-ai-resolve-btn" 
@@ -1584,7 +1588,7 @@ async function loadStagingData() {
                   onclick="resolveCoverViaAI(${item.id}, '${escapeHtml(path)}')"
                   title="Определить канонический студийный альбом через Gemini 2.5 Flash и найти оригинальную обложку"
                 >
-                  ✨ Уточнить альбом через AI
+                  Уточнить альбом через AI
                 </button>
               </div>
             </div>
@@ -1594,7 +1598,7 @@ async function loadStagingData() {
           <div id="candidates-container-${item.id}" class="cover-candidates-grid hidden"></div>
 
           <div style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
-            ℹ️ <strong>Аудиофайлы не изменяются.</strong> В папку альбома будет скачан файл <code class="mono">cover.jpg</code>.
+            <strong>Аудиофайлы не изменяются.</strong> В папку альбома будет скачан файл <code class="mono">cover.jpg</code>.
           </div>
         </div>
       `;
@@ -1666,7 +1670,7 @@ async function loadStagingData() {
 
         ${propObj.reason ? `
           <div style="margin-top: 8px; font-size: 11px; color: var(--text-muted);">
-            ℹ️ ${escapeHtml(propObj.reason)}
+            ${escapeHtml(propObj.reason)}
           </div>
         ` : ""}
       </div>
@@ -1774,7 +1778,7 @@ function renderCoverCandidatesGrid(itemId, candidates, defaultAlbum = "", defaul
       <div class="cover-cand-card ${isSel ? 'active' : ''}" id="cand-card-${itemId}-${idx}">
         <div class="cover-cand-thumb-wrap" onclick="openCoverLightboxForCandidate(${itemId}, ${idx})" title="Нажмите для полноэкранного просмотра">
           <img src="${escapeHtml(cand.url)}" class="cover-cand-thumb" alt="Вариант" loading="lazy" />
-          <span class="cover-cand-zoom-hint">🔍 Увеличить</span>
+          <span class="cover-cand-zoom-hint">Увеличить</span>
         </div>
         <div class="cover-cand-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
         <div class="cover-cand-meta">${escapeHtml(artist)}</div>
@@ -1787,7 +1791,7 @@ function renderCoverCandidatesGrid(itemId, candidates, defaultAlbum = "", defaul
 
 async function resolveCoverViaAI(itemId, folderPath) {
   const btn = document.getElementById(`btn-ai-resolve-${itemId}`);
-  const origBtnText = btn ? btn.innerHTML : "✨ Уточнить альбом через AI";
+  const origBtnText = btn ? btn.innerHTML : "Уточнить альбом через AI";
   if (btn) {
     btn.disabled = true;
     btn.innerHTML = `<span class="spinner-inline"></span> Анализируем через Gemini...`;
@@ -1804,13 +1808,13 @@ async function resolveCoverViaAI(itemId, folderPath) {
     }
 
     const dec = res.decision;
-    showToast(`✨ Канонический альбом: ${dec.canonical_album} (${dec.release_type})`, "success");
+    showToast(`Канонический альбом: ${dec.canonical_album} (${dec.release_type})`, "success");
 
     // Обновляем бейдж AI в карточке
     let badge = document.getElementById(`ai-badge-${itemId}`);
     if (badge) {
       badge.innerHTML = `
-        <span class="ai-sparkle">✨</span>
+        <span class="ai-sparkle">AI</span>
         <span><strong>AI-арбитр (${escapeHtml(dec.release_type || "Альбом")}):</strong> Канонический студийный альбом <em>«${escapeHtml(dec.canonical_album)}»</em>. ${escapeHtml(dec.explanation || "")}</span>
       `;
       badge.classList.remove("hidden");
@@ -1867,7 +1871,7 @@ async function resolveCoverViaAI(itemId, folderPath) {
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.innerHTML = `✨ Обновлено через AI`;
+      btn.innerHTML = `Обновлено через AI`;
       setTimeout(() => {
         if (btn) btn.innerHTML = origBtnText;
       }, 4000);
@@ -2125,7 +2129,7 @@ async function applyAllStaging() {
 
 async function resetFullDatabase() {
   const confirmed = confirm(
-    "⚠️ ВНИМАНИЕ: Вы уверены, что хотите выполнить ПОЛНЫЙ СБРОС БД?\n\n" +
+    "ВНИМАНИЕ: Вы уверены, что хотите выполнить ПОЛНЫЙ СБРОС БД?\n\n" +
     "• Будет очищена вся очередь предложений Staging;\n" +
     "• Будут сброшены кэш треков и текстов;\n" +
     "• Все API-ключи (Gemini / Groq) будут сохранены;\n" +
@@ -2246,7 +2250,7 @@ async function loadJobsData() {
       else if (j.status === "done" || j.status === "completed") statusBadge = `<span class="text-emerald" style="font-weight: 500;">✓ Завершена</span>`;
       else if (j.status === "failed") statusBadge = `<span class="text-crimson" style="color:var(--color-crimson, #f43f5e);">Ошибка</span>`;
       else if (j.status === "waiting_quota") statusBadge = `<span class="text-amber">Ждет квоту API</span>`;
-      else if (j.status === "paused") statusBadge = `<span class="badge-audit-queued" style="background: rgba(148, 163, 184, 0.15); color: var(--text-secondary);">⏸ На паузе</span>`;
+      else if (j.status === "paused") statusBadge = `<span class="badge-audit-queued" style="background: rgba(148, 163, 184, 0.15); color: var(--text-secondary);">На паузе</span>`;
 
       let jobTypeLabel = j.jobType;
       if (j.jobType === "tournament") jobTypeLabel = "LRC Турнир";
@@ -2270,7 +2274,7 @@ async function loadJobsData() {
       if (j.status === "done" || j.status === "completed") {
         stepSummaryHtml = `<span class="text-emerald">✓ Текст сохранен (.lrc · poisq)</span>`;
       } else if (j.status === "running") {
-        stepSummaryHtml = `<span style="color: var(--color-primary, #38bdf8); font-weight: 500;">⚡ ${escapeHtml(rawStepOrErr || "Обработка этапа...")}</span>`;
+        stepSummaryHtml = `<span style="color: var(--color-primary, #38bdf8); font-weight: 500;">${escapeHtml(rawStepOrErr || "Обработка этапа...")}</span>`;
       } else if (rawStepOrErr) {
         stepSummaryHtml = `<span class="${j.status === 'failed' ? 'text-crimson' : 'text-muted'}">${escapeHtml(rawStepOrErr)}</span>`;
       }
@@ -2281,7 +2285,7 @@ async function loadJobsData() {
         actionBtns += `<button class="btn-table-action primary" onclick="event.stopPropagation(); jobAction(${j.id}, 'resume')" title="Возобновить выполнение задачи">▶ Старт</button>`;
         actionBtns += `<button class="btn-table-action danger" onclick="event.stopPropagation(); jobAction(${j.id}, 'delete')" title="Удалить приостановленную задачу">✕</button>`;
       } else if (j.status === "pending" || j.status === "waiting_quota") {
-        actionBtns += `<button class="btn-table-action" onclick="event.stopPropagation(); jobAction(${j.id}, 'pause')" title="Приостановить задачу">⏸ Пауза</button>`;
+        actionBtns += `<button class="btn-table-action" onclick="event.stopPropagation(); jobAction(${j.id}, 'pause')" title="Приостановить задачу">Пауза</button>`;
         actionBtns += `<button class="btn-table-action danger" onclick="event.stopPropagation(); jobAction(${j.id}, 'delete')" title="Удалить задачу">✕</button>`;
       } else {
         // running, done, failed
@@ -2384,7 +2388,7 @@ function buildJobDetailsRowHtml(j, trackObj) {
         icon = "✕";
       } else if (isRunning) {
         cls = "running";
-        icon = "⚡";
+        icon = "";
       }
     }
     return `
@@ -2421,7 +2425,7 @@ function buildJobDetailsRowHtml(j, trackObj) {
             <span><strong>Файл:</strong> ${escapeHtml(filePath)}</span>
             <span><strong>Создана:</strong> ${escapeHtml(createdStr)}</span>
             <span><strong>Обновлена:</strong> ${escapeHtml(updatedStr)}</span>
-            ${trackObj ? `<button class="btn-table-action primary" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(trackObj.id)}')">🎤 Открыть в Караоке</button>` : ""}
+            ${trackObj ? `<button class="btn-table-action primary" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(trackObj.id)}')">Открыть в Караоке</button>` : ""}
           </div>
           <div class="job-console">
             <div class="job-console-header mono">Живой журнал выполнения под капотом (Задача #${j.id})</div>
@@ -2466,8 +2470,8 @@ function promptJobRetry(jobId) {
     descEl.innerHTML = `Этап акустического распознавания Whisper успешно пройден и сохранен в кэше. Сбой произошел на этапе связи с Google Gemini.<br><br>С какого этапа перезапустить задачу?`;
     actionsEl.innerHTML = `
       <button type="button" class="btn btn-secondary" onclick="closeRetryModal()">Отмена</button>
-      <button type="button" class="btn btn-secondary" onclick="closeRetryModal(); jobAction(${j.id}, 'retry', 'restart')">🔄 Заново с 1 этапа</button>
-      <button type="button" class="btn btn-primary" onclick="closeRetryModal(); jobAction(${j.id}, 'retry', 'resume')">⚡️ С этапа Gemini</button>
+      <button type="button" class="btn btn-secondary" onclick="closeRetryModal(); jobAction(${j.id}, 'retry', 'restart')">Заново с 1 этапа</button>
+      <button type="button" class="btn btn-primary" onclick="closeRetryModal(); jobAction(${j.id}, 'retry', 'resume')">С этапа Gemini</button>
     `;
   } else {
     descEl.textContent = `Перезапустить выполнение задачи #${j.id} в очереди фонового воркера?`;
@@ -2555,6 +2559,7 @@ function initKeyModal() {
       showToast("✓ Ключ зашифрован (AES-256-GCM) и добавлен в пул ротации", "success");
       closeModal();
       await loadKeysData();
+      if (provider === "music_assistant") await loadCastSettings();
     } catch (err) {
       showToast(`Ошибка сохранения ключа: ${err.message}`, "error");
     }
@@ -2583,7 +2588,8 @@ async function loadKeysData() {
     groq: "Groq Cloud (Whisper)",
     acoustid: "AcoustID (fpcalc)",
     yandex: "Яндекс Музыка",
-    genius: "Genius API"
+    genius: "Genius API",
+    music_assistant: "Music Assistant"
   };
 
   tbody.innerHTML = state.keys.map(k => {
@@ -2623,6 +2629,71 @@ async function deleteKey(id) {
   } catch (err) {
     showToast(`Ошибка удаления ключа: ${err.message}`, "error");
   }
+}
+
+// -----------------------------------------------------------------------------
+// 7.1 Трансляция на колонки через Music Assistant
+// -----------------------------------------------------------------------------
+function initCastForm() {
+  document.getElementById("form-cast")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const boxes = [...document.querySelectorAll("#cast-players-list input[type=checkbox]")];
+    const payload = {
+      url: document.getElementById("cast-url")?.value.trim() || "",
+      provider: document.getElementById("cast-provider")?.value || "",
+      // MA недоступен и список не построен — не теряем уже выбранные колонки
+      players: boxes.length ? boxes.filter(b => b.checked).map(b => b.value) : (state.castPlayers || [])
+    };
+    const btn = document.getElementById("btn-save-cast");
+    if (btn) btn.disabled = true;
+    const res = await loadCastSettings(payload);
+    if (btn) btn.disabled = false;
+    if (res) showToast(res.error ? "Настройки сохранены, но MA не ответил" : "✓ Настройки трансляции сохранены", res.error ? "info" : "success");
+  });
+}
+
+async function loadCastSettings(payload = null) {
+  const status = document.getElementById("cast-status");
+  if (!status) return null;
+  let res;
+  try {
+    res = payload ? await fetchApi("/cast", "POST", payload) : await fetchApi("/cast");
+  } catch (err) {
+    status.textContent = `Ошибка: ${err.message}`;
+    return null;
+  }
+
+  const st = res.settings || {};
+  state.castPlayers = st.players || [];
+  document.getElementById("cast-url").value = st.url || "";
+
+  const sel = document.getElementById("cast-provider");
+  const providers = res.providers || [];
+  let options = `<option value="">— выберите —</option>` +
+    providers.map(p => `<option value="${escapeHtml(p.instance_id)}">${escapeHtml(p.name || p.instance_id)}</option>`).join("");
+  if (st.provider && !providers.some(p => p.instance_id === st.provider)) {
+    options += `<option value="${escapeHtml(st.provider)}">${escapeHtml(st.provider)} (не найден в MA)</option>`;
+  }
+  sel.innerHTML = options;
+  sel.value = st.provider || "";
+
+  const list = document.getElementById("cast-players-list");
+  const enabled = new Set(state.castPlayers);
+  const players = res.players || [];
+  list.innerHTML = players.length
+    ? players.map(p => `
+        <label class="cast-player">
+          <input type="checkbox" value="${escapeHtml(p.player_id)}" ${enabled.has(p.player_id) ? "checked" : ""} />
+          <span>${escapeHtml(p.name || p.player_id)}</span>
+          ${p.available ? "" : `<span class="text-muted">(недоступна)</span>`}
+        </label>`).join("")
+    : "Колонки появятся после подключения к Music Assistant.";
+
+  if (!res.hasToken) status.textContent = "Добавьте токен Music Assistant в пул ключей выше.";
+  else if (res.error) status.textContent = `Music Assistant: ${res.error}`;
+  else if (!st.provider) status.textContent = "Выберите источник музыки и колонки, затем сохраните.";
+  else status.textContent = `✓ Подключено. Колонок в приложении: ${state.castPlayers.length}.`;
+  return res;
 }
 
 async function syncNavidrome() {

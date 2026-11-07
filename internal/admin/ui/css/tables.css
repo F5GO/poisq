@@ -86,7 +86,7 @@
   font-weight: 600;
   background: var(--color-emerald-bg);
   color: var(--color-emerald);
-  border: 1px solid rgba(16, 185, 129, 0.2);
+  border: 1px solid rgba(16, 163, 116, 0.2);
 }
 
 .badge-audit-queued {
@@ -99,7 +99,7 @@
   font-weight: 600;
   background: var(--color-amber-bg);
   color: var(--color-amber);
-  border: 1px solid rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(232, 147, 12, 0.2);
 }
 
 .badge-audit-processing {
@@ -112,7 +112,7 @@
   font-weight: 600;
   background: var(--color-accent-bg);
   color: var(--poisq-blue);
-  border: 1px solid rgba(37, 99, 235, 0.2);
+  border: 1px solid rgba(36, 56, 224, 0.2);
 }
 
 /* Интерактивные кликабельные кнопки-бейджи статуса текстов */
@@ -138,15 +138,15 @@
 }
 
 .badge-lyric-btn.synced {
-  background: rgba(37, 99, 235, 0.09);
+  background: rgba(36, 56, 224, 0.09);
   color: var(--poisq-blue);
-  border-color: rgba(37, 99, 235, 0.25);
+  border-color: rgba(36, 56, 224, 0.25);
 }
 
 .badge-lyric-btn.plain {
-  background: rgba(245, 158, 11, 0.1);
-  color: #D97706;
-  border-color: rgba(245, 158, 11, 0.25);
+  background: rgba(232, 147, 12, 0.1);
+  color: var(--color-amber);
+  border-color: rgba(232, 147, 12, 0.25);
 }
 
 .badge-lyric-btn.none {
@@ -188,8 +188,8 @@
 }
 
 .btn-table-action.danger:hover {
-  background: rgba(244, 63, 94, 0.1);
-  border-color: rgba(244, 63, 94, 0.3);
+  background: rgba(214, 48, 64, 0.1);
+  border-color: rgba(214, 48, 64, 0.3);
 }
 
 .btn-table-action.primary {
@@ -197,8 +197,8 @@
 }
 
 .btn-table-action.primary:hover {
-  background: rgba(37, 99, 235, 0.1);
-  border-color: rgba(37, 99, 235, 0.3);
+  background: rgba(36, 56, 224, 0.1);
+  border-color: rgba(36, 56, 224, 0.3);
 }
 
 /* Раскрывающиеся подробности задачи в очереди (Job Telemetry Inspector) */
@@ -251,18 +251,18 @@
 }
 
 .job-stage-card.done {
-  border-color: rgba(16, 185, 129, 0.35);
-  background: rgba(16, 185, 129, 0.06);
+  border-color: rgba(16, 163, 116, 0.35);
+  background: rgba(16, 163, 116, 0.06);
 }
 
 .job-stage-card.running {
-  border-color: rgba(37, 99, 235, 0.45);
-  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(36, 56, 224, 0.45);
+  background: rgba(36, 56, 224, 0.08);
 }
 
 .job-stage-card.failed {
-  border-color: rgba(244, 63, 94, 0.4);
-  background: rgba(244, 63, 94, 0.07);
+  border-color: rgba(214, 48, 64, 0.4);
+  background: rgba(214, 48, 64, 0.07);
 }
 
 .job-stage-title {

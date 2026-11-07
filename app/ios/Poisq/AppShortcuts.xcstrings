@@ -1,0 +1,94 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Add current song to favorites in ${applicationName}" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавь текущую песню в избранное в ${applicationName}"
+          }
+        }
+      }
+    },
+    "Next song in ${applicationName}" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Следующая песня в ${applicationName}"
+          }
+        }
+      }
+    },
+    "Pause ${applicationName}" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поставь на паузу ${applicationName}"
+          }
+        }
+      }
+    },
+    "Play ${playlist} in ${applicationName}" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включи ${playlist} в ${applicationName}"
+          }
+        }
+      }
+    },
+    "Play playlist ${playlist} in ${applicationName}" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включи плейлист ${playlist} в ${applicationName}"
+          }
+        }
+      }
+    },
+    "Play random songs in ${applicationName}" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включи случайные песни в ${applicationName}"
+          }
+        }
+      }
+    },
+    "Previous song in ${applicationName}" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Предыдущая песня в ${applicationName}"
+          }
+        }
+      }
+    },
+    "Shuffle ${applicationName}" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перемешай ${applicationName}"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

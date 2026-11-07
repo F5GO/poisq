@@ -14,13 +14,18 @@ import (
 	"time"
 
 	"github.com/F5GO/poisq/internal/cache"
+	"github.com/F5GO/poisq/internal/cast"
 	"github.com/F5GO/poisq/internal/search"
 )
 
 // Server инкапсулирует HTTP-обработчик реверс-прокси и вспомогательные сервисы.
 type Server struct {
 	handler http.Handler
+	cast    http.Handler // трансляция на колонки (poisqCast*); nil — выключена
 }
+
+// SetCast подключает эндпоинты трансляции. Вызывать до запуска HTTP-сервера.
+func (s *Server) SetCast(h http.Handler) { s.cast = h }
 
 // NewServer создает новый экземпляр реверс-прокси сервера с оптимизированным пулом соединений и кэшем.
 func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionary, aliasMgr *search.AliasManager, enableDebugAPI bool) *Server {
@@ -47,6 +52,10 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 
 	// Гарантируем корректные CORS-заголовки для браузера при доступе через CDN/FRP с разными доменами
 	reverseProxy.ModifyResponse = func(resp *http.Response) error {
+		// Объявляем расширение poisq в getOpenSubsonicExtensions: так приложение узнаёт, что включать надстройку.
+		if err := AdvertisePoisqExtension(resp); err != nil {
+			return err
+		}
 		origin := resp.Request.Header.Get("Origin")
 		if origin != "" {
 			resp.Header.Set("Access-Control-Allow-Origin", origin)
@@ -62,6 +71,8 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 	interceptor := NewInterceptor(engine, fanoutMgr, reverseProxy)
 	debugHandler := HandleDebugTest(engine, dict)
 	aliasHandler := HandleAliasesAPI(aliasMgr)
+	castAuth := newNavidromeAuth(targetURL, transport)
+	srv := &Server{}
 
 	mux := http.NewServeMux()
 
@@ -86,12 +97,21 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 			return
 		}
 
+		// Собственные эндпоинты poisq: Navidrome их не знает, поэтому авторизацию проверяем сами
+		if srv.cast != nil && cast.IsCastPath(r.URL.Path) {
+			if !castAuth.check(r) {
+				cast.WriteError(w, 40, "Wrong username or password")
+				return
+			}
+			srv.cast.ServeHTTP(w, r)
+			return
+		}
+
 		interceptor.ServeHTTP(w, r)
 	})
 
-	return &Server{
-		handler: mux,
-	}
+	srv.handler = mux
+	return srv
 }
 
 // CleanHost очищает строку хоста от порта и от запятых (в случае нескольких прокси в цепочке CDN/NPM/FRP).

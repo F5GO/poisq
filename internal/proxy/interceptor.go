@@ -69,6 +69,11 @@ func (it *Interceptor) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Для объявления расширения нужен несжатый ответ, чтобы его можно было дополнить.
+	if isExtensionsPath(path) {
+		req.Header.Del("Accept-Encoding")
+	}
+
 	// 3. Диагностическое логирование запросов аутентификации и сессий для проверки сети и CDN
 	if strings.HasPrefix(path, "/auth/") || strings.HasPrefix(path, "/api/auth") || path == "/auth" {
 		clientIP := ExtractClientIP(req)
@@ -151,7 +156,8 @@ func (it *Interceptor) handleSubsonicSearch(w http.ResponseWriter, req *http.Req
 	log.Printf("[REWRITE] [%s] %s=%q -> %q [%.2fms] (Agent: %s, IP: %s, Path: %s)",
 		req.Method, paramName, rawQuery, res.RewrittenQuery, elapsedMs, req.UserAgent(), clientIP, req.URL.Path)
 
-	decorateTitles := (rawQuery != "" && res.RewrittenQuery != rawQuery)
+	// Хвост «(запрос)» нужен клиентам с локальной фильтрацией выдачи; нашему приложению он не нужен.
+	decorateTitles := rawQuery != "" && res.RewrittenQuery != rawQuery && NeedsDecoratedTitles(req)
 
 	// Формируем расширенный список запросов для широкого и точного параллельного поиска
 	queries := search.ExpandQuery(rawQuery, &res)

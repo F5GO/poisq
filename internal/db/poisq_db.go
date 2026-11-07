@@ -63,6 +63,11 @@ func initPoisqSchema(sqliteDB *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_api_keys_provider_status ON api_keys(provider, status, last_used_at);
 
+	CREATE TABLE IF NOT EXISTS settings (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	);
+
 	CREATE TABLE IF NOT EXISTS tracks (
 		id TEXT PRIMARY KEY,
 		file_path TEXT NOT NULL,
