@@ -145,6 +145,9 @@ func TestHandlerFlow(t *testing.T) {
 	if r := call(t, s, "poisqCastControl?zone=kitchen&action=remove&position=3"); r["status"] != "ok" {
 		t.Fatalf("remove: %v", r)
 	}
+	if r := call(t, s, "poisqCastControl?zone=kitchen&action=seek&position=0"); r["status"] != "ok" {
+		t.Fatalf("seek: %v", r)
+	}
 	if r := call(t, s, "poisqCastControl?zone=kitchen&action=index&position=4"); r["status"] != "ok" {
 		t.Fatalf("index: %v", r)
 	}
@@ -159,7 +162,7 @@ func TestHandlerFlow(t *testing.T) {
 
 	var commands []string
 	var adds [][]any
-	var index, jump, volume, remove *maCall
+	var index, seek, jump, volume, remove *maCall
 	for _, c := range calls() {
 		c := c
 		commands = append(commands, c.Command)
@@ -170,11 +173,16 @@ func TestHandlerFlow(t *testing.T) {
 			}
 			adds = append(adds, c.Args["media"].([]any))
 		case "player_queues/play_index":
-			if index == nil {
+			switch {
+			case index == nil:
 				index = &c
-			} else {
+			case seek == nil:
+				seek = &c
+			default:
 				jump = &c
 			}
+		case "player_queues/seek":
+			t.Fatalf("seek must go through play_index: %+v", c)
 		case "players/cmd/volume_set":
 			volume = &c
 		case "player_queues/delete_item":
@@ -194,6 +202,10 @@ func TestHandlerFlow(t *testing.T) {
 	}
 	if index == nil || index.Args["index"] != float64(0) || index.Args["seek_position"] != float64(15) {
 		t.Fatalf("play_index: %+v", index)
+	}
+	// перемотка в начало: текущая песня очереди (у поддельного MA current_index = 2) с нуля
+	if seek == nil || seek.Args["index"] != float64(2) || seek.Args["seek_position"] != float64(0) {
+		t.Fatalf("seek: %+v", seek)
 	}
 	if jump == nil || jump.Args["index"] != float64(4) || jump.Args["seek_position"] != nil {
 		t.Fatalf("index action: %+v", jump)
