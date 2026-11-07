@@ -99,6 +99,20 @@ final class CastStub: URLProtocol, @unchecked Sendable {
         await waitForRequests(5)
     }
 
+    @Test func startsFromPositionInOneCommand() async throws {
+        CastStub.seen = []
+        let c = client()
+        let engine = CastEngine(client: c, zone: "kitchen", pollInterval: .seconds(60))
+        engine.play(try c.streamURL(for: Song(id: "a", title: "A")))
+        engine.seek(to: 42.7)                               // переключение на колонку посреди песни
+        await waitForRequests(1)
+        let calls = CastStub.seen.filter { !$0.path.hasSuffix("poisqCastStatus") }
+        #expect(calls.map(\.lastPathComponent) == ["poisqCastPlay"])
+        #expect(query(calls[0])["offset"] == ["42"])
+        engine.stop()
+        await waitForRequests(3)
+    }
+
     @Test func zonesParseAndCapabilityNeedsPoisq() async throws {
         CastStub.body = #"{"subsonic-response":{"status":"ok","castZones":[{"id":"k","name":"Кухня","state":"playing","volume":40}]}}"#
         defer { CastStub.body = #"{"subsonic-response":{"status":"ok"}}"# }

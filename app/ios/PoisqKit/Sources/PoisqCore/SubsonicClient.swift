@@ -152,9 +152,9 @@ public final class SubsonicClient: Sendable {
         }
     }
 
-    /// Заменить очередь колонки песнями и играть с `index`, `offset` секунд.
-    public func castPlay(zone: String, ids: [String], index: Int = 0, offset: Int = 0) async throws {
-        var q = [URLQueryItem(name: "zone", value: zone), .init(name: "index", value: String(index)), .init(name: "offset", value: String(offset))]
+    /// Заменить очередь колонки песнями и играть первую с `offset` секунд.
+    public func castPlay(zone: String, ids: [String], offset: Int = 0) async throws {
+        var q = [URLQueryItem(name: "zone", value: zone), .init(name: "offset", value: String(offset))]
         q += ids.map { URLQueryItem(name: "id", value: $0) }
         _ = try await call("poisqCastPlay", q)
     }

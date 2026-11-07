@@ -5,7 +5,7 @@ package cast
 // Авторизацию проверяет прокси до вызова ServeHTTP.
 //
 //	poisqCastZones                                   → castZones: [{id, name, state, volume}]
-//	poisqCastPlay    zone, id…, [index], [offset]    → заменить очередь и играть
+//	poisqCastPlay    zone, id…, [offset]             → заменить очередь и играть с первой песни
 //	poisqCastControl zone, action, [position|volume|id…]   (remove, index: position = индекс в очереди)
 //	poisqCastStatus  zone                            → castStatus: {state, index, position, volume}
 
@@ -66,9 +66,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, 10, "не указан параметр id")
 			return
 		}
-		index, _ := strconv.Atoi(f.Get("index"))
 		offset, _ := strconv.Atoi(f.Get("offset"))
-		if err := s.Play(ctx, zone, f["id"], max(index, 0), max(offset, 0)); err != nil {
+		if err := s.Play(ctx, zone, f["id"], max(offset, 0)); err != nil {
 			writeServiceError(w, err)
 			return
 		}
