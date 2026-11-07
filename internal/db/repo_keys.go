@@ -1,7 +1,7 @@
 // Package db отвечает за безопасное взаимодействие с базами данных SQLite (navidrome.db и poisq.db).
 //
 // Данный файл repo_keys.go реализует персистентный репозиторий таблицы api_keys
-// для хранения, LRU-выборки и обновления статусов ротации ключей (Gemini, Groq, AcoustID, Yandex).
+// для хранения, LRU-выборки и обновления статусов ротации ключей (Gemini, Groq, Yandex).
 package db
 
 import (

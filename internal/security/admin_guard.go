@@ -7,15 +7,24 @@
 package security
 
 import (
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
 // AdminGuardMiddleware оборачивает HTTP-обработчик панели управления (:4535)
 // защитными заголовками и проверкой источника для мутирующих запросов (POST/PUT/DELETE).
 func AdminGuardMiddleware(next http.Handler) http.Handler {
+	extra := strings.Split(os.Getenv("ADMIN_HOSTS"), ",")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// DNS rebinding: чужой домен, переключённый на 127.0.0.1, приходит со своим же Host и Origin, поэтому сверки Origin с Host мало.
+		// Пускаем только адреса, которые нельзя получить через публичный DNS; остальные имена — через ADMIN_HOSTS.
+		if !isAdminHost(r.Host, extra) {
+			http.Error(w, `{"error":"host not allowed: add it to ADMIN_HOSTS"}`, http.StatusForbidden)
+			return
+		}
 		// Строгие заголовки безопасности для веб-админки
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -48,6 +57,32 @@ func isSameHostOrLocal(originHost, reqHost string) bool {
 	if (cleanOrigin == "localhost" || cleanOrigin == "127.0.0.1") &&
 		(cleanReq == "localhost" || cleanReq == "127.0.0.1") {
 		return true
+	}
+	return false
+}
+
+// isAdminHost: IP-адрес, имя без точки или локальная зона — их не выдаст публичный DNS; плюс имена из ADMIN_HOSTS.
+func isAdminHost(hostport string, extra []string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	if host == "" {
+		return false
+	}
+	if net.ParseIP(host) != nil || !strings.Contains(host, ".") {
+		return true
+	}
+	for _, zone := range []string{".localhost", ".local", ".lan", ".internal", ".home.arpa"} {
+		if strings.HasSuffix(host, zone) {
+			return true
+		}
+	}
+	for _, e := range extra {
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" && e == host {
+			return true
+		}
 	}
 	return false
 }

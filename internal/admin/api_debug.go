@@ -36,6 +36,10 @@ func (s *AdminServer) handleDebugFS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	subpath := strings.TrimSpace(r.URL.Query().Get("sub"))
+	if subpath != "" && !filepath.IsLocal(subpath) { // только внутри медиатеки: ни абсолютных путей, ни выхода через ..
+		writeJSONError(w, http.StatusBadRequest, "sub must be a path inside the music folder")
+		return
+	}
 	targetDir := root
 	if subpath != "" {
 		targetDir = filepath.Join(root, subpath)

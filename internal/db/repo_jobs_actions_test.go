@@ -80,3 +80,33 @@ func TestJobActions(t *testing.T) {
 		t.Errorf("после DeleteJob ожидалось 0 задач, получено: %d", len(jobs))
 	}
 }
+
+// Задача, брошенная остановкой процесса, возвращается в очередь; повторная постановка во время работы не теряется.
+func TestJobsSurviveRestartAndRequeue(t *testing.T) {
+	db, err := OpenPoisqDatabase(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewJobRepository(db)
+
+	_ = repo.Enqueue("t1", "full_pipeline", 1)
+	job, err := repo.ClaimNext(1 << 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// процесс «упал»: задача осталась running
+	if n, err := repo.RequeueOrphaned(); err != nil || n != 1 {
+		t.Fatalf("RequeueOrphaned = %d, %v", n, err)
+	}
+	if got, _ := repo.GetByID(job.ID); got.Status != "pending" {
+		t.Fatalf("после перезапуска статус %q, ждали pending", got.Status)
+	}
+
+	job, _ = repo.ClaimNext(1 << 40)
+	_ = repo.Enqueue("t1", "whisper_karaoke", 1) // поставили заново, пока идёт работа
+	_ = repo.MarkDone(job.ID)
+	if got, _ := repo.GetByID(job.ID); got.Status != "pending" || got.JobType != "whisper_karaoke" {
+		t.Fatalf("повторная постановка потеряна: %+v", got)
+	}
+}

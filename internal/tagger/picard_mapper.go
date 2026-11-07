@@ -25,6 +25,27 @@ type CanonicalTagSet struct {
 	ArtistMBID    string            `json:"artistMbid,omitempty"`
 	RecordingMBID string            `json:"recordingMbid,omitempty"`
 	ExtraTags     map[string]string `json:"extraTags,omitempty"`
+	// Clear — теги, которые нужно удалить из файла (откат тегов, добавленных правкой). Пустое значение ffmpeg понимает как удаление.
+	Clear []string `json:"-"`
+}
+
+// undoClears — теги, которые правка добавила, а откат должен убрать: исходный слепок их не содержит, и пустые значения при записи пропускаются.
+// shortcut: слепок не хранит MBID файла, поэтому откат убирает MBID из правки, даже если такой же был в файле до неё; хранить MBID в слепке, если это станет важно.
+func undoClears(orig, proposed CanonicalTagSet) []string {
+	var keys []string
+	if strings.TrimSpace(orig.AlbumArtist) == "" { // правка всегда ставит album_artist (по умолчанию — исполнитель)
+		keys = append(keys, "album_artist")
+	}
+	if proposed.ReleaseMBID != "" {
+		keys = append(keys, "MUSICBRAINZ_ALBUMID", "MusicBrainz Album Id")
+	}
+	if proposed.ArtistMBID != "" {
+		keys = append(keys, "MUSICBRAINZ_ARTISTID", "MusicBrainz Artist Id")
+	}
+	if proposed.RecordingMBID != "" {
+		keys = append(keys, "MUSICBRAINZ_TRACKID", "MusicBrainz Release Track Id")
+	}
+	return keys
 }
 
 // BuildFFmpegMetadataArgs формирует список флагов -metadata key=value по таблице MusicBrainz Picard,
@@ -70,5 +91,8 @@ func BuildFFmpegMetadataArgs(filePath string, tags CanonicalTagSet) []string {
 		addMeta("MusicBrainz Release Track Id", tags.RecordingMBID)
 	}
 
+	for _, k := range tags.Clear {
+		args = append(args, "-metadata", k+"=")
+	}
 	return args
 }

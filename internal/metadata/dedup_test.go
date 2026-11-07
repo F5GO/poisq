@@ -1,5 +1,5 @@
 // Package metadata отвечает за аудит медиатеки, исправление битой кодировки (CP1251 -> UTF-8 NFC),
-// акустическую идентификацию через AcoustID (fpcalc), обогащение через MusicBrainz API и поиск обложек.
+// обогащение через MusicBrainz API и поиск обложек.
 //
 // Данный файл dedup_test.go проверяет дедупликацию треков из каталогов-копий («Music — копия»),
 // гарантируя, что при наличии трека в основном каталоге дубликат отсеивается,
@@ -59,7 +59,7 @@ func TestSyncFromNavidromeDedup(t *testing.T) {
 
 	trackRepo := db.NewTrackRepository(poisqDB)
 	stagingRepo := db.NewStagingRepository(poisqDB)
-	scanner := NewLibraryScanner(tmpDir, trackRepo, stagingRepo, nil, nil, nil)
+	scanner := NewLibraryScanner(tmpDir, trackRepo, stagingRepo, nil, nil)
 
 	synced, err := scanner.SyncFromNavidromeDB(navDB)
 	if err != nil {

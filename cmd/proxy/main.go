@@ -124,10 +124,9 @@ func main() {
 
 	mbClient := metadata.NewMusicBrainzClient()
 	tournament.SetArtistAliasSource(mbClient)
-	acoustIDClient := metadata.NewAcoustIDClient(pathGuard, keyPoolMgr)
 	coverFetcher := metadata.NewCoverFetcher(pathGuard)
 	libraryScanner := metadata.NewLibraryScanner(
-		pathGuard.Root(), trackRepo, stagingRepo, mbClient, acoustIDClient, coverFetcher,
+		pathGuard.Root(), trackRepo, stagingRepo, mbClient, coverFetcher,
 	)
 	libraryScanner.SetArbiter(metadataArbiter)
 

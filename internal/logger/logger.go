@@ -46,13 +46,6 @@ func SetLevel(levelStr string) {
 	}
 }
 
-// IsDebugEnabled возвращает true, если включен уровень DEBUG.
-func IsDebugEnabled() bool {
-	mu.RLock()
-	defer mu.RUnlock()
-	return currentLevel <= LevelDebug
-}
-
 // CurrentLevelStr возвращает текущий уровень логирования в виде строки.
 func CurrentLevelStr() string {
 	mu.RLock()

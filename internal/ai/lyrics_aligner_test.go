@@ -6,7 +6,7 @@
 // Данный файл lyrics_aligner_test.go тестирует модуль Forced Alignment (lyrics_aligner.go и needleman_aligner.go):
 // 1. Калибровку растянутых таймкодов первого слова после инструментального интро (Word Duration Clamping).
 // 2. Глобальное выравнивание последовательностей Нидлмана — Вунша (Needleman-Wunsch).
-// 3. Пост-фильтр SnapLRCToAcousticWords, исправляющий галлюцинации таймкодов со стороны LLM.
+// 3. Пост-фильтр SnapLRCToAcousticWordsStats, исправляющий галлюцинации таймкодов со стороны LLM.
 package ai
 
 import (
@@ -96,15 +96,15 @@ func TestLyricsAligner_StretchedIntroClampingAndSnap(t *testing.T) {
 	}
 
 	// Проверяем, что если Gemini вернул сбитые таймкоды ([00:01.00] и [00:05.00]),
-	// SnapLRCToAcousticWords жестко примагнитит их к реальным словам на 15-й и 27-й секундах!
+	// SnapLRCToAcousticWordsStats жестко примагнитит их к реальным словам на 15-й и 27-й секундах!
 	driftedGeminiLRC := "[00:01.00] Группа крови на рукаве\n[00:05.00] Мой порядковый номер"
-	snapped := SnapLRCToAcousticWords(driftedGeminiLRC, data)
+	snapped, _ := SnapLRCToAcousticWordsStats(driftedGeminiLRC, data)
 
 	if !strings.Contains(snapped, "[00:15.00] Группа крови на рукаве") {
-		t.Errorf("SnapLRCToAcousticWords не примагнитил первую строку к 15.00:\n%s", snapped)
+		t.Errorf("SnapLRCToAcousticWordsStats не примагнитил первую строку к 15.00:\n%s", snapped)
 	}
 	if !strings.Contains(snapped, "[00:27.32] Мой порядковый номер") {
-		t.Errorf("SnapLRCToAcousticWords не примагнитил вторую строку к 27.32:\n%s", snapped)
+		t.Errorf("SnapLRCToAcousticWordsStats не примагнитил вторую строку к 27.32:\n%s", snapped)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestSnapKeepsGeminiTimeConfirmedByWhisperWord(t *testing.T) {
 		},
 	}
 	lrc := "[00:05.00] альфа бета\n[00:30.10] эхо привет\n[00:50.00] гамма дельта"
-	got := SnapLRCToAcousticWords(lrc, data)
+	got, _ := SnapLRCToAcousticWordsStats(lrc, data)
 	if !strings.Contains(got, "[00:30.00] эхо привет") {
 		t.Fatalf("ожидалась привязка второй строки к слову Whisper на 30.00, получено:\n%s", got)
 	}

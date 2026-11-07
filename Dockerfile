@@ -25,11 +25,11 @@ COPY . .
 # Собираем чистый статический бинарник без CGO (pure Go modernc.org/sqlite + //go:embed)
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /bin/poisq ./cmd/proxy
 
-# Этап 2: Финальный образ на базе Alpine Linux с утилитами аудио-анализа (ffmpeg, fpcalc, flac)
+# Этап 2: Финальный образ на базе Alpine Linux с утилитами аудио-анализа (ffmpeg, flac)
 FROM alpine:3.20
 
-# Устанавливаем сертификаты, часовые пояса (tzdata для PST сброса квот), ffmpeg и chromaprint (fpcalc)
-RUN apk --no-cache add ca-certificates tzdata ffmpeg chromaprint flac && \
+# Устанавливаем сертификаты, часовые пояса (tzdata для PST сброса квот), ffmpeg и flac
+RUN apk --no-cache add ca-certificates tzdata ffmpeg flac && \
     addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app

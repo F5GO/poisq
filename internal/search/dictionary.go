@@ -22,7 +22,7 @@ var stopWords = map[string]bool{
 	"at": true, "эт": true,
 	"to": true, "ту": true,
 	"with": true,
-	"a": true, "an": true, "э": true,
+	"a":    true, "an": true, "э": true,
 	"la": true, "le": true, "les": true,
 	"der": true, "die": true, "das": true,
 	"und": true,
@@ -211,26 +211,6 @@ func (d *Dictionary) UpdateAliases(newAliases map[string]string) {
 	d.mu.Unlock()
 
 	d.Rebuild(nil)
-}
-
-// GetActiveAliases возвращает снимок текущих активных алиасов.
-func (d *Dictionary) GetActiveAliases() map[string]string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	if len(d.activeAliases) == 0 {
-		res := make(map[string]string, len(musicAliases))
-		for k, v := range musicAliases {
-			res[k] = v
-		}
-		return res
-	}
-
-	res := make(map[string]string, len(d.activeAliases))
-	for k, v := range d.activeAliases {
-		res[k] = v
-	}
-	return res
 }
 
 // FindExact ищет точное совпадение токена в словаре.

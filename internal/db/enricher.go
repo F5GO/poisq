@@ -97,7 +97,6 @@ type entityRow struct {
 	id       string
 	source   string
 	fullText string
-	hash     string
 }
 
 func (e *Enricher) enrichTable(tableName, sourceCol string) (int, error) {
@@ -140,13 +139,13 @@ func (e *Enricher) enrichTable(tableName, sourceCol string) (int, error) {
 			continue
 		}
 
-		hash := computeHash(source)
-		if hash != currentHash {
+		// Сверяем с тем full_text, который записали сами: Navidrome пересобирает full_text при изменении файла (название то же),
+		// и наша вставка пропадает — тогда хэш разойдётся и мы допишем снова.
+		if computeHash(fullText) != currentHash {
 			toUpdate = append(toUpdate, entityRow{
 				id:       id,
 				source:   source,
 				fullText: fullText,
-				hash:     hash,
 			})
 		}
 	}
@@ -219,7 +218,7 @@ func (e *Enricher) updateBatch(tableName string, batch []entityRow) error {
 			return err
 		}
 
-		if _, err := upsertMetaStmt.Exec(tableName, item.id, item.hash); err != nil {
+		if _, err := upsertMetaStmt.Exec(tableName, item.id, computeHash(newFullText)); err != nil {
 			return err
 		}
 	}

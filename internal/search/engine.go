@@ -48,13 +48,6 @@ func NewEngine(dict *Dictionary) *Engine {
 	}
 }
 
-// ClearCache сбрасывает кэш запросов при перестроении словаря или обновлении алиасов.
-func (e *Engine) ClearCache() {
-	e.cacheMu.Lock()
-	defer e.cacheMu.Unlock()
-	e.queryCache = make(map[string]SearchResult, 2048)
-}
-
 // ProcessQuery выполняет анализ и переписывание поискового запроса за доли миллисекунды.
 func (e *Engine) ProcessQuery(rawQuery string) SearchResult {
 	start := time.Now()

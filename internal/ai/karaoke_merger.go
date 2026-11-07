@@ -10,7 +10,7 @@
 //
 // Этап 3: Глобальное динамическое программирование Нидлмана — Вунша (Needleman-Wunsch) +
 //
-//	выверка слов через Google Gemini + жесткая пост-привязка таймкодов (SnapLRCToAcousticWords)
+//	выверка слов через Google Gemini + жесткая пост-привязка таймкодов (SnapLRCToAcousticWordsStats)
 //	к физическим словам аудиозаписи, исключающая любые галлюцинации времени со стороны LLM.
 package ai
 
@@ -60,7 +60,7 @@ func (kp *KaraokePipeline) TranscribeToSegments(ctx context.Context, audioFilePa
 // MergeSegmentsWithReference выполняет этап 3:
 //  1. Вычисляет глобальное выравнивание последовательностей Нидлмана — Вунша (Needleman-Wunsch) по словам Whisper.
 //  2. Выполняет лингвистическую сверку через Google Gemini.
-//  3. Применяет жесткий пост-фильтр SnapLRCToAcousticWords, привязывающий таймкод каждой строки
+//  3. Применяет жесткий пост-фильтр SnapLRCToAcousticWordsStats, привязывающий таймкод каждой строки
 //     к физическому началу первого спетого слова в аудиодорожке.
 func (kp *KaraokePipeline) MergeSegmentsWithReference(ctx context.Context, acousticJSON, artist, title, referencePlainLyrics string) (*ConsensusOutput, error) {
 	wordStream, timelineData := FormatWordLevelStream(acousticJSON)
@@ -172,16 +172,6 @@ func (kp *KaraokePipeline) MergeSegmentsWithReference(ctx context.Context, acous
 	}
 	logger.Info("[KARAOKE] Итог: строк в LRC %d (эталон %d), язык=%s, синхронизирован=%v", outLines, refLines, out.LangCode, out.IsSynced)
 	return out, nil
-}
-
-// GenerateSyncedLRC выполняет полный сквозной цикл генерации караоке.
-func (kp *KaraokePipeline) GenerateSyncedLRC(ctx context.Context, audioFilePath, artist, title, referencePlainLyrics, langHint string) (*ConsensusOutput, error) {
-	hint := strings.TrimSpace(artist + " - " + title)
-	acousticJSON, err := kp.TranscribeToSegments(ctx, audioFilePath, langHint, hint)
-	if err != nil {
-		return nil, err
-	}
-	return kp.MergeSegmentsWithReference(ctx, acousticJSON, artist, title, referencePlainLyrics)
 }
 
 // whisperLanguageToISO переводит название языка из ответа Whisper ("russian") в двухбуквенный код.

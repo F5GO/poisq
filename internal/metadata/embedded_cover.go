@@ -1,5 +1,5 @@
 // Package metadata отвечает за аудит медиатеки, исправление битой кодировки (CP1251 -> UTF-8 NFC),
-// акустическую идентификацию через AcoustID (fpcalc), обогащение через MusicBrainz API и поиск обложек.
+// обогащение через MusicBrainz API и поиск обложек.
 //
 // Данный файл embedded_cover.go реализует нативное извлечение встроенных обложек (Embedded Cover Art)
 // непосредственно из аудиофайлов (ID3v2 APIC/PIC в MP3 и METADATA_BLOCK_PICTURE в FLAC)

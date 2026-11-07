@@ -40,24 +40,25 @@ func CaptureSubsonicAuth(req *http.Request) {
 	if (u != "" && (t != "" || p != "")) || ndAuth != "" {
 		globalAuthCache.mu.Lock()
 		if u != "" {
-			globalAuthCache.query.Set("u", u)
+			// Набор заменяется целиком: иначе u одного клиента смешается с t/s другого, и Navidrome отклонит такой вход.
+			fresh := url.Values{"u": {u}}
 			if t != "" {
-				globalAuthCache.query.Set("t", t)
-				globalAuthCache.query.Set("s", s)
-			}
-			if p != "" {
-				globalAuthCache.query.Set("p", p)
+				fresh.Set("t", t)
+				fresh.Set("s", s)
+			} else {
+				fresh.Set("p", p)
 			}
 			v := q.Get("v")
 			if v == "" {
 				v = "1.16.1"
 			}
-			globalAuthCache.query.Set("v", v)
+			fresh.Set("v", v)
 			c := q.Get("c")
 			if c == "" {
 				c = "poisq"
 			}
-			globalAuthCache.query.Set("c", c)
+			fresh.Set("c", c)
+			globalAuthCache.query = fresh
 		}
 		if ndAuth != "" {
 			globalAuthCache.ndAuth = ndAuth

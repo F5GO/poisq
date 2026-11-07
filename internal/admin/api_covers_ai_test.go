@@ -16,7 +16,7 @@ func TestHandleCoverAIResolve_Validation(t *testing.T) {
 	server := &AdminServer{}
 
 	// 1. Метод, отличный от GET/POST
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/covers/ai-resolve", nil)
+	req := httptest.NewRequest(http.MethodDelete, "http://localhost:4535/api/v1/covers/ai-resolve", nil)
 	w := httptest.NewRecorder()
 	server.handleCoverAIResolve(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
@@ -24,7 +24,7 @@ func TestHandleCoverAIResolve_Validation(t *testing.T) {
 	}
 
 	// 2. Без подключенного арбитра
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/covers/ai-resolve?path=/music/test", nil)
+	req = httptest.NewRequest(http.MethodGet, "http://localhost:4535/api/v1/covers/ai-resolve?path=/music/test", nil)
 	w = httptest.NewRecorder()
 	server.handleCoverAIResolve(w, req)
 	if w.Code != http.StatusServiceUnavailable {
@@ -32,7 +32,7 @@ func TestHandleCoverAIResolve_Validation(t *testing.T) {
 	}
 
 	// 3. Без указания пути или ID
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/covers/ai-resolve", strings.NewReader(`{}`))
+	req = httptest.NewRequest(http.MethodPost, "http://localhost:4535/api/v1/covers/ai-resolve", strings.NewReader(`{}`))
 	w = httptest.NewRecorder()
 	server.handleCoverAIResolve(w, req)
 	if w.Code != http.StatusServiceUnavailable { // Арбитр по-прежнему nil

@@ -63,12 +63,8 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 		if err := AdvertisePoisqExtension(resp); err != nil {
 			return err
 		}
-		origin := resp.Request.Header.Get("Origin")
-		if origin != "" {
-			resp.Header.Set("Access-Control-Allow-Origin", origin)
-			resp.Header.Set("Access-Control-Allow-Credentials", "true")
-			resp.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
-			resp.Header.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-ND-Client-Unique-Id, X-ND-Authorization")
+		if origin := resp.Request.Header.Get("Origin"); origin != "" {
+			setCORS(resp.Header, origin)
 		}
 		return nil
 	}
@@ -119,6 +115,14 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 
 	srv.handler = mux
 	return srv
+}
+
+// setCORS разрешает браузерному клиенту с этого Origin работать с прокси (ответы и preflight).
+func setCORS(h http.Header, origin string) {
+	h.Set("Access-Control-Allow-Origin", origin)
+	h.Set("Access-Control-Allow-Credentials", "true")
+	h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
+	h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-ND-Client-Unique-Id, X-ND-Authorization")
 }
 
 // CleanHost очищает строку хоста от порта и от запятых (в случае нескольких прокси в цепочке CDN/NPM/FRP).

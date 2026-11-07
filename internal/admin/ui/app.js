@@ -2579,7 +2579,7 @@ async function loadKeysData() {
   }
 
   if (state.keys.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="cell-empty">В пуле пока нет ключей. Нажмите «+ Добавить ключ» для подключения Gemini, Groq, AcoustID или Yandex.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="cell-empty">В пуле пока нет ключей. Нажмите «+ Добавить ключ» для подключения Gemini, Groq или Yandex.</td></tr>`;
     return;
   }
 
