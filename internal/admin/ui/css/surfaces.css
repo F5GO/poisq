@@ -1,0 +1,205 @@
+/*
+ * poisq Studio — Слой поверхностей «Мастеринг» (Flat Surfaces & Density)
+ *
+ * Что делает этот код и для чего он нужен:
+ * Подключается последним и приводит компоненты к единому плоскому языку:
+ * панели — это поверхность с границей 1 px и радиусом 8 px, без теней и стекла.
+ * Таблицы плотные (строка 40 px), заголовки колонок — обычным регистром.
+ * Выбранное состояние показывает инверсия (чернила) или акцентная линия,
+ * а не цветная заливка.
+ */
+
+/* ---------- Панели ---------- */
+.table-wrapper,
+.karaoke-layout,
+.staging-card,
+.artist-card,
+.album-card,
+.cover-cand-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.modal-card {
+  background: var(--bg-surface-elevated);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+}
+
+.modal-overlay,
+.modal-backdrop,
+.drawer-overlay {
+  background: var(--overlay);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.drawer-panel {
+  background: var(--bg-surface-elevated);
+  border-radius: 0;
+  box-shadow: var(--shadow-drawer);
+}
+
+/* ---------- Таблицы ---------- */
+.data-table thead th {
+  background: var(--bg-surface-secondary);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 10px 14px;
+}
+
+.data-table td { padding: 9px 14px; }
+
+.data-table tbody tr:hover { background-color: var(--bg-hover); }
+
+.col-num { font-family: var(--font-mono); }
+
+/* ---------- Поиск и поля ---------- */
+.search-field {
+  height: 38px;
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  backdrop-filter: none;
+  background-color: var(--bg-surface);
+  border-color: var(--border-medium);
+}
+
+.search-field:focus,
+.form-input:focus,
+.form-select:focus {
+  border-color: var(--signal);
+  box-shadow: 0 0 0 3px var(--border-focus);
+}
+
+.search-compact { height: 34px; }
+
+/* ---------- Сегменты и фильтры: выбранное — инверсия ---------- */
+.segmented-control {
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 3px;
+  backdrop-filter: none;
+}
+
+.seg-btn {
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 5px 14px;
+}
+
+.seg-btn.active {
+  background: var(--text-primary);
+  color: var(--text-inverse);
+  box-shadow: none;
+  font-weight: 500;
+}
+
+.filter-pill {
+  background: transparent;
+  backdrop-filter: none;
+  border-radius: var(--radius-md);
+  padding: 4px 11px;
+  font-size: 12.5px;
+}
+
+.filter-pill.active {
+  background: var(--signal-soft);
+  color: var(--signal-text);
+  border-color: var(--signal-border);
+  font-weight: 500;
+}
+
+/* ---------- Караоке ---------- */
+.karaoke-layout {
+  height: calc(100vh - 150px);
+  max-height: calc(100vh - 150px);
+}
+
+.karaoke-sidebar { background: var(--bg-surface-secondary); }
+
+.sidebar-header { background: var(--bg-surface-secondary); }
+
+.sidebar-track-item { border-radius: var(--radius-md); }
+
+.sidebar-track-item.active {
+  background: var(--bg-surface-elevated);
+  border-color: var(--border-medium);
+  box-shadow: none;
+}
+
+.sidebar-track-item.active::before,
+.lyric-line.active::before {
+  background: var(--signal);
+  border-radius: 0;
+  width: 3px;
+}
+
+.lyric-line:hover { background-color: var(--bg-hover); }
+
+.lyric-line.active {
+  background: var(--bg-surface-elevated);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  transform: none;
+}
+
+.btn-play {
+  background: var(--signal-strong);
+  border-radius: var(--radius-round);
+  box-shadow: none;
+}
+
+.btn-play:hover {
+  background: var(--signal-hover);
+  box-shadow: none;
+  transform: none;
+}
+
+.scrub-progress { background: var(--signal); }
+
+.scrub-bar { border-radius: 2px; }
+
+/* ---------- Мобильная раскладка ---------- */
+@media (max-width: 720px) {
+  .main-content { padding: 20px 16px 48px; }
+  .table-wrapper { overflow-x: auto; }
+  .karaoke-layout { flex-direction: column; height: auto; max-height: none; }
+  .karaoke-sidebar { width: 100%; max-height: 260px; border-right: none; border-bottom: 1px solid var(--border-subtle); }
+  .filter-row { flex-wrap: wrap; }
+  .search-input-wrap { flex-basis: 100%; max-width: none; }
+}
+
+/* ---------- Знак poisq в заглушках и ярлык AI ---------- */
+.mark-ph { fill: var(--text-muted); opacity: 0.7; }
+.mark-ph .mark-live { fill: var(--signal); }
+
+.ai-sparkle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 4px;
+  border: 1px solid var(--signal-border);
+  border-radius: var(--radius-xs);
+  color: var(--signal-text);
+}
+
+.cover-ai-resolve-btn {
+  background: var(--signal-soft);
+  color: var(--signal-text);
+  border: 1px solid var(--signal-border);
+  font-weight: 500;
+}
+
+.cover-ai-resolve-btn:hover {
+  background: var(--signal-soft);
+  border-color: var(--signal);
+}

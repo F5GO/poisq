@@ -68,7 +68,7 @@
 
 .sidebar-track-item.active {
   background: var(--bg-surface);
-  border-color: rgba(37, 99, 235, 0.25);
+  border-color: rgba(36, 56, 224, 0.25);
   box-shadow: var(--shadow-sm);
   position: relative;
 }
@@ -170,7 +170,7 @@
 .spinner-small {
   width: 12px;
   height: 12px;
-  border: 2px solid rgba(37, 99, 235, 0.2);
+  border: 2px solid rgba(36, 56, 224, 0.2);
   border-top-color: var(--poisq-blue);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -341,13 +341,13 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 2px 8px rgba(36, 56, 224, 0.35);
   transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .btn-play:hover {
   transform: scale(1.06);
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45);
+  box-shadow: 0 4px 14px rgba(36, 56, 224, 0.45);
 }
 
 .btn-play:active {

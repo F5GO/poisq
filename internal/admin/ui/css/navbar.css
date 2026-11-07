@@ -1,65 +1,56 @@
 /*
  * poisq Studio — Навигационная панель (Navbar & Branding)
- * 
+ *
  * Что делает этот код и для чего он нужен:
- * Стилизует верхнюю фиксированную строку навигации приложения:
- * - Фирменная идентификация poisq: градиентный знак + строчный wordmark poisq + суффикс studio;
- * - Вкладки навигации с динамическими бейджами очереди задач и staging;
- * - Индикатор соединения Subsonic (:4534) и переключатель цветовой темы;
- * - Эффект матового стекла Apple (backdrop-filter blur).
+ * Плоская верхняя полоса на всю ширину с границей снизу. Знак poisq — четыре
+ * столбика эквалайзера, последний окрашен акцентом. Активная вкладка отмечена
+ * линией-акцентом снизу, как маркер на шкале; счётчики очередей — моноширинные.
  */
 
 .navbar {
-  border-bottom: 1px solid var(--navbar-border);
-  background-color: var(--navbar-bg);
   position: sticky;
   top: 0;
   z-index: 50;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  transition: background-color 0.2s ease, border-color 0.2s ease;
+  background: var(--navbar-bg);
+  border-bottom: 1px solid var(--navbar-border);
 }
 
 .nav-container {
-  max-width: 1200px;
+  max-width: 1240px;
   margin: 0 auto;
-  padding: 0 20px;
-  height: 60px;
+  padding: 0 24px;
+  height: 52px;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
-  gap: 16px;
+  gap: 24px;
 }
 
-/* Фирменный блок бренда */
 .nav-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  text-decoration: none;
+  gap: 9px;
   cursor: pointer;
   user-select: none;
+  flex-shrink: 0;
 }
 
 .brand-icon-wrap {
-  width: 32px;
-  height: 32px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.brand-icon-wrap:hover {
-  transform: scale(1.05);
 }
 
 .brand-mark-img {
-  width: 32px;
-  height: 32px;
-  object-fit: contain;
+  width: 22px;
+  height: 22px;
   display: block;
+  fill: var(--text-primary);
 }
+
+.brand-mark-img .mark-live { fill: var(--signal); }
 
 .brand-title-wrap {
   display: flex;
@@ -68,86 +59,89 @@
 }
 
 .brand-name {
-  font-family: var(--font-sans);
-  font-weight: 700;
-  font-size: 20px;
+  font-weight: 600;
+  font-size: 16px;
   color: var(--text-primary);
-  letter-spacing: -0.03em;
+  letter-spacing: -0.02em;
   line-height: 1;
 }
 
 .brand-sub {
-  font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--poisq-slate);
-  background-color: var(--bg-subtle);
-  padding: 2px 7px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
 }
 
-/* Вкладки навигации */
+/* Вкладки */
 .nav-links {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
+.nav-links::-webkit-scrollbar { display: none; }
+
 .nav-tab {
+  position: relative;
   background: transparent;
   border: none;
   color: var(--text-secondary);
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 500;
-  padding: 8px 14px;
-  border-radius: var(--radius-md);
+  padding: 0 12px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  transition: color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+  gap: 8px;
+  white-space: nowrap;
+  transition: color 0.12s ease;
   user-select: none;
 }
 
-.nav-tab:hover {
-  color: var(--text-primary);
-  background-color: var(--bg-hover);
-}
+.nav-tab:hover { color: var(--text-primary); }
 
 .nav-tab.active {
-  color: var(--poisq-blue);
-  background-color: var(--color-accent-bg);
+  color: var(--text-primary);
   font-weight: 600;
 }
 
-[data-theme="dark"] .nav-tab.active {
-  color: #60A5FA;
-  background-color: rgba(59, 130, 246, 0.18);
+.nav-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--signal);
 }
 
 .badge-count {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: var(--radius-pill);
-  background: var(--color-amber-bg);
-  color: var(--color-amber);
-  border: 1px solid rgba(245, 158, 11, 0.25);
   font-family: var(--font-mono);
-  transition: all 0.2s ease;
+  font-size: 11px;
+  font-weight: 500;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  background: transparent;
 }
 
 .badge-count.has-items {
-  background: #F59E0B;
-  color: #FFFFFF;
-  border-color: #F59E0B;
+  background: var(--color-amber-bg);
+  border-color: var(--color-amber-border);
+  color: var(--color-amber);
 }
 
-/* Правый блок со статусом и переключателем темы */
+/* Правый кластер */
 .nav-right-cluster {
   display: flex;
   align-items: center;
@@ -160,51 +154,28 @@
   gap: 8px;
   font-size: 12px;
   color: var(--text-secondary);
-  background-color: var(--bg-surface);
-  padding: 6px 12px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-sm);
+  white-space: nowrap;
 }
 
 .status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-pill);
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-round);
   background-color: var(--color-emerald);
-  box-shadow: 0 0 0 2px var(--color-emerald-bg);
-  position: relative;
 }
 
-.status-dot::after {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: var(--radius-pill);
-  background-color: var(--color-emerald);
-  opacity: 0.4;
-  animation: pulseDot 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-}
-
-@keyframes pulseDot {
-  0%, 100% { transform: scale(1); opacity: 0.4; }
-  50% { transform: scale(1.8); opacity: 0; }
-}
-
-/* Кнопка переключения темы */
 .theme-toggle-btn {
-  background: var(--bg-surface);
+  background: transparent;
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: var(--shadow-sm);
-  transition: all 0.15s ease;
+  transition: color 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
 }
 
 .theme-toggle-btn:hover {
@@ -213,7 +184,18 @@
   border-color: var(--border-medium);
 }
 
-.theme-toggle-btn svg {
-  width: 17px;
-  height: 17px;
+.theme-toggle-btn svg { width: 16px; height: 16px; }
+
+@media (max-width: 960px) {
+  .nav-container {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 8px 16px 0;
+    gap: 0 16px;
+  }
+  .nav-brand { height: 36px; }
+  .nav-right-cluster { height: 36px; margin-left: auto; }
+  .nav-links { order: 3; width: 100%; }
+  .nav-tab { height: 40px; }
+  .nav-status { display: none; }
 }

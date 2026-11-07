@@ -4,10 +4,9 @@
  * Что делает этот код и для чего он нужен:
  * Устанавливает базовый сброс CSS (box-sizing, отступы), глобальные стили для body,
  * плавный рендеринг шрифтов Apple (-webkit-font-smoothing), вспомогательные классы
- * и типографические стили с использованием шрифта Plus Jakarta Sans / Apple SF Pro.
+ * и типографические стили (IBM Plex Sans + IBM Plex Mono), цифры табличные.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
 *, *::before, *::after {
   box-sizing: border-box;
@@ -26,12 +25,30 @@ body {
   background-color: var(--bg-page);
   color: var(--text-primary);
   line-height: 1.5;
-  letter-spacing: -0.011em;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--signal-soft);
+  color: var(--text-primary);
 }
 
 /* Моноширинный текст для чисел, путей и таймкодов */
@@ -75,16 +92,16 @@ body {
 /* Основная рабочая область */
 .main-content {
   flex: 1;
-  max-width: 1200px;
+  max-width: 1240px;
   width: 100%;
   margin: 0 auto;
-  padding: 24px 20px 48px;
+  padding: 24px 24px 56px;
 }
 
 /* Панели вкладок */
 .tab-panel {
   display: none;
-  animation: fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: fadeIn 0.24s var(--ease-out);
 }
 
 .tab-panel.active {
@@ -94,7 +111,7 @@ body {
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(2px);
   }
   to {
     opacity: 1;
@@ -105,17 +122,18 @@ body {
 /* Заголовки панелей */
 .panel-header {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 
 .panel-title {
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 22px;
+  font-weight: 600;
   color: var(--text-primary);
-  line-height: 1.25;
+  line-height: 1.2;
   letter-spacing: -0.02em;
 }
 

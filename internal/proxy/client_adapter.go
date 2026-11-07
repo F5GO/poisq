@@ -8,6 +8,7 @@ package proxy
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 )
 
@@ -26,4 +27,11 @@ func DecorateEntityName(currentName, rawQuery string) string {
 	}
 
 	return fmt.Sprintf("%s (%s)", currentName, cleanQuery)
+}
+
+// NeedsDecoratedTitles сообщает, нужно ли дописывать запрос в скобках к названиям для данного клиента.
+// Клиенты, которые не фильтруют выдачу на устройстве (приложение poisq), получают чистые названия:
+// они определяются стандартным параметром Subsonic `c` (имя клиента).
+func NeedsDecoratedTitles(req *http.Request) bool {
+	return !strings.EqualFold(req.URL.Query().Get("c"), "poisq")
 }
