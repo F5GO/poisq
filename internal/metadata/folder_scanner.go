@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -409,183 +410,213 @@ func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (in
 		}
 
 		foldersProcessed++
+		proposalsCreated += s.auditFolder(ctx, folderPath, folderTracks, "")
+	}
 
-		consensus := ComputeFolderAlbumLock(folderTracks)
-		if consensus.DominantArtist == "" {
-			continue
-		}
+	logger.Info("[SCANNER] Глубокий аудит завершен: проверено папок %d, создано предложений в Staging: %d", foldersProcessed, proposalsCreated)
+	return proposalsCreated, nil
+}
 
-		// 1. Проверка каноничного имени артиста и релиза в MusicBrainz (с защитой Folder-as-Album Lock)
-		var releaseMBID string
-		if s.mbClient != nil {
-			if relInfo, err := s.mbClient.LookupRelease(ctx, consensus.DominantArtist, consensus.DominantAlbum); err == nil && relInfo != nil {
-				releaseMBID = relInfo.ReleaseMBID
-				// Если имя артиста или год уточнены в MusicBrainz (например, "Максим" -> "МакSим")
-				if relInfo.CanonicalArtist != consensus.DominantArtist || (consensus.DominantYear == 0 && relInfo.Year > 0) {
-					for _, tr := range folderTracks {
-						targetAlbum := tr.Album
-						if consensus.IsNumberedAlbum && relInfo.AlbumTitle != "" {
-							// Folder-as-Album Lock: удерживаем единый номерной альбом для всех треков папки
-							targetAlbum = relInfo.AlbumTitle
-						}
-						targetYear := tr.Year
-						if targetYear == 0 && relInfo.Year > 0 {
-							targetYear = relInfo.Year
-						}
-						curJSON, _ := json.Marshal(map[string]any{
-							"artist":      tr.Artist,
-							"album":       tr.Album,
-							"albumArtist": tr.AlbumArtist,
-							"title":       tr.Title,
-							"year":        tr.Year,
-						})
-						propJSON, _ := json.Marshal(map[string]any{
-							"artist":      relInfo.CanonicalArtist,
-							"album":       targetAlbum,
-							"albumArtist": relInfo.CanonicalArtist,
-							"title":       tr.Title,
-							"year":        targetYear,
-							"releaseMbid": relInfo.ReleaseMBID,
-							"artistMbid":  relInfo.ArtistMBID,
-							"reason":      "Канонизация MusicBrainz + Folder-as-Album Lock",
-						})
-						if _, err := s.stagingRepo.CreateProposal(db.StagingChangeRecord{
-							Scope:        "track",
-							TargetID:     tr.ID,
-							FolderPath:   folderPath,
-							ChangeType:   "musicbrainz",
-							Confidence:   relInfo.Score,
-							CurrentJSON:  string(curJSON),
-							ProposedJSON: string(propJSON),
-						}); err == nil {
-							proposalsCreated++
-						}
+// RunTrackAudit проверяет один трек: теги MusicBrainz только для него, обложку — для его папки.
+// Консенсус альбома считается по всей папке, чтобы не сломать Folder-as-Album Lock.
+func (s *LibraryScanner) RunTrackAudit(ctx context.Context, trackID string) (int, error) {
+	track, err := s.tracksRepo.GetByID(trackID)
+	if err != nil {
+		return 0, err
+	}
+	if track.FolderPath == "" {
+		return 0, fmt.Errorf("у трека %s не указана папка", trackID)
+	}
+	folderTracks, err := s.tracksRepo.ListByFolder(track.FolderPath)
+	if err != nil {
+		return 0, err
+	}
+	return s.auditFolder(ctx, track.FolderPath, folderTracks, trackID), nil
+}
+
+// auditFolder создаёт предложения Staging для одной папки; onlyTrackID ограничивает правки тегов одним треком.
+func (s *LibraryScanner) auditFolder(ctx context.Context, folderPath string, folderTracks []db.TrackRecord, onlyTrackID string) int {
+	proposalsCreated := 0
+
+	consensus := ComputeFolderAlbumLock(folderTracks)
+	if consensus.DominantArtist == "" {
+		return 0
+	}
+
+	// 1. Проверка каноничного имени артиста и релиза в MusicBrainz (с защитой Folder-as-Album Lock)
+	var releaseMBID string
+	if s.mbClient != nil {
+		if relInfo, err := s.mbClient.LookupRelease(ctx, consensus.DominantArtist, consensus.DominantAlbum); err == nil && relInfo != nil {
+			releaseMBID = relInfo.ReleaseMBID
+			// Если имя артиста или год уточнены в MusicBrainz (например, "Максим" -> "МакSим")
+			if relInfo.CanonicalArtist != consensus.DominantArtist || (consensus.DominantYear == 0 && relInfo.Year > 0) {
+				for _, tr := range folderTracks {
+					if onlyTrackID != "" && tr.ID != onlyTrackID {
+						continue
 					}
-				}
-			} else if artInfo, err := s.mbClient.LookupArtist(ctx, consensus.DominantArtist); err == nil && artInfo != nil {
-				if artInfo.CanonicalName != "" && artInfo.CanonicalName != consensus.DominantArtist {
-					for _, tr := range folderTracks {
-						curJSON, _ := json.Marshal(map[string]any{
-							"artist": tr.Artist,
-							"album":  tr.Album,
-							"title":  tr.Title,
-							"year":   tr.Year,
-						})
-						propJSON, _ := json.Marshal(map[string]any{
-							"artist":      artInfo.CanonicalName,
-							"album":       consensus.DominantAlbum,
-							"albumArtist": artInfo.CanonicalName,
-							"title":       tr.Title,
-							"year":        tr.Year,
-							"artistMbid":  artInfo.ArtistMBID,
-							"aliases":     artInfo.Aliases,
-							"reason":      "Каноничное имя артиста MusicBrainz (" + consensus.DominantArtist + " -> " + artInfo.CanonicalName + ")",
-						})
-						if _, err := s.stagingRepo.CreateProposal(db.StagingChangeRecord{
-							Scope:        "track",
-							TargetID:     tr.ID,
-							FolderPath:   folderPath,
-							ChangeType:   "artist_canonical",
-							Confidence:   artInfo.Score,
-							CurrentJSON:  string(curJSON),
-							ProposedJSON: string(propJSON),
-						}); err == nil {
-							proposalsCreated++
-						}
+					targetAlbum := tr.Album
+					if consensus.IsNumberedAlbum && relInfo.AlbumTitle != "" {
+						// Folder-as-Album Lock: удерживаем единый номерной альбом для всех треков папки
+						targetAlbum = relInfo.AlbumTitle
+					}
+					targetYear := tr.Year
+					if targetYear == 0 && relInfo.Year > 0 {
+						targetYear = relInfo.Year
+					}
+					curJSON, _ := json.Marshal(map[string]any{
+						"artist":      tr.Artist,
+						"album":       tr.Album,
+						"albumArtist": tr.AlbumArtist,
+						"title":       tr.Title,
+						"year":        tr.Year,
+					})
+					propJSON, _ := json.Marshal(map[string]any{
+						"artist":      relInfo.CanonicalArtist,
+						"album":       targetAlbum,
+						"albumArtist": relInfo.CanonicalArtist,
+						"title":       tr.Title,
+						"year":        targetYear,
+						"releaseMbid": relInfo.ReleaseMBID,
+						"artistMbid":  relInfo.ArtistMBID,
+						"reason":      "Канонизация MusicBrainz + Folder-as-Album Lock",
+					})
+					if _, err := s.stagingRepo.CreateProposal(db.StagingChangeRecord{
+						Scope:        "track",
+						TargetID:     tr.ID,
+						FolderPath:   folderPath,
+						ChangeType:   "musicbrainz",
+						Confidence:   relInfo.Score,
+						CurrentJSON:  string(curJSON),
+						ProposedJSON: string(propJSON),
+					}); err == nil {
+						proposalsCreated++
 					}
 				}
 			}
-		}
-
-		// 2. Проверка обложки папки (если нет качественной cover.jpg >= 1200x1200 — ищем в Cover Art Archive / iTunes 3000x3000)
-		hasCov, w, h, existingFile := s.coverFetch.InspectFolderCover(folderPath)
-		if !hasCov || w < 1200 || h < 1200 {
-			var cand *CoverCandidate
-			var aiExplanation, canonicalAlbum, releaseType string
-
-			isDisputed := IsSuspectedSingleOrDisputed(folderPath, folderTracks)
-			if isDisputed && s.arbiter != nil {
-				// Если это сингл или имя папки содержит дефис/тире — сразу привлекаем контекстный AI-арбитраж
-				if aiCand, decision, err := s.ResolveFolderCoverWithAI(ctx, folderPath, folderTracks, releaseMBID); err == nil && aiCand != nil {
-					cand = aiCand
-					if decision != nil {
-						aiExplanation = decision.Explanation
-						canonicalAlbum = decision.CanonicalAlbum
-						releaseType = decision.ReleaseType
+		} else if artInfo, err := s.mbClient.LookupArtist(ctx, consensus.DominantArtist); err == nil && artInfo != nil {
+			if artInfo.CanonicalName != "" && artInfo.CanonicalName != consensus.DominantArtist {
+				for _, tr := range folderTracks {
+					if onlyTrackID != "" && tr.ID != onlyTrackID {
+						continue
 					}
-				}
-			}
-
-			// Если AI не привлекался или не нашел кандидата — стандартный поиск
-			if cand == nil {
-				cand, _ = s.coverFetch.FindHighResCover(ctx, releaseMBID, consensus.DominantArtist, consensus.DominantAlbum)
-			}
-
-			// Если стандартный поиск не дал результатов, пробуем AI как фоллбэк
-			if cand == nil && !isDisputed && s.arbiter != nil {
-				if aiCand, decision, err := s.ResolveFolderCoverWithAI(ctx, folderPath, folderTracks, releaseMBID); err == nil && aiCand != nil {
-					cand = aiCand
-					if decision != nil {
-						aiExplanation = decision.Explanation
-						canonicalAlbum = decision.CanonicalAlbum
-						releaseType = decision.ReleaseType
+					curJSON, _ := json.Marshal(map[string]any{
+						"artist": tr.Artist,
+						"album":  tr.Album,
+						"title":  tr.Title,
+						"year":   tr.Year,
+					})
+					propJSON, _ := json.Marshal(map[string]any{
+						"artist":      artInfo.CanonicalName,
+						"album":       consensus.DominantAlbum,
+						"albumArtist": artInfo.CanonicalName,
+						"title":       tr.Title,
+						"year":        tr.Year,
+						"artistMbid":  artInfo.ArtistMBID,
+						"aliases":     artInfo.Aliases,
+						"reason":      "Каноничное имя артиста MusicBrainz (" + consensus.DominantArtist + " -> " + artInfo.CanonicalName + ")",
+					})
+					if _, err := s.stagingRepo.CreateProposal(db.StagingChangeRecord{
+						Scope:        "track",
+						TargetID:     tr.ID,
+						FolderPath:   folderPath,
+						ChangeType:   "artist_canonical",
+						Confidence:   artInfo.Score,
+						CurrentJSON:  string(curJSON),
+						ProposedJSON: string(propJSON),
+					}); err == nil {
+						proposalsCreated++
 					}
-				}
-			}
-
-			if cand != nil {
-				// Защита: если существующая обложка уже больше или равна по разрешению, не меняем на худшую
-				if hasCov && cand.Width <= w && cand.Height <= h {
-					continue
-				}
-				curCovJSON, _ := json.Marshal(map[string]any{
-					"hasCover":     hasCov,
-					"width":        w,
-					"height":       h,
-					"existingFile": existingFile,
-					"artist":       consensus.DominantArtist,
-					"album":        consensus.DominantAlbum,
-				})
-
-				reason := "Обложка высокого разрешения (" + cand.Source + ")"
-				if aiExplanation != "" {
-					reason = "Подобрано через AI: " + canonicalAlbum + " (" + aiExplanation + ")"
-				}
-
-				propCovJSON, _ := json.Marshal(map[string]any{
-					"coverUrl":       cand.URL,
-					"source":         cand.Source,
-					"width":          cand.Width,
-					"height":         cand.Height,
-					"artist":         consensus.DominantArtist,
-					"album":          consensus.DominantAlbum,
-					"canonicalAlbum": canonicalAlbum,
-					"releaseType":    releaseType,
-					"aiExplanation":  aiExplanation,
-					"reason":         reason,
-					"alternatives":   cand.Alternatives,
-				})
-				conf := cand.Score
-				if conf <= 0 {
-					conf = 95
-				}
-				if _, err := s.stagingRepo.CreateProposal(db.StagingChangeRecord{
-					Scope:        "folder",
-					TargetID:     folderPath,
-					FolderPath:   folderPath,
-					ChangeType:   "cover",
-					Confidence:   conf,
-					CurrentJSON:  string(curCovJSON),
-					ProposedJSON: string(propCovJSON),
-				}); err == nil {
-					proposalsCreated++
 				}
 			}
 		}
 	}
 
-	logger.Info("[SCANNER] Глубокий аудит завершен: проверено папок %d, создано предложений в Staging: %d", foldersProcessed, proposalsCreated)
-	return proposalsCreated, nil
+	// 2. Проверка обложки папки (если нет качественной cover.jpg >= 1200x1200 — ищем в Cover Art Archive / iTunes 3000x3000)
+	hasCov, w, h, existingFile := s.coverFetch.InspectFolderCover(folderPath)
+	if !hasCov || w < 1200 || h < 1200 {
+		var cand *CoverCandidate
+		var aiExplanation, canonicalAlbum, releaseType string
+
+		isDisputed := IsSuspectedSingleOrDisputed(folderPath, folderTracks)
+		if isDisputed && s.arbiter != nil {
+			// Если это сингл или имя папки содержит дефис/тире — сразу привлекаем контекстный AI-арбитраж
+			if aiCand, decision, err := s.ResolveFolderCoverWithAI(ctx, folderPath, folderTracks, releaseMBID); err == nil && aiCand != nil {
+				cand = aiCand
+				if decision != nil {
+					aiExplanation = decision.Explanation
+					canonicalAlbum = decision.CanonicalAlbum
+					releaseType = decision.ReleaseType
+				}
+			}
+		}
+
+		// Если AI не привлекался или не нашел кандидата — стандартный поиск
+		if cand == nil {
+			cand, _ = s.coverFetch.FindHighResCover(ctx, releaseMBID, consensus.DominantArtist, consensus.DominantAlbum)
+		}
+
+		// Если стандартный поиск не дал результатов, пробуем AI как фоллбэк
+		if cand == nil && !isDisputed && s.arbiter != nil {
+			if aiCand, decision, err := s.ResolveFolderCoverWithAI(ctx, folderPath, folderTracks, releaseMBID); err == nil && aiCand != nil {
+				cand = aiCand
+				if decision != nil {
+					aiExplanation = decision.Explanation
+					canonicalAlbum = decision.CanonicalAlbum
+					releaseType = decision.ReleaseType
+				}
+			}
+		}
+
+		if cand != nil {
+			// Защита: если существующая обложка уже больше или равна по разрешению, не меняем на худшую
+			if hasCov && cand.Width <= w && cand.Height <= h {
+				return proposalsCreated
+			}
+			curCovJSON, _ := json.Marshal(map[string]any{
+				"hasCover":     hasCov,
+				"width":        w,
+				"height":       h,
+				"existingFile": existingFile,
+				"artist":       consensus.DominantArtist,
+				"album":        consensus.DominantAlbum,
+			})
+
+			reason := "Обложка высокого разрешения (" + cand.Source + ")"
+			if aiExplanation != "" {
+				reason = "Подобрано через AI: " + canonicalAlbum + " (" + aiExplanation + ")"
+			}
+
+			propCovJSON, _ := json.Marshal(map[string]any{
+				"coverUrl":       cand.URL,
+				"source":         cand.Source,
+				"width":          cand.Width,
+				"height":         cand.Height,
+				"artist":         consensus.DominantArtist,
+				"album":          consensus.DominantAlbum,
+				"canonicalAlbum": canonicalAlbum,
+				"releaseType":    releaseType,
+				"aiExplanation":  aiExplanation,
+				"reason":         reason,
+				"alternatives":   cand.Alternatives,
+			})
+			conf := cand.Score
+			if conf <= 0 {
+				conf = 95
+			}
+			if _, err := s.stagingRepo.CreateProposal(db.StagingChangeRecord{
+				Scope:        "folder",
+				TargetID:     folderPath,
+				FolderPath:   folderPath,
+				ChangeType:   "cover",
+				Confidence:   conf,
+				CurrentJSON:  string(curCovJSON),
+				ProposedJSON: string(propCovJSON),
+			}); err == nil {
+				proposalsCreated++
+			}
+		}
+	}
+	return proposalsCreated
 }
 
 func (s *LibraryScanner) resolveMusicPath(p string) string {

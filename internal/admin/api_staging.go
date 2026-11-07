@@ -13,6 +13,7 @@ import (
 
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/metadata"
+	"github.com/F5GO/poisq/internal/tagger"
 )
 
 func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) {
@@ -255,4 +256,29 @@ func (s *AdminServer) handleStagingClearAll(w http.ResponseWriter, r *http.Reque
 		"deleted": deleted,
 		"message": "Вся очередь Staging очищена",
 	})
+}
+
+func (s *AdminServer) handleTrackTags(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		TrackID string `json:"trackId"`
+		tagger.CanonicalTagSet
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TrackID == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Year < 0 || req.Year > 9999 {
+		writeJSONError(w, http.StatusBadRequest, "некорректный год")
+		return
+	}
+	id, err := s.stagingSvc.ApplyManualEdit(r.Context(), req.TrackID, req.CanonicalTagSet)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "stagingId": id})
 }

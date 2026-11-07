@@ -80,24 +80,33 @@ func (s *AdminServer) handleScanAudit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		LimitFolders int `json:"limitFolders"`
+		LimitFolders int    `json:"limitFolders"`
+		TrackID      string `json:"trackId"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
+
 	if req.LimitFolders <= 0 {
 		req.LimitFolders = 20
 	}
 
-	go func(limit int) {
+	go func(limit int, trackID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		logger.Info("[AUDIT] Запуск глубокого аудита для %d папок...", limit)
-		created, err := s.scanner.RunDeepAudit(ctx, limit)
+		var created int
+		var err error
+		if trackID != "" {
+			logger.Info("[AUDIT] Проверка трека %s...", trackID)
+			created, err = s.scanner.RunTrackAudit(ctx, trackID)
+		} else {
+			logger.Info("[AUDIT] Запуск глубокого аудита для %d папок...", limit)
+			created, err = s.scanner.RunDeepAudit(ctx, limit)
+		}
 		if err != nil {
 			logger.Warn("[AUDIT] Ошибка при выполнении аудита: %v", err)
 		} else {
 			logger.Info("[AUDIT] Глубокий аудит завершен. Создано новых предложений: %d", created)
 		}
-	}(req.LimitFolders)
+	}(req.LimitFolders, req.TrackID)
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":  "started",

@@ -9,10 +9,12 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -207,5 +209,72 @@ func TestAdminServerEndToEnd(t *testing.T) {
 		if ep.containsBody != "" && !strings.Contains(recStatic.Body.String(), ep.containsBody) {
 			t.Errorf("expected body of %s to contain %q", ep.url, ep.containsBody)
 		}
+	}
+}
+
+func TestTrackTagsManualEditAndUndo(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg не найден")
+	}
+	tmpDir := t.TempDir()
+	musicDir := filepath.Join(tmpDir, "music")
+	_ = os.MkdirAll(filepath.Join(musicDir, "Kino"), 0755)
+	audioPath := filepath.Join(musicDir, "Kino", "song.flac")
+	if out, err := exec.Command("ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono", "-t", "0.2", "-metadata", "title=Old", audioPath).CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg: %v %s", err, out)
+	}
+
+	poisqDB, err := db.OpenPoisqDatabase(filepath.Join(tmpDir, "poisq.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer poisqDB.Close()
+	guard, _ := security.NewPathGuard(musicDir)
+	trackRepo := db.NewTrackRepository(poisqDB)
+	stagingRepo := db.NewStagingRepository(poisqDB)
+	_ = trackRepo.UpsertTrack(db.TrackRecord{ID: "t1", FilePath: audioPath, FolderPath: filepath.Dir(audioPath), Artist: "Кино", Title: "Old"})
+	coverFetch := metadata.NewCoverFetcher(guard)
+	stagingSvc := tagger.NewStagingService(tagger.NewAtomicTagWriter(guard), coverFetch, trackRepo, stagingRepo)
+	srv := NewAdminServer(trackRepo, stagingRepo, db.NewJobRepository(poisqDB), db.NewProviderCacheRepository(poisqDB), nil, metadata.NewLibraryScanner(guard.Root(), trackRepo, stagingRepo, nil, coverFetch), stagingSvc, nil, nil, guard, nil)
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "http://localhost:4535"+path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := post("/api/v1/tracks/tags", `{"trackId":"t1","artist":"Кино","title":"Новое имя","album":"Альбом","year":1988}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tags: %d %s", rec.Code, rec.Body.String())
+	}
+	var res struct {
+		StagingID int64 `json:"stagingId"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &res)
+	if tr, _ := trackRepo.GetByID("t1"); tr.Title != "Новое имя" || tr.Year != 1988 {
+		t.Fatalf("БД не обновлена: %+v", tr)
+	}
+	probeTag := func(tag string) string {
+		out, _ := exec.Command("ffprobe", "-loglevel", "error", "-show_entries", "format_tags="+tag, "-of", "default=nw=1:nk=1", audioPath).Output()
+		return strings.TrimSpace(string(out))
+	}
+	probe := func() string { return probeTag("title") }
+	if got := probe(); got != "Новое имя" {
+		t.Fatalf("тег в файле: %q", got)
+	}
+	if got := probeTag("album_artist"); got != "" {
+		t.Fatalf("ручная правка добавила album_artist: %q", got)
+	}
+
+	if rec := post("/api/v1/staging/undo", fmt.Sprintf(`{"id":%d}`, res.StagingID)); rec.Code != http.StatusOK {
+		t.Fatalf("undo: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := probe(); got != "Old" {
+		t.Fatalf("после отката тег в файле: %q", got)
+	}
+
+	if rec := post("/api/v1/tracks/tags", `{"trackId":"nope","title":"x"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("неизвестный трек: ожидался 400, получено %d", rec.Code)
 	}
 }

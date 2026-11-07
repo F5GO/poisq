@@ -261,6 +261,30 @@ func (r *TrackRepository) GetByID(id string) (*TrackRecord, error) {
 	return scanTrackRow(row)
 }
 
+// ListByFolder возвращает все треки одной папки альбома.
+func (r *TrackRepository) ListByFolder(folderPath string) ([]TrackRecord, error) {
+	rows, err := r.db.Query(`
+		SELECT id, file_path, folder_path, artist, album, album_artist, title,
+		       track_number, year, duration, lang_code, has_cover, cover_width, cover_height,
+		       is_mojibake, lyrics_status, active_source, active_lyrics, lrc_file_synced, updated_at
+		FROM tracks WHERE folder_path = ?
+	`, folderPath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []TrackRecord
+	for rows.Next() {
+		t, err := scanTrackRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *t)
+	}
+	return list, rows.Err()
+}
+
 // ListTracks возвращает список треков с фильтрацией по статусу текста, кодировке и поисковому запросу.
 func (r *TrackRepository) ListTracks(statusFilter string, searchQuery string, limit int) ([]TrackRecord, error) {
 	if limit <= 0 || limit > 500 {
