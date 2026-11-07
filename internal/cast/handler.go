@@ -6,7 +6,7 @@ package cast
 //
 //	poisqCastZones                                   → castZones: [{id, name, state, volume}]
 //	poisqCastPlay    zone, id…, [index], [offset]    → заменить очередь и играть
-//	poisqCastControl zone, action, [position|volume|id…]   (remove: position = индекс в очереди)
+//	poisqCastControl zone, action, [position|volume|id…]   (remove, index: position = индекс в очереди)
 //	poisqCastStatus  zone                            → castStatus: {state, index, position, volume}
 
 import (

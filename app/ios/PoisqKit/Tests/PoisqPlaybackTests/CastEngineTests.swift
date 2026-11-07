@@ -42,26 +42,61 @@ final class CastStub: URLProtocol, @unchecked Sendable {
         engine.onTrackStarted = { started.append($0) }
 
         let a = try c.streamURL(for: Song(id: "a", title: "A")), b = try c.streamURL(for: Song(id: "b", title: "B")), x = try c.streamURL(for: Song(id: "x", title: "X"))
+        // Как Player: запуск и весь хвост очереди за один такт — на колонку уходит одна команда
         engine.play(a)
         engine.enqueue(b)
         engine.enqueue(x)
-        engine.dequeue(x)                                   // ещё не играла — убираем с колонки по индексу 2
-        await waitForRequests(4)
+        engine.dequeue(x)
+        await waitForRequests(1)
+        var calls = CastStub.seen.filter { !$0.path.hasSuffix("poisqCastStatus") }
+        #expect(calls.map(\.lastPathComponent) == ["poisqCastPlay"])
+        #expect(query(calls[0])["zone"] == ["kitchen"] && query(calls[0])["id"] == ["a", "b"])
 
-        let calls = CastStub.seen.filter { !$0.path.hasSuffix("poisqCastStatus") }
-        #expect(calls.map(\.lastPathComponent) == ["poisqCastPlay", "poisqCastControl", "poisqCastControl", "poisqCastControl"])
-        #expect(query(calls[0])["zone"] == ["kitchen"] && query(calls[0])["id"] == ["a"])
-        #expect(query(calls[1])["action"] == ["add"] && query(calls[1])["id"] == ["b"])
-        #expect(query(calls[3])["action"] == ["remove"] && query(calls[3])["position"] == ["2"])
-
-        // Колонка перешла ко второй песне — Player узнаёт об этом по ссылке
+        // Пока MA не сообщил новый индекс, старое состояние не считается запуском
+        engine.apply(.init(state: "playing", index: 3, position: 50, volume: 20))
+        #expect(started.isEmpty)
+        engine.apply(.init(state: "playing", index: 0, position: 1, volume: 20))
         engine.apply(.init(state: "playing", index: 1, position: 3, volume: 20))
-        #expect(started == [b])
+        #expect(started == [a, b])
         #expect(engine.state == .playing)
-        #expect(engine.currentURL == b)
         engine.apply(.init(state: "playing", index: 1, position: 4, volume: 20))
-        #expect(started == [b])                             // тот же трек — повторного события нет
+        #expect(started == [a, b])                          // тот же трек — повторного события нет
+
+        // «Назад» в той же очереди: Player запускает a и ставит b — это переход по очереди MA, без пересборки
+        engine.play(a)
+        engine.enqueue(b)
+        await waitForRequests(2)
+        // Другая очередь — замена целиком; несколько нажатий подряд склеиваются в последнее
+        engine.play(b)
+        engine.play(x)
+        engine.enqueue(a)
+        await waitForRequests(3)
+        calls = CastStub.seen.filter { !$0.path.hasSuffix("poisqCastStatus") }
+        #expect(calls.map(\.lastPathComponent) == ["poisqCastPlay", "poisqCastControl", "poisqCastPlay"])
+        #expect(query(calls[1])["action"] == ["index"] && query(calls[1])["position"] == ["0"])
+        #expect(query(calls[2])["id"] == ["x", "a"])
         engine.stop()
+        await waitForRequests(5)                            // stop и clear, чтобы не попали в следующий тест
+    }
+
+    @Test func addsAndRemovesAfterStart() async throws {
+        CastStub.seen = []
+        let c = client()
+        let engine = CastEngine(client: c, zone: "kitchen", pollInterval: .seconds(60))
+        let a = try c.streamURL(for: Song(id: "a", title: "A")), b = try c.streamURL(for: Song(id: "b", title: "B")), x = try c.streamURL(for: Song(id: "x", title: "X"))
+        engine.play(a)
+        await waitForRequests(1)
+        engine.enqueue(b)
+        engine.enqueue(x)                                   // добавления склеиваются в одну команду
+        await waitForRequests(2)
+        engine.dequeue(x)                                   // ещё не играла — убираем с колонки по индексу 2
+        await waitForRequests(3)
+        let calls = CastStub.seen.filter { !$0.path.hasSuffix("poisqCastStatus") }
+        try #require(calls.count == 3)
+        #expect(query(calls[1])["action"] == ["add"] && query(calls[1])["id"] == ["b", "x"])
+        #expect(query(calls[2])["action"] == ["remove"] && query(calls[2])["position"] == ["2"])
+        engine.stop()
+        await waitForRequests(5)
     }
 
     @Test func zonesParseAndCapabilityNeedsPoisq() async throws {

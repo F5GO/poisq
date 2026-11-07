@@ -20,7 +20,7 @@ func TestRelativePath(t *testing.T) {
 		want  string
 		ok    bool
 	}{
-		{"Artist/Album/01.flac", nil, "Artist/Album/01.flac", true},          // Navidrome 0.55+
+		{"Artist/Album/01.flac", nil, "Artist/Album/01.flac", true},            // Navidrome 0.55+
 		{"/music/Artist/01.flac", []string{"/music/"}, "Artist/01.flac", true}, // старый абсолютный путь
 		{"/other/01.flac", []string{"/music"}, "", false},
 		{"/musicx/01.flac", []string{"/music"}, "", false}, // префикс не по границе папки
@@ -142,6 +142,9 @@ func TestHandlerFlow(t *testing.T) {
 	if r := call(t, s, "poisqCastControl?zone=kitchen&action=remove&position=3"); r["status"] != "ok" {
 		t.Fatalf("remove: %v", r)
 	}
+	if r := call(t, s, "poisqCastControl?zone=kitchen&action=index&position=4"); r["status"] != "ok" {
+		t.Fatalf("index: %v", r)
+	}
 	if r := call(t, s, "poisqCastControl?zone=kitchen&action=explode"); r["status"] != "failed" {
 		t.Fatalf("unknown action must fail: %v", r)
 	}
@@ -151,14 +154,18 @@ func TestHandlerFlow(t *testing.T) {
 		t.Fatalf("status: %v", st)
 	}
 
-	var play, index, volume, remove *maCall
+	var play, index, jump, volume, remove *maCall
 	for _, c := range calls() {
 		c := c
 		switch c.Command {
 		case "player_queues/play_media":
 			play = &c
 		case "player_queues/play_index":
-			index = &c
+			if index == nil {
+				index = &c
+			} else {
+				jump = &c
+			}
 		case "players/cmd/volume_set":
 			volume = &c
 		case "player_queues/delete_item":
@@ -175,6 +182,9 @@ func TestHandlerFlow(t *testing.T) {
 	}
 	if index == nil || index.Args["index"] != float64(1) || index.Args["seek_position"] != float64(15) {
 		t.Fatalf("play_index: %+v", index)
+	}
+	if jump == nil || jump.Args["index"] != float64(4) || jump.Args["seek_position"] != nil {
+		t.Fatalf("index action: %+v", jump)
 	}
 	if remove == nil || remove.Args["item_id_or_index"] != float64(3) {
 		t.Fatalf("delete_item: %+v", remove)
