@@ -1,5 +1,5 @@
 // Package metadata отвечает за аудит медиатеки, исправление битой кодировки (CP1251 -> UTF-8 NFC),
-// акустическую идентификацию через AcoustID (fpcalc), обогащение через MusicBrainz API и поиск обложек.
+// обогащение через MusicBrainz API и поиск обложек.
 //
 // Данный файл folder_scanner.go реализует сканер медиатеки в Staging-режиме (без слепой перезаписи файлов)
 // и обеспечивает выполнение правила безопасности «Folder-as-Album Lock», запрещающего дробить
@@ -86,7 +86,6 @@ type LibraryScanner struct {
 	tracksRepo  *db.TrackRepository
 	stagingRepo *db.StagingRepository
 	mbClient    *MusicBrainzClient
-	acoustID    *AcoustIDClient
 	coverFetch  *CoverFetcher
 	arbiter     *ai.MetadataArbiter
 }
@@ -97,7 +96,6 @@ func NewLibraryScanner(
 	tracksRepo *db.TrackRepository,
 	stagingRepo *db.StagingRepository,
 	mbClient *MusicBrainzClient,
-	acoustID *AcoustIDClient,
 	coverFetch *CoverFetcher,
 ) *LibraryScanner {
 	return &LibraryScanner{
@@ -105,7 +103,6 @@ func NewLibraryScanner(
 		tracksRepo:  tracksRepo,
 		stagingRepo: stagingRepo,
 		mbClient:    mbClient,
-		acoustID:    acoustID,
 		coverFetch:  coverFetch,
 	}
 }
@@ -379,7 +376,7 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 	return count, rows.Err()
 }
 
-// RunDeepAudit запускает глубокую проверку папок через MusicBrainz, AcoustID и iTunes/CoverArt,
+// RunDeepAudit запускает глубокую проверку папок через MusicBrainz и iTunes/CoverArt,
 // складывая все найденные улучшения тегов и обложек в таблицу staging_changes (Staging-режим).
 func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (int, error) {
 	tracks, err := s.tracksRepo.ListTracks("all", "", 500)

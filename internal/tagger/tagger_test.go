@@ -66,3 +66,22 @@ func TestBuildFFmpegMetadataArgsPicardStandard(t *testing.T) {
 		}
 	}
 }
+
+// Откат убирает то, что добавила правка: album_artist, которого не было, и MBID из правки.
+func TestUndoClearsAddedTags(t *testing.T) {
+	orig := CanonicalTagSet{Artist: "Кино", Title: "Группа крови"}
+	proposed := CanonicalTagSet{Artist: "Кино", ReleaseMBID: "rel-1"}
+	orig.Clear = undoClears(orig, proposed)
+	joined := strings.Join(BuildFFmpegMetadataArgs("/music/Kino/01.flac", orig), " ")
+	for _, want := range []string{"album_artist=", "MUSICBRAINZ_ALBUMID=", "artist=Кино"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("нет %q в %q", want, joined)
+		}
+	}
+	if strings.Contains(joined, "MUSICBRAINZ_TRACKID") {
+		t.Errorf("MBID, которого не было в правке, трогать нельзя: %q", joined)
+	}
+	if got := undoClears(CanonicalTagSet{AlbumArtist: "Кино"}, CanonicalTagSet{}); len(got) != 0 {
+		t.Errorf("исходный album_artist сохраняется, а не удаляется: %v", got)
+	}
+}

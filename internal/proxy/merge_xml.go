@@ -6,7 +6,6 @@
 package proxy
 
 import (
-	"bytes"
 	"encoding/xml"
 	"io"
 	"strings"
@@ -36,77 +35,6 @@ type SubsonicXMLResponse struct {
 	OpenSubsonic  string                   `xml:"openSubsonic,attr,omitempty"`
 	SearchResult3 *SubsonicXMLSearchResult `xml:"searchResult3,omitempty"`
 	SearchResult2 *SubsonicXMLSearchResult `xml:"searchResult2,omitempty"`
-}
-
-// MergeXMLSearchResponses объединяет два XML-ответа Subsonic, дедуплицируя сущности по id,
-// и при необходимости адаптируя названия для мобильных клиентов со строгой локальной фильтрацией (Arpeggi, Amperfy).
-func MergeXMLSearchResponses(respA, respB []byte, maxArtists, maxAlbums, maxSongs int, rawQuery string, decorateTitles bool) ([]byte, error) {
-	if len(respA) == 0 && len(respB) == 0 {
-		return nil, nil
-	}
-	if len(respA) == 0 {
-		respA, respB = respB, nil
-	}
-
-	var dataA, dataB SubsonicXMLResponse
-	if err := xml.Unmarshal(respA, &dataA); err != nil {
-		return respA, nil
-	}
-	hasB := false
-	if len(respB) > 0 {
-		if err := xml.Unmarshal(respB, &dataB); err == nil {
-			hasB = true
-		}
-	}
-
-	isSearch3 := dataA.SearchResult3 != nil || (hasB && dataB.SearchResult3 != nil)
-	resA := dataA.SearchResult3
-	var resB *SubsonicXMLSearchResult
-	if hasB {
-		resB = dataB.SearchResult3
-	}
-
-	if !isSearch3 {
-		resA = dataA.SearchResult2
-		if hasB {
-			resB = dataB.SearchResult2
-		}
-	}
-
-	var listA, listB []SubsonicXMLEntity
-	if resA != nil {
-		listA = resA.Entities
-	}
-	if resB != nil {
-		listB = resB.Entities
-	}
-
-	mergedEntities := mergeXMLEntities(listA, listB, maxArtists, maxAlbums, maxSongs, rawQuery, decorateTitles)
-
-	var targetTag xml.Name
-	if isSearch3 {
-		targetTag = xml.Name{Space: "http://subsonic.org/restapi", Local: "searchResult3"}
-		dataA.SearchResult3 = &SubsonicXMLSearchResult{
-			XMLName:  targetTag,
-			Entities: mergedEntities,
-		}
-	} else {
-		targetTag = xml.Name{Space: "http://subsonic.org/restapi", Local: "searchResult2"}
-		dataA.SearchResult2 = &SubsonicXMLSearchResult{
-			XMLName:  targetTag,
-			Entities: mergedEntities,
-		}
-	}
-
-	var buf bytes.Buffer
-	buf.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-	enc := xml.NewEncoder(&buf)
-	enc.Indent("", "  ")
-	if err := enc.Encode(dataA); err != nil {
-		return respA, nil
-	}
-
-	return buf.Bytes(), nil
 }
 
 func extractID(attrs []xml.Attr) string {

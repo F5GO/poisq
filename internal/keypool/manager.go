@@ -1,4 +1,4 @@
-// Package keypool управляет пулом API-ключей (Gemini, Groq, AcoustID, Yandex, Genius)
+// Package keypool управляет пулом API-ключей (Gemini, Groq, Yandex, Genius)
 // с персистентной памятью в SQLite, равномерным распределением по алгоритму LRU
 // и автоматической обработкой лимитов (65 сек cooldown и сброс дневных квот в полночь по PST).
 //

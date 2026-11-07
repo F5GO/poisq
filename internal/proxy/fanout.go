@@ -10,6 +10,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -58,19 +59,17 @@ func parseCount(param string) int {
 	if err != nil || n < 0 {
 		return 20
 	}
-	return n
+	return min(n, maxSearchCount) // один запрос не должен вытягивать всю медиатеку в память, умноженную на число вариантов
 }
 
-// ExecuteFanout выполняет параллельный или одиночный опрос Navidrome с объединением результатов.
-func (f *FanoutManager) ExecuteFanout(w http.ResponseWriter, req *http.Request, queryA, queryB, paramName, rawQuery string, decorateTitles bool) {
-	var queries []string
-	if queryA != "" {
-		queries = append(queries, queryA)
-	}
-	if queryB != "" && !strings.EqualFold(queryB, queryA) {
-		queries = append(queries, queryB)
-	}
-	f.ExecuteMultiFanout(w, req, queries, paramName, rawQuery, decorateTitles)
+const maxSearchCount = 500
+
+// authKey — отпечаток всех данных входа: кэш и склейка параллельных запросов не должны отдавать ответ одного входа другому.
+func authKey(req *http.Request) string {
+	q := req.URL.Query()
+	h := sha256.Sum256([]byte(strings.Join([]string{q.Get("u"), q.Get("t"), q.Get("s"), q.Get("p"), q.Get("apiKey"),
+		req.Header.Get("X-ND-Authorization"), req.Header.Get("Authorization")}, "\x00")))
+	return fmt.Sprintf("%x", h[:16])
 }
 
 // ExecuteMultiFanout выполняет параллельный N-сторонний опрос Navidrome по списку релевантных запросов,
@@ -85,11 +84,10 @@ func (f *FanoutManager) ExecuteMultiFanout(w http.ResponseWriter, req *http.Requ
 	artistCount := parseCount(origQuery.Get("artistCount"))
 	albumCount := parseCount(origQuery.Get("albumCount"))
 	songCount := parseCount(origQuery.Get("songCount"))
-	userToken := origQuery.Get("u")
 	format := strings.ToLower(origQuery.Get("f"))
 
 	cacheKey := fmt.Sprintf("%s|%s|%s|%s|%d|%d|%d|%v|%s",
-		req.Method, strings.Join(queries, "##"), format, userToken, artistCount, albumCount, songCount, decorateTitles, rawQuery)
+		req.Method, strings.Join(queries, "##"), format, authKey(req), artistCount, albumCount, songCount, decorateTitles, rawQuery)
 
 	// 1. Проверяем кэш в оперативной памяти (ответ за <0.05ms)
 	if f.cache != nil {

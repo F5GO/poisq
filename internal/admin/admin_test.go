@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,14 +63,14 @@ func TestAdminServerEndToEnd(t *testing.T) {
 	lrcWriter := lyrics.NewAtomicLRCWriter(guard)
 	tournament := lyrics.NewTournamentOrchestrator(cacheRepo, kp)
 	coverFetch := metadata.NewCoverFetcher(guard)
-	scanner := metadata.NewLibraryScanner(guard.Root(), trackRepo, stagingRepo, nil, nil, coverFetch)
+	scanner := metadata.NewLibraryScanner(guard.Root(), trackRepo, stagingRepo, nil, coverFetch)
 	stagingSvc := tagger.NewStagingService(tagger.NewAtomicTagWriter(guard), coverFetch, trackRepo, stagingRepo)
 	workerProc := worker.NewQueueProcessor(jobRepo, trackRepo, cacheRepo, kp, tournament, nil, nil, lrcWriter)
 
 	srv := NewAdminServer(trackRepo, stagingRepo, jobRepo, cacheRepo, kp, scanner, stagingSvc, lrcWriter, workerProc, guard, nil)
 
 	// 1. Проверка раздачи встроенного через //go:embed фронтенда (/)
-	reqUI := httptest.NewRequest(http.MethodGet, "/", nil)
+	reqUI := httptest.NewRequest(http.MethodGet, "http://localhost:4535/", nil)
 	recUI := httptest.NewRecorder()
 	srv.ServeHTTP(recUI, reqUI)
 	if recUI.Code != http.StatusOK || !strings.Contains(recUI.Body.String(), "poisq Studio") {
@@ -77,7 +78,7 @@ func TestAdminServerEndToEnd(t *testing.T) {
 	}
 
 	// 2. Проверка CSRF-защиты от чужого Origin
-	reqCSRF := httptest.NewRequest(http.MethodPost, "/api/v1/keys", strings.NewReader(`{}`))
+	reqCSRF := httptest.NewRequest(http.MethodPost, "http://localhost:4535/api/v1/keys", strings.NewReader(`{}`))
 	reqCSRF.Host = "localhost:4535"
 	reqCSRF.Header.Set("Origin", "https://evil-attacker.example.com")
 	recCSRF := httptest.NewRecorder()
@@ -92,7 +93,7 @@ func TestAdminServerEndToEnd(t *testing.T) {
 		"label":    "Main Gemini",
 		"apiKey":   "AIzaSySecretKey987654321",
 	})
-	reqAddKey := httptest.NewRequest(http.MethodPost, "/api/v1/keys", bytes.NewReader(keyBody))
+	reqAddKey := httptest.NewRequest(http.MethodPost, "http://localhost:4535/api/v1/keys", bytes.NewReader(keyBody))
 	reqAddKey.Host = "localhost:4535"
 	reqAddKey.Header.Set("Origin", "http://localhost:4535")
 	recAddKey := httptest.NewRecorder()
@@ -108,7 +109,7 @@ func TestAdminServerEndToEnd(t *testing.T) {
 		"content":  "[00:14.20] Теплое место, но улицы ждут",
 		"verified": true,
 	})
-	reqSaveLRC := httptest.NewRequest(http.MethodPost, "/api/v1/lyrics/save", bytes.NewReader(lrcPayload))
+	reqSaveLRC := httptest.NewRequest(http.MethodPost, "http://localhost:4535/api/v1/lyrics/save", bytes.NewReader(lrcPayload))
 	recSaveLRC := httptest.NewRecorder()
 	srv.ServeHTTP(recSaveLRC, reqSaveLRC)
 	if recSaveLRC.Code != http.StatusOK {
@@ -128,7 +129,7 @@ func TestAdminServerEndToEnd(t *testing.T) {
 	coverFile := filepath.Join(musicDir, "Kino", "cover.jpg")
 	_ = os.WriteFile(coverFile, []byte("\xFF\xD8\xFF\xE0\x00\x10JFIFdummy"), 0644)
 
-	reqCover := httptest.NewRequest(http.MethodGet, "/api/v1/covers/local?path="+filepath.Join(musicDir, "Kino"), nil)
+	reqCover := httptest.NewRequest(http.MethodGet, "http://localhost:4535/api/v1/covers/local?path="+filepath.Join(musicDir, "Kino"), nil)
 	recCover := httptest.NewRecorder()
 	srv.ServeHTTP(recCover, reqCover)
 	if recCover.Code != http.StatusOK {
@@ -139,7 +140,7 @@ func TestAdminServerEndToEnd(t *testing.T) {
 	}
 
 	// 6. Проверка эндпоинта кандидатов обложек
-	reqCand := httptest.NewRequest(http.MethodGet, "/api/v1/covers/candidates?artist=Kino&album=Gruppa", nil)
+	reqCand := httptest.NewRequest(http.MethodGet, "http://localhost:4535/api/v1/covers/candidates?artist=Kino&album=Gruppa", nil)
 	recCand := httptest.NewRecorder()
 	srv.ServeHTTP(recCand, reqCand)
 	if recCand.Code != http.StatusOK {
@@ -147,14 +148,14 @@ func TestAdminServerEndToEnd(t *testing.T) {
 	}
 
 	// 7. Проверка получения обложки альбома и фото исполнителя (включая кириллицу и подпапки)
-	reqAlbCover := httptest.NewRequest(http.MethodGet, "/api/v1/navidrome/album-cover?album=%D0%93%D1%80%D1%83%D0%BF%D0%BF%D0%B0+%D0%BA%D1%80%D0%BE%D0%B2%D0%B8&artist=%D0%9A%D0%B8%D0%BD%D0%BE", nil)
+	reqAlbCover := httptest.NewRequest(http.MethodGet, "http://localhost:4535/api/v1/navidrome/album-cover?album=%D0%93%D1%80%D1%83%D0%BF%D0%BF%D0%B0+%D0%BA%D1%80%D0%BE%D0%B2%D0%B8&artist=%D0%9A%D0%B8%D0%BD%D0%BE", nil)
 	recAlbCover := httptest.NewRecorder()
 	srv.ServeHTTP(recAlbCover, reqAlbCover)
 	if recAlbCover.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK on /api/v1/navidrome/album-cover, got %d: %s", recAlbCover.Code, recAlbCover.Body.String())
 	}
 
-	reqArtImg := httptest.NewRequest(http.MethodGet, "/api/v1/navidrome/artist-image?artist=%D0%9A%D0%B8%D0%BD%D0%BE", nil)
+	reqArtImg := httptest.NewRequest(http.MethodGet, "http://localhost:4535/api/v1/navidrome/artist-image?artist=%D0%9A%D0%B8%D0%BD%D0%BE", nil)
 	recArtImg := httptest.NewRecorder()
 	srv.ServeHTTP(recArtImg, reqArtImg)
 	if recArtImg.Code != http.StatusOK {
@@ -163,7 +164,7 @@ func TestAdminServerEndToEnd(t *testing.T) {
 
 	// 8. Проверка полного сброса БД (/api/v1/db/reset)
 	srv.SetPoisqDB(poisqDB)
-	reqReset := httptest.NewRequest(http.MethodPost, "/api/v1/db/reset", strings.NewReader(`{"keepKeys":true}`))
+	reqReset := httptest.NewRequest(http.MethodPost, "http://localhost:4535/api/v1/db/reset", strings.NewReader(`{"keepKeys":true}`))
 	recReset := httptest.NewRecorder()
 	srv.ServeHTTP(recReset, reqReset)
 	if recReset.Code != http.StatusOK {
@@ -186,8 +187,18 @@ func TestAdminServerEndToEnd(t *testing.T) {
 		{"/assets/brand/poisq-mark-192.png", http.StatusOK, ""},
 		{"/favicon.png", http.StatusOK, ""},
 	}
+	// Отладочный список файлов не выходит за пределы медиатеки
+	for _, sub := range []string{"../../etc", "/etc"} {
+		reqFS := httptest.NewRequest(http.MethodGet, "http://localhost:4535/api/v1/debug/fs?sub="+url.QueryEscape(sub), nil)
+		recFS := httptest.NewRecorder()
+		srv.ServeHTTP(recFS, reqFS)
+		if recFS.Code != http.StatusBadRequest {
+			t.Fatalf("debug/fs?sub=%s: ожидался 400, получено %d", sub, recFS.Code)
+		}
+	}
 	for _, ep := range staticEndpoints {
 		reqStatic := httptest.NewRequest(http.MethodGet, ep.url, nil)
+		reqStatic.Host = "localhost:4535"
 		recStatic := httptest.NewRecorder()
 		srv.ServeHTTP(recStatic, reqStatic)
 		if recStatic.Code != ep.expectedCode {

@@ -40,7 +40,7 @@ func newConfidenceTestServer(t *testing.T) (*AdminServer, *db.ConfidenceReposito
 	kp := keypool.NewManager(db.NewKeyRepository(poisqDB), cipher)
 	lrcWriter := lyrics.NewAtomicLRCWriter(guard)
 	coverFetch := metadata.NewCoverFetcher(guard)
-	scanner := metadata.NewLibraryScanner(guard.Root(), trackRepo, stagingRepo, nil, nil, coverFetch)
+	scanner := metadata.NewLibraryScanner(guard.Root(), trackRepo, stagingRepo, nil, coverFetch)
 	stagingSvc := tagger.NewStagingService(tagger.NewAtomicTagWriter(guard), coverFetch, trackRepo, stagingRepo)
 	workerProc := worker.NewQueueProcessor(jobRepo, trackRepo, cacheRepo, kp, lyrics.NewTournamentOrchestrator(cacheRepo, kp), nil, nil, lrcWriter)
 	srv := NewAdminServer(trackRepo, stagingRepo, jobRepo, cacheRepo, kp, scanner, stagingSvc, lrcWriter, workerProc, guard, nil)
@@ -72,7 +72,7 @@ func TestLyricsSaveStoresConfidenceAndCorrections(t *testing.T) {
 		t.Fatalf("пустая правка должна отбрасываться, сохранено %d", n)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/lyrics/cache?trackId=t1", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:4535/api/v1/lyrics/cache?trackId=t1", nil)
 	out := httptest.NewRecorder()
 	srv.ServeHTTP(out, req)
 	var resp struct {
@@ -106,7 +106,7 @@ func TestLyricsSaveIgnoresMalformedConfidence(t *testing.T) {
 
 func TestHealthReportsAlignerState(t *testing.T) {
 	srv, _ := newConfidenceTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:4535/api/v1/health", nil)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
 	var resp struct {

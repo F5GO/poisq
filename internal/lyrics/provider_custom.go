@@ -55,13 +55,6 @@ func NewCustomLrclibProvider(id, name, baseURL string, timeout, tolerance time.D
 	}
 }
 
-// SetTransport позволяет подменить Transport для тестирования без открытия сокетов.
-func (p *CustomLrclibProvider) SetTransport(tr http.RoundTripper) {
-	if p.client != nil {
-		p.client.Transport = tr
-	}
-}
-
 func (p *CustomLrclibProvider) ID() string {
 	return p.id
 }

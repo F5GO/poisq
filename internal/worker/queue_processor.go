@@ -140,6 +140,12 @@ func (qp *QueueProcessor) IsPaused() bool {
 
 // Start запускает фоновый цикл обработки очереди до отмены контекста.
 func (qp *QueueProcessor) Start(ctx context.Context) {
+	// Обработчик один, поэтому любая задача «выполняется» на старте брошена прошлым процессом (например, при обновлении контейнера)
+	if n, err := qp.jobRepo.RequeueOrphaned(); err != nil {
+		logger.Warn("[WORKER] Не удалось вернуть в очередь брошенные задачи: %v", err)
+	} else if n > 0 {
+		logger.Info("[WORKER] Возвращено в очередь брошенных задач: %d", n)
+	}
 	go func() {
 		ticker := time.NewTicker(4 * time.Second)
 		defer ticker.Stop()

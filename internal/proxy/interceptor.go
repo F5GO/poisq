@@ -41,12 +41,8 @@ func NewInterceptor(engine *search.Engine, fanoutMgr *FanoutManager, reverseProx
 func (it *Interceptor) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// Предварительная обработка CORS preflight запросов для браузерных клиентов
 	if req.Method == http.MethodOptions {
-		origin := req.Header.Get("Origin")
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-ND-Client-Unique-Id, X-ND-Authorization")
+		if origin := req.Header.Get("Origin"); origin != "" {
+			setCORS(w.Header(), origin)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -117,13 +113,14 @@ func (it *Interceptor) handleSubsonicSearch(w http.ResponseWriter, req *http.Req
 	// Поддержка POST-запросов со строкой поиска в теле (application/x-www-form-urlencoded)
 	var isFormBody bool
 	var formBytes []byte
-	if rawQuery == "" && req.Method == http.MethodPost {
+	// Тело читаем и тогда, когда запрос в адресе: вход (u, t, s) может лежать в теле, а он нужен для fan-out.
+	if req.Method == http.MethodPost {
 		contentType := req.Header.Get("Content-Type")
 		if strings.Contains(contentType, "application/x-www-form-urlencoded") {
 			body, err := io.ReadAll(io.LimitReader(req.Body, 1024*1024))
 			if err == nil {
 				parsedForm, err := url.ParseQuery(string(body))
-				if err == nil {
+				if err == nil && rawQuery == "" {
 					if v := parsedForm.Get("query"); v != "" {
 						paramName = "query"
 						rawQuery = v
@@ -137,9 +134,9 @@ func (it *Interceptor) handleSubsonicSearch(w http.ResponseWriter, req *http.Req
 						rawQuery = v
 						isFormBody = true
 					}
-					formBytes = body
-					req.Body = io.NopCloser(bytes.NewReader(body))
 				}
+				formBytes = body
+				req.Body = io.NopCloser(bytes.NewReader(body))
 			}
 		}
 	}
@@ -162,6 +159,15 @@ func (it *Interceptor) handleSubsonicSearch(w http.ResponseWriter, req *http.Req
 	// Формируем расширенный список запросов для широкого и точного параллельного поиска
 	queries := search.ExpandQuery(rawQuery, &res)
 	if len(queries) > 1 || res.RewrittenQuery != rawQuery || res.NeedsFanout {
+		if formBytes != nil { // fan-out строит GET-запросы из адреса: переносим туда параметры и вход из тела
+			if form, err := url.ParseQuery(string(formBytes)); err == nil {
+				merged := req.URL.Query()
+				for k, v := range form {
+					merged[k] = v
+				}
+				req.URL.RawQuery = merged.Encode()
+			}
+		}
 		it.fanoutMgr.ExecuteMultiFanout(w, req, queries, paramName, rawQuery, decorateTitles)
 		return
 	}

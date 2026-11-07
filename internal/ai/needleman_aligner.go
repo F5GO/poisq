@@ -6,7 +6,7 @@
 // Данный файл needleman_aligner.go реализует глобальное динамическое программирование
 // (алгоритм Нидлмана — Вунша / Needleman-Wunsch Sequence Alignment) для 100% детерминированной
 // привязки строк текста песни к пословным таймкодам аудиозаписи от Whisper, а также
-// пост-валидацию (SnapLRCToAcousticWords), которая исправляет любые сдвиги таймкодов от LLM.
+// пост-валидацию (SnapLRCToAcousticWordsStats), которая исправляет любые сдвиги таймкодов от LLM.
 package ai
 
 import (
@@ -338,22 +338,13 @@ func interpolateUnmatchedLines(lineTimes []float64, lineMatched []bool, data *Ac
 
 var lrcLineParseRe = regexp.MustCompile(`^\s*\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]\s*(.+)$`)
 
-// SnapLRCToAcousticWords — финальный бронебойный фильтр после Gemini:
-// принимает сгенерированный LRC, выравнивает его строки по реальным словам Whisper через глобальный DP
-// и жестко примагничивает (snaps) каждый таймкод к физическому началу слова в аудиофайле,
-// исправляя любые галлюцинации и сдвиги таймкодов со стороны LLM.
-func SnapLRCToAcousticWords(lrcText string, data *AcousticTimelineData) string {
-	out, _ := SnapLRCToAcousticWordsStats(lrcText, data)
-	return out
-}
-
 // SnapStats описывает, насколько результат подтверждён реальным звуком.
 type SnapStats struct {
 	Lines       int // всего строк
 	Unconfirmed int // строки, время которых НЕ подтверждено ни одним словом Whisper (угадано/интерполировано)
 }
 
-// SnapLRCToAcousticWordsStats — то же, что SnapLRCToAcousticWords, но дополнительно возвращает статистику
+// SnapLRCToAcousticWordsStats выравнивает строки LRC по словам Whisper, прижимает таймкоды к началу слов и возвращает статистику
 // достоверности: сколько строк получили время без подтверждения голосом.
 func SnapLRCToAcousticWordsStats(lrcText string, data *AcousticTimelineData) (string, SnapStats) {
 	var stats SnapStats

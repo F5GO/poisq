@@ -99,14 +99,23 @@ func (r *JobRepository) ClaimNext(nowUnix int64) (*LyricsJobRecord, error) {
 	return &j, nil
 }
 
-// MarkDone помечает задачу успешно выполненной.
+// MarkDone помечает задачу успешно выполненной. Если за время работы трек поставили в очередь заново, новая постановка остаётся.
 func (r *JobRepository) MarkDone(id int64) error {
 	_, err := r.db.Exec(`
 		UPDATE lyrics_jobs
 		SET status = 'done', error_log = '', updated_at = ?
-		WHERE id = ?
+		WHERE id = ? AND status = 'running'
 	`, time.Now().Unix(), id)
 	return err
+}
+
+// RequeueOrphaned возвращает в очередь задачи, брошенные остановкой процесса посреди работы. Вызывать до старта обработчика.
+func (r *JobRepository) RequeueOrphaned() (int64, error) {
+	res, err := r.db.Exec(`UPDATE lyrics_jobs SET status = 'pending', updated_at = ? WHERE status = 'running'`, time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // UpdateProgress обновляет описание текущего активного этапа задачи во время выполнения.

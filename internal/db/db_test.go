@@ -111,6 +111,17 @@ func TestEnricherAndLoader(t *testing.T) {
 	if strings.Count(ftKinoSecond, "[poisq:") != 1 {
 		t.Errorf("Маркер [poisq: сдублировался при повторном запуске: %s", ftKinoSecond)
 	}
+
+	// 4. Navidrome пересобрал full_text (файл изменился, название то же) — вставка должна вернуться
+	if _, err := db.Exec("UPDATE artist SET full_text = 'кино русский рок' WHERE id = 'art-2'"); err != nil {
+		t.Fatal(err)
+	}
+	enricher.RunEnrichment()
+	var ftKinoRewritten string
+	_ = db.QueryRow("SELECT full_text FROM artist WHERE id = 'art-2'").Scan(&ftKinoRewritten)
+	if !strings.Contains(ftKinoRewritten, "[poisq:") {
+		t.Errorf("после пересборки full_text вставка poisq не вернулась: %s", ftKinoRewritten)
+	}
 }
 
 func TestSQLInjectionPrevention(t *testing.T) {

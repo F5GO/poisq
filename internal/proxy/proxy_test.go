@@ -13,6 +13,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -55,12 +56,12 @@ func TestMergeJSONSearchResponses(t *testing.T) {
 		}
 	}`)
 
-	merged, err := MergeJSONSearchResponses(respA, respB, 10, 10, 10, "", false)
+	merged, err := MergeMultipleJSONResponses([][]byte{respA, respB}, 10, 10, 10, "", false)
 	if err != nil {
 		t.Fatalf("Ошибка MergeJSONSearchResponses: %v", err)
 	}
 
-	var parsed SubsonicJSONResponse
+	var parsed SubsonicJSONEnvelope
 	if err := json.Unmarshal(merged, &parsed); err != nil {
 		t.Fatalf("Ошибка парсинга объединенного JSON: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestMergeXMLSearchResponses(t *testing.T) {
   </searchResult3>
 </subsonic-response>`)
 
-	merged, err := MergeXMLSearchResponses(xmlA, xmlB, 10, 10, 10, "", false)
+	merged, err := MergeMultipleXMLResponses([][]byte{xmlA, xmlB}, 10, 10, 10, "", false)
 	if err != nil {
 		t.Fatalf("Ошибка MergeXMLSearchResponses: %v", err)
 	}
@@ -300,7 +301,7 @@ func TestAmperfyXMLDecoration(t *testing.T) {
   </searchResult3>
 </subsonic-response>`)
 
-	decorated, err := MergeXMLSearchResponses(xmlResp, nil, 10, 10, 10, "грин де", true)
+	decorated, err := MergeMultipleXMLResponses([][]byte{xmlResp, nil}, 10, 10, 10, "грин де", true)
 	if err != nil {
 		t.Fatalf("Ошибка MergeXMLSearchResponses для Amperfy: %v", err)
 	}
@@ -332,7 +333,7 @@ func TestAmperfyJSONDecoration(t *testing.T) {
 		}
 	}`)
 
-	decorated, err := MergeJSONSearchResponses(jsonResp, nil, 10, 10, 10, "грин де", true)
+	decorated, err := MergeMultipleJSONResponses([][]byte{jsonResp, nil}, 10, 10, 10, "грин де", true)
 	if err != nil {
 		t.Fatalf("Ошибка MergeJSONSearchResponses для Amperfy: %v", err)
 	}
@@ -429,7 +430,7 @@ func TestFanoutCacheHit(t *testing.T) {
 
 	req1 := httptest.NewRequest("GET", "/rest/search3.view?query=Linkin+Park&f=json", nil)
 	rr1 := httptest.NewRecorder()
-	fanoutMgr.ExecuteFanout(rr1, req1, "Linkin Park", "", "query", "линк", false)
+	fanoutMgr.ExecuteMultiFanout(rr1, req1, []string{"Linkin Park"}, "query", "линк", false)
 
 	if rr1.Code != http.StatusOK {
 		t.Fatalf("Ожидался код 200, получено: %d", rr1.Code)
@@ -441,7 +442,7 @@ func TestFanoutCacheHit(t *testing.T) {
 	// Второй идентичный запрос должен быть взят из кэша (0 вызовов upstream)
 	req2 := httptest.NewRequest("GET", "/rest/search3.view?query=Linkin+Park&f=json", nil)
 	rr2 := httptest.NewRecorder()
-	fanoutMgr.ExecuteFanout(rr2, req2, "Linkin Park", "", "query", "линк", false)
+	fanoutMgr.ExecuteMultiFanout(rr2, req2, []string{"Linkin Park"}, "query", "линк", false)
 
 	if rr2.Code != http.StatusOK {
 		t.Fatalf("Ожидался код 200 для кэшированного ответа, получено: %d", rr2.Code)
@@ -449,8 +450,62 @@ func TestFanoutCacheHit(t *testing.T) {
 	if atomic.LoadInt32(&callCount) != 1 {
 		t.Fatalf("Ожидался cache hit без вызова upstream (счетчик должен остаться 1), получено: %d", callCount)
 	}
+
+	// Тот же пользователь с другим токеном — не из кэша: ответ одного входа не достаётся другому
+	req3 := httptest.NewRequest("GET", "/rest/search3.view?query=Linkin+Park&f=json&u=alice&t=wrong&s=x", nil)
+	fanoutMgr.ExecuteMultiFanout(httptest.NewRecorder(), req3, []string{"Linkin Park"}, "query", "линк", false)
+	req4 := httptest.NewRequest("GET", "/rest/search3.view?query=Linkin+Park&f=json&u=alice&t=good&s=x", nil)
+	fanoutMgr.ExecuteMultiFanout(httptest.NewRecorder(), req4, []string{"Linkin Park"}, "query", "линк", false)
+	if atomic.LoadInt32(&callCount) != 3 {
+		t.Fatalf("Запросы с разными данными входа должны идти в Navidrome отдельно, вызовов: %d", callCount)
+	}
 }
 
 func reqGetURL(raw string) (*url.URL, error) {
 	return url.Parse(raw)
+}
+
+// POST-поиск: вход лежит в теле, а fan-out ходит в Navidrome GET-запросами — вход должен дойти.
+func TestPostSearchFanoutKeepsBodyAuth(t *testing.T) {
+	dict := search.NewDictionary()
+	dict.Rebuild([]search.DictItem{{Text: "Linkin Park", EntityType: "artist", PlayCount: 100}})
+	var seen []url.Values
+	var mu sync.Mutex
+	upstream := &mockRoundTripper{roundTripFunc: func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		seen = append(seen, req.URL.Query())
+		mu.Unlock()
+		resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Request: req,
+			Body: io.NopCloser(strings.NewReader(`{"subsonic-response":{"status":"ok","searchResult3":{}}}`))}
+		resp.Header.Set("Content-Type", "application/json")
+		return resp, nil
+	}}
+	targetURL, _ := url.Parse("http://navidrome-test:4533")
+	interceptor := NewInterceptor(search.NewEngine(dict), NewFanoutManager(targetURL, upstream, nil), httputil.NewSingleHostReverseProxy(targetURL))
+
+	body := "u=alice&t=tok&s=salt&f=json&songCount=7&query=" + url.QueryEscape("дштлшт зфкл") // «linkin park» в русской раскладке
+	req := httptest.NewRequest(http.MethodPost, "/rest/search3", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	interceptor.ServeHTTP(httptest.NewRecorder(), req)
+
+	if len(seen) == 0 {
+		t.Fatal("поиск не дошёл до fan-out")
+	}
+	for _, q := range seen {
+		if q.Get("u") != "alice" || q.Get("t") != "tok" || q.Get("songCount") != "7" {
+			t.Fatalf("fan-out потерял параметры из тела: %v", q)
+		}
+	}
+}
+
+// Вход одного клиента не смешивается с входом другого.
+func TestCapturedAuthIsReplacedWhole(t *testing.T) {
+	CaptureSubsonicAuth(httptest.NewRequest("GET", "/rest/ping?u=a&t=tok&s=salt", nil))
+	CaptureSubsonicAuth(httptest.NewRequest("GET", "/rest/ping?u=b&p=pass", nil))
+	req := httptest.NewRequest("GET", "/rest/getCoverArt?id=1", nil)
+	ApplyCachedAuthToRequest(req)
+	q := req.URL.Query()
+	if q.Get("u") != "b" || q.Get("p") != "pass" || q.Get("t") != "" || q.Get("s") != "" {
+		t.Fatalf("смешанный вход: %v", q)
+	}
 }

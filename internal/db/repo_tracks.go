@@ -39,17 +39,17 @@ type TrackRecord struct {
 
 // LibraryHealthStats содержит сводную статистику здоровья медиатеки для Дашборда.
 type LibraryHealthStats struct {
-	TotalTracks      int `json:"totalTracks"`
-	TotalFolders     int `json:"totalFolders"`
-	MissingCovers    int `json:"missingCovers"`
-	LowResCovers     int `json:"lowResCovers"`
-	MojibakeTracks   int `json:"mojibakeTracks"`
-	LyricsNone       int `json:"lyricsNone"`
-	LyricsPlain      int `json:"lyricsPlain"`
-	LyricsSynced     int `json:"lyricsSynced"`
-	LyricsVerified   int `json:"lyricsVerified"`
-	PendingStaging   int `json:"pendingStaging"`
-	PendingJobs      int `json:"pendingJobs"`
+	TotalTracks    int `json:"totalTracks"`
+	TotalFolders   int `json:"totalFolders"`
+	MissingCovers  int `json:"missingCovers"`
+	LowResCovers   int `json:"lowResCovers"`
+	MojibakeTracks int `json:"mojibakeTracks"`
+	LyricsNone     int `json:"lyricsNone"`
+	LyricsPlain    int `json:"lyricsPlain"`
+	LyricsSynced   int `json:"lyricsSynced"`
+	LyricsVerified int `json:"lyricsVerified"`
+	PendingStaging int `json:"pendingStaging"`
+	PendingJobs    int `json:"pendingJobs"`
 }
 
 // TrackRepository управляет записями треков в poisq.db.
@@ -296,30 +296,6 @@ func (r *TrackRepository) ListTracks(statusFilter string, searchQuery string, li
 	args = append(args, limit)
 
 	rows, err := r.db.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var list []TrackRecord
-	for rows.Next() {
-		t, err := scanTrackRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		list = append(list, *t)
-	}
-	return list, rows.Err()
-}
-
-// ListByFolder возвращает все треки в указанной папке для правила Folder-as-Album Lock.
-func (r *TrackRepository) ListByFolder(folderPath string) ([]TrackRecord, error) {
-	rows, err := r.db.Query(`
-		SELECT id, file_path, folder_path, artist, album, album_artist, title,
-		       track_number, year, duration, lang_code, has_cover, cover_width, cover_height,
-		       is_mojibake, lyrics_status, active_source, active_lyrics, lrc_file_synced, updated_at
-		FROM tracks WHERE folder_path = ? ORDER BY track_number ASC, title ASC
-	`, folderPath)
 	if err != nil {
 		return nil, err
 	}

@@ -77,3 +77,16 @@ func TestPathGuardPreventsTraversalAndForbiddenExts(t *testing.T) {
 		}
 	}
 }
+
+func TestIsAdminHost(t *testing.T) {
+	cases := map[string]bool{
+		"localhost:4535": true, "127.0.0.1:4535": true, "[::1]:4535": true, "192.168.1.10:4535": true,
+		"nas:4535": true, "nas.local:4535": true, "studio.example.com": true,
+		"evil.com:4535": false, "localhost.evil.com:4535": false, "": false,
+	}
+	for host, want := range cases {
+		if got := isAdminHost(host, []string{" Studio.Example.com "}); got != want {
+			t.Errorf("isAdminHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}

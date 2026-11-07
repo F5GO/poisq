@@ -16,9 +16,6 @@ type SubsonicJSONEnvelope struct {
 	SubsonicResponse map[string]json.RawMessage `json:"subsonic-response"`
 }
 
-// SubsonicJSONResponse - псевдоним типа для обратной совместимости.
-type SubsonicJSONResponse = SubsonicJSONEnvelope
-
 // SubsonicResult содержит массивы найденных исполнителей, альбомов и треков.
 type SubsonicResult struct {
 	Artist []json.RawMessage `json:"artist"`
@@ -28,87 +25,6 @@ type SubsonicResult struct {
 
 type entityWithID struct {
 	ID string `json:"id"`
-}
-
-// MergeJSONSearchResponses объединяет два JSON-ответа Subsonic, дедуплицируя сущности по их id,
-// и при необходимости адаптируя названия для мобильных клиентов со строгой локальной фильтрацией (Arpeggi, Amperfy).
-func MergeJSONSearchResponses(respA, respB []byte, maxArtists, maxAlbums, maxSongs int, rawQuery string, decorateTitles bool) ([]byte, error) {
-	if len(respA) == 0 && len(respB) == 0 {
-		return nil, nil
-	}
-	if len(respA) == 0 {
-		respA, respB = respB, nil
-	}
-
-	var dataA, dataB SubsonicJSONEnvelope
-	if err := json.Unmarshal(respA, &dataA); err != nil {
-		return respA, nil
-	}
-	hasB := false
-	if len(respB) > 0 {
-		if err := json.Unmarshal(respB, &dataB); err == nil && dataB.SubsonicResponse != nil {
-			hasB = true
-		}
-	}
-
-	if dataA.SubsonicResponse == nil {
-		if hasB {
-			return respB, nil
-		}
-		return respA, nil
-	}
-
-	searchKey := "searchResult3"
-	rawA, hasSearchA := dataA.SubsonicResponse["searchResult3"]
-	var rawB json.RawMessage
-	var hasSearchB bool
-	if hasB {
-		rawB, hasSearchB = dataB.SubsonicResponse["searchResult3"]
-	}
-
-	if !hasSearchA && !hasSearchB {
-		searchKey = "searchResult2"
-		rawA, hasSearchA = dataA.SubsonicResponse["searchResult2"]
-		if hasB {
-			rawB, hasSearchB = dataB.SubsonicResponse["searchResult2"]
-		}
-	}
-
-	if !hasSearchA && !hasSearchB {
-		return respA, nil
-	}
-
-	var resA, resB SubsonicResult
-	if hasSearchA {
-		_ = json.Unmarshal(rawA, &resA)
-	}
-	if hasSearchB {
-		_ = json.Unmarshal(rawB, &resB)
-	}
-
-	mergedResult := SubsonicResult{
-		Artist: mergeEntities(resA.Artist, resB.Artist, maxArtists, "name", rawQuery, decorateTitles),
-		Album:  mergeEntities(resA.Album, resB.Album, maxAlbums, "name", rawQuery, decorateTitles),
-		Song:   mergeEntities(resA.Song, resB.Song, maxSongs, "title", rawQuery, decorateTitles),
-	}
-
-	if mergedResult.Artist == nil {
-		mergedResult.Artist = []json.RawMessage{}
-	}
-	if mergedResult.Album == nil {
-		mergedResult.Album = []json.RawMessage{}
-	}
-	if mergedResult.Song == nil {
-		mergedResult.Song = []json.RawMessage{}
-	}
-
-	mergedBytes, err := json.Marshal(mergedResult)
-	if err != nil {
-		return respA, nil
-	}
-
-	dataA.SubsonicResponse[searchKey] = mergedBytes
-	return json.Marshal(dataA)
 }
 
 func mergeEntities(listA, listB []json.RawMessage, maxCount int, targetKey, rawQuery string, decorateTitles bool) []json.RawMessage {

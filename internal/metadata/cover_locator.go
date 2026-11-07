@@ -1,5 +1,5 @@
 // Package metadata отвечает за аудит медиатеки, исправление битой кодировки (CP1251 -> UTF-8 NFC),
-// акустическую идентификацию через AcoustID (fpcalc), обогащение через MusicBrainz API и поиск обложек.
+// обогащение через MusicBrainz API и поиск обложек.
 //
 // Данный файл cover_locator.go реализует глубокий, регистронезависимый и всепрощающий поиск
 // локальных файлов обложек альбомов и фотографий исполнителей (cover.jpg, folder.jpg, artist.jpg, front.png, webp).
@@ -41,12 +41,6 @@ var artworkSubdirs = []string{
 	"covers",
 	"images",
 	"art",
-}
-
-// FindLocalCoverFile сканирует директорию folderPath и возвращает путь к найденной обложке.
-// Сохраняет обратную совместимость с вызовами по всей кодовой базе.
-func FindLocalCoverFile(folderPath string) string {
-	return FindCoverAnywhere("", folderPath)
 }
 
 // FindCoverAnywhere выполняет всесторонний поиск файла обложки на файловой системе:

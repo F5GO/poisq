@@ -40,6 +40,8 @@ services:
       SYNC_INTERVAL: "2m"
       ENRICH_SQLITE_FULLTEXT: "true"
       LOG_LEVEL: "info"
+      # Studio открывается по IP, localhost, имени без точки или *.local/*.lan; другое имя (например, за обратным прокси) — сюда через запятую
+      # ADMIN_HOSTS: "studio.example.com"
       # Точный тайминг караоке через сервис выравнивания (профиль "aligner" ниже).
       # Включите, когда запустите сервис: docker compose --profile aligner up -d
       # ALIGNER_URL: "http://aligner:4540"

@@ -680,16 +680,6 @@ func MatchTrack(query SearchQuery, candArtist, candTitle string) bool {
 	return true
 }
 
-// IsRussianText проверяет, содержит ли текст символы кириллицы.
-func IsRussianText(s string) bool {
-	for _, r := range s {
-		if unicode.Is(unicode.Cyrillic, r) {
-			return true
-		}
-	}
-	return false
-}
-
 // IsDefectiveLyrics проверяет, не является ли найденный текст обрубком, пустышкой или служебной заглушкой.
 func IsDefectiveLyrics(lyricsText string) bool {
 	trimmed := strings.TrimSpace(lyricsText)

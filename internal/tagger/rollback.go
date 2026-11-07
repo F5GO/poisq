@@ -39,12 +39,6 @@ func NewStagingService(
 	}
 }
 
-// ApplyProposal применяет выбранное пользователем Staging-предложение (обновление тегов или скачивание обложки)
-// и сохраняет слепок исходного состояния для кнопки «Откатить (Undo)».
-func (s *StagingService) ApplyProposal(ctx context.Context, proposalID int64) error {
-	return s.ApplyProposalWithCustomCover(ctx, proposalID, "")
-}
-
 // ApplyProposalWithCustomCover применяет предложение, позволяя переопределить URL обложки
 // на альтернативный вариант, выбранный пользователем в веб-интерфейсе.
 func (s *StagingService) ApplyProposalWithCustomCover(ctx context.Context, proposalID int64, customCoverURL string) error {
@@ -152,6 +146,9 @@ func (s *StagingService) UndoProposal(ctx context.Context, proposalID int64) err
 	if err := json.Unmarshal([]byte(rec.OriginalTagsJSON), &orig); err != nil {
 		return fmt.Errorf("не удалось прочитать слепок исходных тегов для Undo: %w", err)
 	}
+	var proposed CanonicalTagSet
+	_ = json.Unmarshal([]byte(rec.ProposedJSON), &proposed) // без правки нечего убирать — откат просто вернёт исходные значения
+	orig.Clear = undoClears(orig, proposed)
 
 	if err := s.writer.WriteTagsAtomically(ctx, track.FilePath, orig); err != nil {
 		return err

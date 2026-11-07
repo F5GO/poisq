@@ -34,7 +34,7 @@ func TestCastEndpointsRequireNavidromeAuth(t *testing.T) {
 		srv.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/rest/poisqCastZones?"+query, nil))
 	}
 
-	get("")                          // без авторизации — Navidrome даже не спрашиваем
+	get("")                         // без авторизации — Navidrome даже не спрашиваем
 	get("u=alice&t=bad&s=salt&c=x") // неверный токен
 	if reached.Load() != 0 {
 		t.Fatalf("unauthenticated request reached cast handler")
