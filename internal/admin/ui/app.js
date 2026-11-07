@@ -706,13 +706,7 @@ async function openTrackDrawer(trackId) {
       <summary style="cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-secondary);">Редактировать теги</summary>
       <form id="form-track-tags" style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;" onsubmit="event.preventDefault(); saveTrackTags('${escapeHtml(track.id)}');">
         <div class="form-group"><label class="form-label" for="tag-title">Название</label><input id="tag-title" class="form-input" value="${escapeHtml(track.title || "")}" /></div>
-        <div class="form-group">
-          <label class="form-label" for="tag-artist-0">Исполнители</label>
-          <div id="tag-artists" style="display: flex; flex-direction: column; gap: 6px;">
-            ${(track.artist || "").split("; ").map((a, i) => `<input id="tag-artist-${i}" class="form-input tag-artist" aria-label="Исполнитель ${i + 1}" value="${escapeHtml(a)}" />`).join("")}
-          </div>
-          <button type="button" class="btn btn-secondary" style="margin-top: 6px;" onclick="addArtistField()">+ Добавить исполнителя</button>
-        </div>
+        <div class="form-group"><label class="form-label" for="tag-artist">Исполнитель</label><input id="tag-artist" class="form-input" placeholder="Несколько — через «; »" value="${escapeHtml(track.artist || "")}" /></div>
         <div class="form-group"><label class="form-label" for="tag-album">Альбом</label><input id="tag-album" class="form-input" value="${escapeHtml(track.album || "")}" /></div>
         <div class="form-group"><label class="form-label" for="tag-album-artist">Исполнитель альбома</label><input id="tag-album-artist" class="form-input" value="${escapeHtml(track.albumArtist || "")}" /></div>
         <div class="form-group"><label class="form-label" for="tag-year">Год</label><input id="tag-year" class="form-input mono" type="number" min="0" max="9999" value="${track.year || ""}" /></div>
@@ -776,20 +770,12 @@ async function deleteTrackLyrics(trackId) {
   }
 }
 
-function addArtistField() {
-  const box = document.getElementById("tag-artists");
-  const n = box.querySelectorAll("input").length;
-  box.insertAdjacentHTML("beforeend", `<input id="tag-artist-${n}" class="form-input tag-artist" aria-label="Исполнитель ${n + 1}" />`);
-  box.lastElementChild.focus();
-}
-
 async function saveTrackTags(trackId) {
   const val = (id) => (document.getElementById(id)?.value || "").trim();
   const payload = {
     trackId,
     title: val("tag-title"),
-    // Navidrome по умолчанию делит тег artist по "; " на отдельных исполнителей
-    artist: [...document.querySelectorAll(".tag-artist")].map(i => i.value.trim()).filter(Boolean).join("; "),
+    artist: val("tag-artist"),
     album: val("tag-album"),
     albumArtist: val("tag-album-artist"),
     year: parseInt(val("tag-year"), 10) || 0,
