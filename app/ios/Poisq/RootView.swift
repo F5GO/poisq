@@ -126,7 +126,7 @@ struct MiniPlayer: View {
                     CoverArtView(id: player.current?.coverArt, size: 36, radius: 6)
                     VStack(alignment: .leading, spacing: 0) {
                         Text(player.current?.title ?? "").font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Text(player.current?.artist ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(player.current?.displayArtist ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }

@@ -234,7 +234,7 @@ private struct SongsListView: View {
         List {
             ForEach(Array(list.enumerated()), id: \.element.id) { index, song in
                 Button { model.player?.play(list, startAt: index) } label: {
-                    MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.artist)
+                    MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.displayArtist)
                 }
                 .buttonStyle(.plain)
                 .songMenu(song)
@@ -298,7 +298,7 @@ private struct FavoritesView: View {
                 Section("Songs") {
                     ForEach(Array(results.songs.enumerated()), id: \.element.id) { i, s in
                         Button { model.player?.play(results.songs, startAt: i) } label: {
-                            MediaRow(coverID: s.coverArt, title: s.title, subtitle: s.artist)
+                            MediaRow(coverID: s.coverArt, title: s.title, subtitle: s.displayArtist)
                         }
                         .buttonStyle(.plain).songMenu(s)
                     }

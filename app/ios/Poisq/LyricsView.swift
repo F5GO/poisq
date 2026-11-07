@@ -165,7 +165,7 @@ struct LyricsFullScreen: View {
                     ToolbarItem(placement: .principal) {
                         VStack(spacing: 0) {
                             Text(player.current?.title ?? "").font(.headline).lineLimit(1)
-                            Text(player.current?.artist ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text(player.current?.displayArtist ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {

@@ -114,7 +114,7 @@ struct FullPlayerView: View {
                     CoverArtView(id: player.current?.coverArt, size: 40, radius: 8)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(player.current?.title ?? "").font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Text(player.current?.artist ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(player.current?.displayArtist ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                 }
@@ -299,13 +299,21 @@ struct FullPlayerView: View {
                 Text(player.current?.title ?? "").font(.title3.bold()).lineLimit(1)
                 // Артист — переход на его страницу (для радио и подкастов это просто текст).
                 if !player.isRadio, !player.isSpoken, let song = player.current, song.artistId != nil {
-                    Button { model.showArtist(of: song) } label: {
-                        Text(song.artist ?? "").font(.title3).foregroundStyle(.secondary).lineLimit(1)
+                    let label = Text(song.displayArtist ?? "").font(.title3).foregroundStyle(.secondary).lineLimit(1)
+                    // Несколько исполнителей — меню выбора, один — сразу его страница
+                    if let artists = song.artists, artists.count > 1 {
+                        Menu {
+                            ForEach(artists) { a in Button(a.name) { model.pendingArtist = a } }
+                        } label: { label }
+                        .menuStyle(.button).buttonStyle(.plain) // иначе Menu красит подпись в цвет акцента
+                        .accessibilityHint("Show Artist")
+                    } else {
+                        Button { model.showArtist(of: song) } label: { label }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("Show Artist")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Show Artist")
                 } else {
-                    Text((player.isRadio ? player.streamTitle : player.current?.artist) ?? "").font(.title3).foregroundStyle(.secondary).lineLimit(1)
+                    Text((player.isRadio ? player.streamTitle : player.current?.displayArtist) ?? "").font(.title3).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
@@ -446,7 +454,7 @@ struct FullPlayerView: View {
                 Button("Show Album", systemImage: "square.stack") { Task { await model.showAlbum(of: song) } }
             }
             if let song = player.current, song.artistId != nil {
-                Button("Show Artist", systemImage: "music.mic") { model.showArtist(of: song) }
+                ShowArtistItem(song: song)
             }
             Section {
                 Button("Equalizer", systemImage: "slider.vertical.3") { showEqualizer = true }

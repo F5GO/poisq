@@ -120,7 +120,7 @@ struct SongsFeed: View {
                     if let player = model.player { feed.start(at: index, player: player, app: model, order: order) }
                 } label: {
                     HStack(spacing: 8) {
-                        MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.artist, highlighted: isCurrent)
+                        MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.displayArtist, highlighted: isCurrent)
                         Spacer(minLength: 0)
                         if isCurrent {
                             Image(systemName: "waveform").foregroundStyle(.tint)

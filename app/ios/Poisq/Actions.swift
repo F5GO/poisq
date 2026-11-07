@@ -19,6 +19,22 @@ struct PlaylistTarget: Identifiable {
     let songs: [Song]
 }
 
+/// «Показать артиста». У песни нескольких исполнителей — подменю с выбором, чтобы открыть именно нужного.
+struct ShowArtistItem: View {
+    let song: Song
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let artists = song.artists, artists.count > 1 {
+            Menu("Show Artist", systemImage: "music.mic") {
+                ForEach(artists) { a in Button(a.name) { model.pendingArtist = a } }
+            }
+        } else {
+            Button("Show Artist", systemImage: "music.mic") { model.showArtist(of: song) }
+        }
+    }
+}
+
 /// Подменю «Оценка»: 1–5 звёзд или без оценки. Системный Picker внутри Menu.
 struct RatingMenu: View {
     let song: Song
@@ -65,7 +81,7 @@ struct SongMenuItems: View {
         if !model.offline, song.albumId != nil || song.artistId != nil {
             Divider()
             if song.albumId != nil { Button("Show Album", systemImage: "square.stack") { Task { await model.showAlbum(of: song) } } }
-            if song.artistId != nil { Button("Show Artist", systemImage: "music.mic") { model.showArtist(of: song) } }
+            if song.artistId != nil { ShowArtistItem(song: song) }
         }
     }
 }

@@ -139,7 +139,7 @@ final class CarPlayController: NSObject, CPNowPlayingTemplateObserver {
     /// Песни: нажатие запускает список как очередь-поток — `all` целиком, начиная с нажатой.
     private func songItems(_ shown: [Song], all: [Song]) -> [CPListItem] {
         shown.enumerated().map { index, song in
-            let item = CPListItem(text: song.title, detailText: song.artist)
+            let item = CPListItem(text: song.title, detailText: song.displayArtist)
             item.isExplicitContent = false
             setCover(song.coverArt, on: item)
             item.handler = { [weak self] _, done in
@@ -206,7 +206,7 @@ final class CarPlayController: NSObject, CPNowPlayingTemplateObserver {
             guard let self, let player = model.player else { return }
             let upcoming = Array(player.upcoming.prefix(CPListTemplate.maximumItemCount))
             let items = upcoming.enumerated().map { index, song -> CPListItem in
-                let item = CPListItem(text: song.title, detailText: song.artist)
+                let item = CPListItem(text: song.title, detailText: song.displayArtist)
                 setCover(song.coverArt, on: item)
                 item.handler = { [weak self] _, done in
                     player.jump(toUpcoming: index)

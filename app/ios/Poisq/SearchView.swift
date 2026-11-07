@@ -64,7 +64,7 @@ struct SearchView: View {
                         Button {
                             recents.add(trimmed)
                             model.player?.play(results.songs, startAt: index)
-                        } label: { MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.artist) }
+                        } label: { MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.displayArtist) }
                         .buttonStyle(.plain).songMenu(song)
                     }
                 }
