@@ -451,7 +451,11 @@ public final class Player {
         let position = restoredPosition ?? 0
         restoredPosition = nil
         pendingSeek = position > 1 ? position : nil
-        rebuild(queue)
+        guard isCasting else { rebuild(queue); return }
+        // Колонка: место уходит вместе с командой запуска (песня сразу играет с него, без старта с нуля и перемотки),
+        // а текущая песня видна сразу — иначе до ответа колонки карусель показывала бы следующую.
+        rebuild(queue, immediate: true)
+        if let p = pendingSeek { pendingSeek = nil; engine.seek(to: p) }
     }
 
     /// Следит за временем реального прослушивания и вызывает `onListened`, когда набралась половина трека (не больше 4 минут).

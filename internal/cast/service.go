@@ -15,6 +15,8 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/F5GO/poisq/internal/db"
@@ -43,6 +45,97 @@ type Service struct {
 	OpenNavDB func() (*sql.DB, error) // navidrome.db (пути песен)
 	HTTP      *http.Client
 	Now       func() time.Time // для тестов; nil — time.Now
+
+	mu    sync.Mutex
+	zones map[string]*zoneState
+	nav   *sql.DB // navidrome.db, открытая при первом удачном запросе: не открываем базу на каждую команду колонке
+
+	token      string // токен MA на минуту: пул ключей пишет в базу при каждой выдаче, а опрос колонки идёт раз в секунду
+	tokenUntil time.Time
+}
+
+// cachedToken берёт токен из пула не чаще раза в минуту; новый токен из Studio начнёт действовать в течение минуты.
+func (s *Service) cachedToken() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.token != "" && time.Now().Before(s.tokenUntil) {
+		return s.token, nil
+	}
+	token, err := s.Token()
+	if err != nil {
+		return "", err
+	}
+	s.token, s.tokenUntil = token, time.Now().Add(time.Minute)
+	return token, nil
+}
+
+// navDB открывает navidrome.db один раз; пока базы нет (Navidrome ещё не создал её), пробует снова при следующем запросе.
+func (s *Service) navDB() (*sql.DB, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.nav == nil {
+		nav, err := s.OpenNavDB()
+		if err != nil {
+			return nil, err
+		}
+		s.nav = nav
+	}
+	return s.nav, nil
+}
+
+// zoneState — состояние колонки между запросами.
+type zoneState struct {
+	play sync.Mutex // запуск и стоп по очереди: два телефона не перемешают команды одной колонки
+	tail *tail      // очередь, которая ещё дописывается в MA после старта (под Service.mu)
+}
+
+func (s *Service) zoneState(zone string) *zoneState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.zones == nil {
+		s.zones = map[string]*zoneState{}
+	}
+	if s.zones[zone] == nil {
+		s.zones[zone] = &zoneState{}
+	}
+	return s.zones[zone]
+}
+
+// tail — хвост очереди, который дописывается в MA фоном, пока первая песня уже играет.
+type tail struct {
+	added atomic.Int64 // сколько элементов уже в очереди MA (с первой песней)
+	stop  atomic.Bool  // новая очередь: остаток больше не нужен
+	done  chan struct{}
+}
+
+// tailChunk — по сколько песен дописываем: следующая песня попадает в MA почти сразу, а MA не занят надолго одной командой.
+const tailChunk = 5
+
+// waitTail ждёт, пока в очереди MA окажется больше need элементов или хвост допишется целиком (need < 0 — ждать целиком).
+// cancel — остаток хвоста больше не нужен (новая очередь): дождаться только порции, которая уже в работе.
+func (s *Service) waitTail(ctx context.Context, zone string, need int64, cancel bool) error {
+	z := s.zoneState(zone)
+	s.mu.Lock()
+	t := z.tail
+	s.mu.Unlock()
+	if t == nil {
+		return nil
+	}
+	if cancel {
+		t.stop.Store(true)
+	}
+	for {
+		if need >= 0 && t.added.Load() > need {
+			return nil
+		}
+		select {
+		case <-t.done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 const settingsKey = "cast"
@@ -83,7 +176,7 @@ func (s *Service) client() (*MA, Settings, error) {
 	if st.URL == "" {
 		return nil, st, ErrNotConfigured
 	}
-	token, err := s.Token()
+	token, err := s.cachedToken()
 	if err != nil || token == "" {
 		return nil, st, ErrNotConfigured
 	}
@@ -107,6 +200,9 @@ func (s *Service) zoneClient(zone string) (*MA, Settings, error) {
 
 // Discover — для Studio: все плееры и файловые провайдеры MA.
 func (s *Service) Discover(ctx context.Context) ([]Player, []Provider, error) {
+	s.mu.Lock()
+	s.token = "" // Studio: только что добавленный токен проверяем сразу, а не через минуту
+	s.mu.Unlock()
 	ma, _, err := s.client()
 	if err != nil {
 		return nil, nil, err
@@ -152,11 +248,10 @@ func (s *Service) Zones(ctx context.Context) ([]Player, error) {
 
 // URIs переводит id песен Navidrome в URI файлов MA.
 func (s *Service) URIs(provider string, ids []string) ([]string, error) {
-	nav, err := s.OpenNavDB()
+	nav, err := s.navDB()
 	if err != nil {
 		return nil, fmt.Errorf("база Navidrome недоступна: %w", err)
 	}
-	defer nav.Close()
 
 	var roots []string // корни библиотек: старые Navidrome хранят в media_file абсолютные пути
 	if rows, err := nav.Query("SELECT path FROM library"); err == nil {
@@ -200,25 +295,65 @@ func relativePath(p string, roots []string) (string, bool) {
 }
 
 // Play заменяет очередь колонки песнями и запускает воспроизведение с index и offset (секунды).
-func (s *Service) Play(ctx context.Context, zone string, ids []string, index, offset int) error {
+func (s *Service) Play(ctx context.Context, zone string, ids []string, offset int) error {
 	ma, st, err := s.zoneClient(zone)
 	if err != nil {
 		return err
+	}
+	if len(ids) == 0 {
+		return errors.New("пустая очередь")
 	}
 	uris, err := s.URIs(st.Provider, ids)
 	if err != nil {
 		return err
 	}
-	if err := ma.Call(ctx, "player_queues/play_media", map[string]any{"queue_id": zone, "media": uris, "option": "replace"}, nil); err != nil {
+	z := s.zoneState(zone)
+	z.play.Lock()
+	defer z.play.Unlock()
+	if err := s.waitTail(ctx, zone, -1, true); err != nil {
 		return err
 	}
-	if index > 0 {
-		return ma.Call(ctx, "player_queues/play_index", map[string]any{"queue_id": zone, "index": index, "seek_position": offset}, nil)
+	// replace в MA разбирает все песни очереди и только потом запускает первую, причём с нуля.
+	// Поэтому: очищаем очередь, не останавливая плеер, ставим одну песню и запускаем её сразу с нужной секунды,
+	// а остальное дописываем фоном.
+	if err := ma.Call(ctx, "player_queues/clear", map[string]any{"queue_id": zone, "skip_stop": true}, nil); err != nil {
+		return err
 	}
-	if offset > 0 {
-		return ma.Call(ctx, "player_queues/seek", map[string]any{"queue_id": zone, "position": offset}, nil)
+	if err := ma.Call(ctx, "player_queues/play_media", map[string]any{"queue_id": zone, "media": uris[:1], "option": "add"}, nil); err != nil {
+		return err
+	}
+	if err := ma.Call(ctx, "player_queues/play_index", map[string]any{"queue_id": zone, "index": 0, "seek_position": max(offset, 0)}, nil); err != nil {
+		return err
+	}
+	if len(uris) > 1 {
+		t := &tail{done: make(chan struct{})}
+		t.added.Store(1)
+		s.mu.Lock()
+		z.tail = t
+		s.mu.Unlock()
+		go s.appendTail(context.WithoutCancel(ctx), ma, zone, t, uris[1:])
 	}
 	return nil
+}
+
+func (s *Service) appendTail(ctx context.Context, ma *MA, zone string, t *tail, uris []string) {
+	defer func() {
+		close(t.done)
+		z := s.zoneState(zone)
+		s.mu.Lock()
+		if z.tail == t {
+			z.tail = nil
+		}
+		s.mu.Unlock()
+	}()
+	for len(uris) > 0 && !t.stop.Load() {
+		n := min(tailChunk, len(uris))
+		if err := ma.Call(ctx, "player_queues/play_media", map[string]any{"queue_id": zone, "media": uris[:n], "option": "add"}, nil); err != nil {
+			return // shortcut: остаток очереди теряется до следующего запуска; приложение не узнаёт об этом, пока не дойдёт до конца
+		}
+		t.added.Add(int64(n))
+		uris = uris[n:]
+	}
 }
 
 // Control — команды пульта: play, pause, stop, clear, next, previous, seek (position), volume (volume 0..100),
@@ -229,6 +364,21 @@ func (s *Service) Control(ctx context.Context, zone, action string, position, vo
 		return err
 	}
 	q := map[string]any{"queue_id": zone}
+	// Правка очереди и переход к песне — только когда нужные элементы уже в MA; пауза, громкость и перемотка не ждут.
+	switch action {
+	case "stop", "clear": // очередь больше не нужна: иначе хвост допишется в уже очищенную очередь
+		z := s.zoneState(zone)
+		z.play.Lock() // и не проскочить мимо запуска, который в этот момент идёт с другого телефона
+		defer z.play.Unlock()
+		err = s.waitTail(ctx, zone, -1, true)
+	case "add", "remove":
+		err = s.waitTail(ctx, zone, -1, false)
+	case "index":
+		err = s.waitTail(ctx, zone, int64(position), false)
+	}
+	if err != nil {
+		return err
+	}
 	switch action {
 	case "play", "pause", "stop", "clear", "next", "previous":
 		return ma.Call(ctx, "player_queues/"+action, q, nil)
