@@ -222,7 +222,7 @@ func (s *Service) Play(ctx context.Context, zone string, ids []string, index, of
 }
 
 // Control — команды пульта: play, pause, stop, clear, next, previous, seek (position), volume (volume 0..100),
-// add (ids), remove (position — индекс в очереди MA).
+// add (ids), remove (position — индекс в очереди MA), index (position — перейти к треку очереди MA).
 func (s *Service) Control(ctx context.Context, zone, action string, position, volume int, ids []string) error {
 	ma, st, err := s.zoneClient(zone)
 	if err != nil {
@@ -235,6 +235,9 @@ func (s *Service) Control(ctx context.Context, zone, action string, position, vo
 	case "seek":
 		q["position"] = position
 		return ma.Call(ctx, "player_queues/seek", q, nil)
+	case "index": // переход к треку, уже стоящему в очереди MA: без пересборки очереди и перечитывания файлов
+		q["index"] = position
+		return ma.Call(ctx, "player_queues/play_index", q, nil)
 	case "remove":
 		q["item_id_or_index"] = position
 		return ma.Call(ctx, "player_queues/delete_item", q, nil)

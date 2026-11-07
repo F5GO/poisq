@@ -20,7 +20,7 @@ public final class CastEngine: PlaybackEngine {
     private var index = -1
     private var basePosition = 0.0
     private var baseTime = Date()
-    private var chain: Task<Void, Never> = Task {}     // команды идут строго по очереди: play → add → seek
+    private var chain: Task<Void, Never> = Task {}     // команды идут строго по очереди: запуск → add → seek
     private var pending = 0                            // пока команды в пути, ответы опроса устарели
     private var poll: Task<Void, Never>?
     private let pollInterval: Duration
@@ -44,25 +44,66 @@ public final class CastEngine: PlaybackEngine {
         URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value
     }
 
+    /// Запуск, ещё не отправленный на колонку. Пока он ждёт своей очереди, новые play/enqueue правят его, а не копят команды:
+    /// Player на каждое «вперёд» запускает песню и заново ставит весь хвост очереди — это одна команда, а не по запросу на песню.
+    private struct Start { var urls: [URL]; var seek: Int? }
+    private var start: Start?
+    private var adds: [URL]?                             // так же склеиваем добавления в конец
+    private var expected: Int?                           // после запуска MA не сразу сообщает новый индекс: до тех пор опрос устарел
+
     public func play(_ url: URL) {
-        guard let id = Self.songID(url) else { onError?(SubsonicError.invalidURL); return }
-        items = [url]; index = -1; currentURL = nil
+        guard Self.songID(url) != nil else { onError?(SubsonicError.invalidURL); return }
         basePosition = 0; baseTime = Date()
         update(.loading)
-        send(failPlayback: true) { [client, zone] in try await client.castPlay(zone: zone, ids: [id]) }
+        adds = nil                                     // очередь всё равно заменится
+        if start == nil { send(failPlayback: true) { [weak self] in try await self?.sendStart() } }
+        start = Start(urls: [url])
         startPolling()
     }
 
     public func enqueue(_ url: URL) {
-        guard let id = Self.songID(url) else { return }
-        items.append(url)
-        send { [client, zone] in try await client.castControl(zone: zone, action: "add", ids: [id]) }
+        guard Self.songID(url) != nil else { return }
+        if start != nil { start?.urls.append(url); return }
+        if adds == nil { adds = []; send { [weak self] in try await self?.sendAdds() } }
+        adds?.append(url)
     }
 
     public func dequeue(_ url: URL) {
+        if let i = start?.urls.lastIndex(of: url), i > 0 { start?.urls.remove(at: i); return }
+        if start != nil { return }                     // песня из старой очереди, её и так заменит запуск
+        if let i = adds?.lastIndex(of: url) { adds?.remove(at: i); return }
         guard let i = items.lastIndex(of: url), i > index else { return }
         items.remove(at: i)
         send { [client, zone] in try await client.castControl(zone: zone, action: "remove", position: i) }
+    }
+
+    /// Если новая очередь — хвост той, что уже на колонке (вперёд, назад, переход по очереди), просто переходим к песне:
+    /// MA не пересобирает очередь и не перечитывает файлы. Иначе заменяем очередь целиком.
+    private func sendStart() async throws {
+        guard let s = start else { return }
+        start = nil
+        let ids = s.urls.compactMap(Self.songID)
+        let k = items.count - ids.count
+        index = -1; currentURL = nil                   // опрос сообщит о запуске, как о смене трека
+        do {
+            if k >= 0, items[k...].map(Self.songID) == ids.map(Optional.some) {
+                items.replaceSubrange(k..., with: s.urls)  // ссылки новые (свежая подпись), песни те же
+                expected = k
+                try await client.castControl(zone: zone, action: "index", position: k)
+                if let seek = s.seek { try await client.castControl(zone: zone, action: "seek", position: seek) }
+            } else {
+                items = s.urls
+                expected = 0
+                try await client.castPlay(zone: zone, ids: ids, offset: s.seek ?? 0)
+            }
+        } catch { expected = nil; throw error }
+    }
+
+    private func sendAdds() async throws {
+        guard let urls = adds, !urls.isEmpty else { adds = nil; return }
+        adds = nil
+        items += urls
+        try await client.castControl(zone: zone, action: "add", ids: urls.compactMap(Self.songID))
     }
 
     public func skipToNext() {
@@ -72,6 +113,7 @@ public final class CastEngine: PlaybackEngine {
 
     public func seek(to seconds: Double) {
         basePosition = seconds; baseTime = Date()
+        if start != nil { start?.seek = Int(seconds); return }
         send { [client, zone] in try await client.castControl(zone: zone, action: "seek", position: Int(seconds)) }
     }
 
@@ -90,6 +132,7 @@ public final class CastEngine: PlaybackEngine {
     public func stop() {
         poll?.cancel(); poll = nil
         items = []; index = -1; currentURL = nil; basePosition = 0
+        start = nil; adds = nil; expected = nil
         update(.idle)
         send { [client, zone] in
             try await client.castControl(zone: zone, action: "stop")
@@ -105,6 +148,7 @@ public final class CastEngine: PlaybackEngine {
             await previous.value
             do { try await body() } catch { if failPlayback { self?.onError?(error) } }
             self?.pending -= 1
+            if self?.pending == 0 { await self?.refresh() }   // команды отработали — сразу узнаём состояние, не ждём такта опроса
         }
     }
 
@@ -113,16 +157,20 @@ public final class CastEngine: PlaybackEngine {
         poll = Task { [weak self, pollInterval] in
             while !Task.isCancelled {
                 guard let self else { return }
-                if self.pending == 0, let s = try? await self.client.castStatus(zone: self.zone), self.pending == 0 {
-                    self.apply(s)
-                }
+                await self.refresh()
                 try? await Task.sleep(for: pollInterval)
             }
         }
     }
 
+    private func refresh() async {
+        guard pending == 0, let s = try? await client.castStatus(zone: zone), pending == 0 else { return }
+        apply(s)
+    }
+
     /// Состояние колонки → зеркало и события для Player.
     func apply(_ s: SubsonicClient.CastStatus) {
+        if let e = expected { guard s.index == e else { return }; expected = nil }
         basePosition = s.position; baseTime = Date()
         if s.index != index, items.indices.contains(s.index) {
             index = s.index
