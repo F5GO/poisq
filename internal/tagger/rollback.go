@@ -100,6 +100,9 @@ func (s *StagingService) ApplyProposalWithCustomCover(ctx context.Context, propo
 	}
 	if proposed.AlbumArtist == "" {
 		proposed.AlbumArtist = proposed.Artist
+		if rec.ChangeType == "manual" { // ручная правка не добавляет тег, которого не было
+			proposed.AlbumArtist = track.AlbumArtist
+		}
 	}
 	if proposed.Title == "" {
 		proposed.Title = track.Title
@@ -122,6 +125,47 @@ func (s *StagingService) ApplyProposalWithCustomCover(ctx context.Context, propo
 	}
 
 	return s.stagingRepo.MarkApplied(proposalID, string(origBytes))
+}
+
+// ApplyManualEdit записывает теги, введённые вручную в Studio. Правка проходит через Staging
+// (change_type = manual), поэтому попадает в историю и откатывается так же, как предложения аудита.
+func (s *StagingService) ApplyManualEdit(ctx context.Context, trackID string, tags CanonicalTagSet) (int64, error) {
+	track, err := s.tracksRepo.GetByID(trackID)
+	if err != nil {
+		return 0, fmt.Errorf("трек %s не найден в базе: %w", trackID, err)
+	}
+	curJSON, _ := json.Marshal(map[string]any{
+		"artist":      track.Artist,
+		"album":       track.Album,
+		"albumArtist": track.AlbumArtist,
+		"title":       track.Title,
+		"year":        track.Year,
+	})
+	propJSON, _ := json.Marshal(map[string]any{
+		"artist":      strings.TrimSpace(tags.Artist),
+		"album":       strings.TrimSpace(tags.Album),
+		"albumArtist": strings.TrimSpace(tags.AlbumArtist),
+		"title":       strings.TrimSpace(tags.Title),
+		"year":        tags.Year,
+		"reason":      "Ручная правка в Studio",
+	})
+	id, err := s.stagingRepo.CreateProposal(db.StagingChangeRecord{
+		Scope:        "track",
+		TargetID:     track.ID,
+		FolderPath:   track.FolderPath,
+		ChangeType:   "manual",
+		Confidence:   100,
+		CurrentJSON:  string(curJSON),
+		ProposedJSON: string(propJSON),
+	})
+	if err != nil {
+		return 0, err
+	}
+	// При ошибке правка остаётся pending в Staging: файл мог уже измениться, и запись нужна, чтобы повторить или пропустить её
+	if err := s.ApplyProposalWithCustomCover(ctx, id, ""); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // UndoProposal откатывает ранее примененное изменение тегов, возвращая исходные метаданные из original_tags_json.

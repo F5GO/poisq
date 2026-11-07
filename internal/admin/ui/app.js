@@ -692,12 +692,27 @@ async function openTrackDrawer(trackId) {
           AI Караоке (Groq)
         </button>
       </div>
+      <button class="btn btn-secondary" onclick="auditSingleTrack('${escapeHtml(track.id)}')">
+        Проверить трек (MusicBrainz и обложка)
+      </button>
       ${(content || (track.lyricsStatus && track.lyricsStatus !== "none")) ? `
         <button class="btn btn-danger-outline" onclick="deleteTrackLyrics('${escapeHtml(track.id)}')" style="margin-top: 4px;">
           Удалить текст и .lrc файл
         </button>
       ` : ""}
     </div>
+
+    <details style="margin-top: 10px;">
+      <summary style="cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-secondary);">Редактировать теги</summary>
+      <form id="form-track-tags" style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;" onsubmit="event.preventDefault(); saveTrackTags('${escapeHtml(track.id)}');">
+        <div class="form-group"><label class="form-label" for="tag-title">Название</label><input id="tag-title" class="form-input" value="${escapeHtml(track.title || "")}" /></div>
+        <div class="form-group"><label class="form-label" for="tag-artist">Исполнитель</label><input id="tag-artist" class="form-input" value="${escapeHtml(track.artist || "")}" /></div>
+        <div class="form-group"><label class="form-label" for="tag-album">Альбом</label><input id="tag-album" class="form-input" value="${escapeHtml(track.album || "")}" /></div>
+        <div class="form-group"><label class="form-label" for="tag-album-artist">Исполнитель альбома</label><input id="tag-album-artist" class="form-input" value="${escapeHtml(track.albumArtist || "")}" /></div>
+        <div class="form-group"><label class="form-label" for="tag-year">Год</label><input id="tag-year" class="form-input mono" type="number" min="0" max="9999" value="${track.year || ""}" /></div>
+        <button type="submit" class="btn btn-primary">Записать теги в файл</button>
+      </form>
+    </details>
 
     ${content ? `
       <div style="margin-top: 10px;">
@@ -752,6 +767,37 @@ async function deleteTrackLyrics(trackId) {
     await loadTracks();
   } catch (err) {
     showToast(`Ошибка удаления текста: ${err.message}`, "error");
+  }
+}
+
+async function saveTrackTags(trackId) {
+  const val = (id) => (document.getElementById(id)?.value || "").trim();
+  const payload = {
+    trackId,
+    title: val("tag-title"),
+    artist: val("tag-artist"),
+    album: val("tag-album"),
+    albumArtist: val("tag-album-artist"),
+    year: parseInt(val("tag-year"), 10) || 0,
+  };
+  try {
+    const res = await fetchApi("/tracks/tags", "POST", payload, 60000);
+    state.lastAppliedStagingId = res.stagingId; // правку можно откатить кнопкой Undo в Staging
+    showToast("✓ Теги записаны в файл", "success");
+    document.getElementById("drawer-track-detail")?.classList.add("hidden");
+    await loadTracks();
+  } catch (err) {
+    showToast(`Ошибка записи тегов: ${err.message}`, "error");
+  }
+}
+
+async function auditSingleTrack(trackId) {
+  try {
+    await fetchApi("/scan/audit", "POST", { trackId });
+    showToast("Проверка трека запущена в фоне — предложения появятся в Staging", "info");
+    setTimeout(loadStagingData, 3000);
+  } catch (err) {
+    showToast(`Ошибка запуска проверки: ${err.message}`, "error");
   }
 }
 
@@ -1639,6 +1685,7 @@ async function loadStagingData() {
     let issueTitle = "Канонизация тегов MusicBrainz";
     if (item.changeType === "mojibake") issueTitle = "Битая кодировка (CP1251 → UTF-8)";
     if (item.changeType === "artist_canonical") issueTitle = "Канонизация имени артиста";
+    if (item.changeType === "manual") issueTitle = "Ручная правка тегов";
 
     return `
       <div class="staging-card">
