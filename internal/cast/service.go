@@ -390,8 +390,7 @@ func (s *Service) Control(ctx context.Context, zone, action string, position, vo
 			return err
 		}
 		if cur.CurrentIndex == nil {
-			q["position"] = position
-			return ma.Call(ctx, "player_queues/seek", q, nil)
+			return errors.New("на колонке нет текущей песни")
 		}
 		q["index"], q["seek_position"] = *cur.CurrentIndex, position
 		return ma.Call(ctx, "player_queues/play_index", q, nil)
