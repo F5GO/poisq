@@ -48,7 +48,14 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 
 	// Настройка Director с безопасной нормализацией заголовков X-Forwarded-* для работы за CDN/Reverse Proxy
 	originalDirector := reverseProxy.Director
-	reverseProxy.Director = SetupDirector(targetURL, originalDirector)
+	director := SetupDirector(targetURL, originalDirector)
+	reverseProxy.Director = func(req *http.Request) {
+		director(req)
+		// Ответ со списком расширений правим на лету, поэтому просим Navidrome не сжимать его (иначе poisq не добавится)
+		if isExtensionsPath(req.URL.Path) {
+			req.Header.Del("Accept-Encoding")
+		}
+	}
 
 	// Гарантируем корректные CORS-заголовки для браузера при доступе через CDN/FRP с разными доменами
 	reverseProxy.ModifyResponse = func(resp *http.Response) error {

@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -57,5 +58,29 @@ func TestOtherPathsAreUntouched(t *testing.T) {
 	b, _ := io.ReadAll(r.Body)
 	if string(b) != body {
 		t.Fatalf("ping must not change: %s", b)
+	}
+}
+
+// Navidrome сжимает ответ, если клиент просит gzip (iOS просит всегда): прокси обязан всё равно объявить poisq.
+func TestExtensionsAdvertisedWhenClientAcceptsGzip(t *testing.T) {
+	nav := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept-Encoding") != "" {
+			w.Header().Set("Content-Encoding", "gzip") // имитация: сжатое тело прокси разобрать не сможет
+			_, _ = w.Write([]byte("compressed"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"subsonic-response":{"status":"ok","openSubsonicExtensions":[]}}`))
+	}))
+	defer nav.Close()
+	u, _ := url.Parse(nav.URL)
+	srv := NewServer(u, nil, nil, nil, false)
+
+	req := httptest.NewRequest(http.MethodGet, "/rest/getOpenSubsonicExtensions?f=json", nil)
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `"name":"poisq"`) {
+		t.Fatalf("poisq not advertised: %s", rec.Body.String())
 	}
 }
