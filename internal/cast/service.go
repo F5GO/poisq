@@ -383,8 +383,18 @@ func (s *Service) Control(ctx context.Context, zone, action string, position, vo
 	case "play", "pause", "stop", "clear", "next", "previous":
 		return ma.Call(ctx, "player_queues/"+action, q, nil)
 	case "seek":
-		q["position"] = position
-		return ma.Call(ctx, "player_queues/seek", q, nil)
+		// Перемотка — тот же быстрый путь, что и переход к песне: play_index на текущую с нужной секунды.
+		// player_queues/seek на Яндекс Станции запускается заметно дольше.
+		var cur Queue
+		if err := ma.Call(ctx, "player_queues/get", q, &cur); err != nil {
+			return err
+		}
+		if cur.CurrentIndex == nil {
+			q["position"] = position
+			return ma.Call(ctx, "player_queues/seek", q, nil)
+		}
+		q["index"], q["seek_position"] = *cur.CurrentIndex, position
+		return ma.Call(ctx, "player_queues/play_index", q, nil)
 	case "index": // переход к треку, уже стоящему в очереди MA: без пересборки очереди и перечитывания файлов
 		q["index"] = position
 		return ma.Call(ctx, "player_queues/play_index", q, nil)
