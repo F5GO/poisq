@@ -548,13 +548,20 @@ struct PlayerBackdrop: View {
     }
 }
 
-/// Кнопка выбора устройства (AirPlay, Bluetooth).
-private struct RoutePicker: UIViewRepresentable {
+/// Кнопка выбора устройства (AirPlay, Bluetooth). `onOpen` — перед показом системного окна (окно колонок переключает звук на iPhone).
+struct RoutePicker: UIViewRepresentable {
+    var onOpen: (() -> Void)?
     func makeUIView(context: Context) -> AVRoutePickerView {
         let v = AVRoutePickerView()
         v.tintColor = .label
         v.activeTintColor = .tintColor
+        v.delegate = context.coordinator
         return v
     }
-    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) { context.coordinator.onOpen = onOpen }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    final class Coordinator: NSObject, AVRoutePickerViewDelegate {
+        var onOpen: (() -> Void)?
+        func routePickerViewWillBeginPresentingRoutes(_ routePickerView: AVRoutePickerView) { onOpen?() }
+    }
 }

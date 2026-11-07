@@ -3683,6 +3683,26 @@
         }
       }
     },
+    "AirPlay & Bluetooth": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AirPlay и Bluetooth"
+          }
+        }
+      }
+    },
+    "AirPlay or Bluetooth device": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Устройство AirPlay или Bluetooth"
+          }
+        }
+      }
+    },
     "Speakers": {
       "localizations": {
         "ru": {

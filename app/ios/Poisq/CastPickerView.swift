@@ -8,6 +8,7 @@ struct CastPickerView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var volume: Double = 0
     @State private var loading = true
+    @State private var showAirPlay = false
 
     var body: some View {
         NavigationStack {
@@ -33,6 +34,19 @@ struct CastPickerView: View {
                     Text("Speakers")
                 } footer: {
                     if !loading, model.castZones.isEmpty { Text("No speakers available. Speakers are set up in poisq Studio.") }
+                }
+                // AirPlay и Bluetooth — запасной путь, поэтому свёрнут. Звук по AirPlay идёт с iPhone, так что трансляцию на колонку сначала выключаем.
+                Section {
+                    DisclosureGroup(isExpanded: $showAirPlay) {
+                        HStack {
+                            Text("AirPlay or Bluetooth device").foregroundStyle(.secondary)
+                            Spacer()
+                            RoutePicker { model.cast(to: nil) }.frame(width: 44, height: 44).accessibilityLabel("AirPlay")
+                        }
+                    } label: {
+                        Label("AirPlay & Bluetooth", systemImage: "airplay.audio").foregroundStyle(.primary)
+                    }
+                    .tint(.primary)
                 }
             }
             .navigationTitle("Play On")
