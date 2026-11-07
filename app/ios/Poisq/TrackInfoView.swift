@@ -14,7 +14,7 @@ struct TrackInfoView: View {
             List {
                 Section {
                     row("Title", song.title)
-                    row("Artist", song.artist)
+                    row("Artist", song.displayArtist)
                     row("Album", song.album)
                     row("Year", song.year.map(String.init))
                     row("Genre", song.genre)

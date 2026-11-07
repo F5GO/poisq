@@ -114,7 +114,7 @@ struct PlaylistView: View {
 
             ForEach(Array(songs.enumerated()), id: \.offset) { index, song in
                 Button { model.player?.play(songs, startAt: index) } label: {
-                    MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.artist)
+                    MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.displayArtist)
                 }
                 .buttonStyle(.plain)
                 .songMenu(song)

@@ -27,18 +27,27 @@ public struct Song: Identifiable, Hashable, Sendable, Codable {
     public let userRating: Int?
     /// Данные ReplayGain (OpenSubsonic); nil — сервер их не отдаёт.
     public let replayGain: ReplayGain?
+    /// Все исполнители песни с их id (OpenSubsonic); nil — сервер отдаёт только одну строку `artist`.
+    public let artists: [Artist]?
+
+    /// Исполнители для показа: «A, B и C» по правилам языка, если их несколько, иначе строка `artist`.
+    public var displayArtist: String? {
+        guard let artists, artists.count > 1 else { return artist }
+        return ListFormatter.localizedString(byJoining: artists.map(\.name))
+    }
 
     public init(id: String, title: String, artist: String? = nil, album: String? = nil,
                 albumId: String? = nil, artistId: String? = nil, coverArt: String? = nil, duration: Int? = nil,
                 track: Int? = nil, suffix: String? = nil, bitRate: Int? = nil, size: Int? = nil,
                 year: Int? = nil, genre: String? = nil, path: String? = nil, contentType: String? = nil,
-                bitDepth: Int? = nil, samplingRate: Int? = nil, channelCount: Int? = nil, starred: String? = nil, userRating: Int? = nil, replayGain: ReplayGain? = nil) {
+                bitDepth: Int? = nil, samplingRate: Int? = nil, channelCount: Int? = nil, starred: String? = nil, userRating: Int? = nil, replayGain: ReplayGain? = nil, artists: [Artist]? = nil) {
         self.id = id; self.title = title; self.artist = artist; self.album = album
         self.albumId = albumId; self.artistId = artistId; self.coverArt = coverArt; self.duration = duration
         self.track = track; self.suffix = suffix; self.bitRate = bitRate; self.size = size
         self.year = year; self.genre = genre; self.path = path; self.contentType = contentType
         self.bitDepth = bitDepth; self.samplingRate = samplingRate; self.channelCount = channelCount
         self.starred = starred; self.userRating = userRating; self.replayGain = replayGain
+        self.artists = artists
     }
 }
 

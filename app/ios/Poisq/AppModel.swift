@@ -365,7 +365,7 @@ final class AppModel {
     /// «Показать альбом» из плеера.
     /// «Поделиться песней»: ссылка с сервера, если он умеет шары; иначе текст «Название — Исполнитель».
     func share(_ song: Song) async {
-        let text = [song.title, song.artist].compactMap { $0 }.joined(separator: " — ")
+        let text = [song.title, song.displayArtist].compactMap { $0 }.joined(separator: " — ")
         var items: [Any] = [text]
         if let url = try? await client?.createShare(songID: song.id) { items.append(url) }
         shareItems = ShareItems(items: items)

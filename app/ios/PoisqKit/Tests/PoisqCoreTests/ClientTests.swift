@@ -43,4 +43,13 @@ import Foundation
         #expect(try client.fileURL(for: s, quality: .original).path.hasSuffix("/download"))
         #expect(try client.fileURL(for: s, quality: .kbps128).path.hasSuffix("/stream"))
     }
+
+    @Test func songWithSeveralArtistsJoinsNames() throws {
+        let json = #"{"id":"1","title":"T","artist":"A; B; C","artistId":"a","artists":[{"id":"a","name":"A"},{"id":"b","name":"B"},{"id":"c","name":"C"}]}"#
+        let song = try JSONDecoder().decode(Song.self, from: Data(json.utf8))
+        #expect(song.artists?.map(\.id) == ["a", "b", "c"])
+        #expect(song.displayArtist == ListFormatter.localizedString(byJoining: ["A", "B", "C"]))
+        let single = try JSONDecoder().decode(Song.self, from: Data(#"{"id":"2","title":"T","artist":"A"}"#.utf8))
+        #expect(single.displayArtist == "A")
+    }
 }

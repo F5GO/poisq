@@ -107,7 +107,7 @@ struct QueueSections: View {
                 CoverArtView(id: song.coverArt, size: 48, radius: 8)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(song.title).lineLimit(1)
-                    Text(song.artist ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    Text(song.displayArtist ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
                 if player.source(of: song) == .streaming {

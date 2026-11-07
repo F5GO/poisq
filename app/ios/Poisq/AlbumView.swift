@@ -20,7 +20,7 @@ struct AlbumView: View {
                             .foregroundStyle(.secondary).frame(width: 24, alignment: .trailing)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(song.title).lineLimit(1)
-                            if let artist = song.artist, artist != album.artist {
+                            if let artist = song.displayArtist, song.artist != album.artist {
                                 Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             }
                         }
