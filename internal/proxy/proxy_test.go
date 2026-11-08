@@ -354,19 +354,19 @@ func TestReverseProxyCDNHeaders(t *testing.T) {
 
 	director := SetupDirector(targetURL, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "http://music.teedi.ru/auth/login", nil)
-	req.Host = "music.teedi.ru"
+	req := httptest.NewRequest(http.MethodGet, "http://music.example.com/auth/login", nil)
+	req.Host = "music.example.com"
 	req.Header.Set("CF-Visitor", `{"scheme":"https"}`)
 	req.Header.Set("CF-Connecting-IP", "203.0.113.195")
 
 	director(req)
 
 	// Проверяем сохранение Host и установку X-Forwarded-* заголовков для Navidrome
-	if req.Host != "music.teedi.ru" {
-		t.Errorf("req.Host должен сохранять клиентский домен music.teedi.ru, получено: %s", req.Host)
+	if req.Host != "music.example.com" {
+		t.Errorf("req.Host должен сохранять клиентский домен music.example.com, получено: %s", req.Host)
 	}
-	if req.Header.Get("X-Forwarded-Host") != "music.teedi.ru" {
-		t.Errorf("X-Forwarded-Host должен быть music.teedi.ru, получено: %s", req.Header.Get("X-Forwarded-Host"))
+	if req.Header.Get("X-Forwarded-Host") != "music.example.com" {
+		t.Errorf("X-Forwarded-Host должен быть music.example.com, получено: %s", req.Header.Get("X-Forwarded-Host"))
 	}
 	if req.Header.Get("X-Forwarded-Proto") != "https" {
 		t.Errorf("X-Forwarded-Proto должен быть https при CF-Visitor https, получено: %s", req.Header.Get("X-Forwarded-Proto"))
