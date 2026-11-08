@@ -22,7 +22,7 @@ import (
 
 const (
 	musicBrainzBaseURL   = "https://musicbrainz.org/ws/2"
-	musicBrainzUserAgent = "poisq/0.2.0 ( https://teedi.ru )"
+	musicBrainzUserAgent = "poisq/0.2.0 ( https://github.com/F5GO/poisq )"
 )
 
 // MBArtistInfo содержит каноничное имя артиста, MBID и список международных алиасов.
