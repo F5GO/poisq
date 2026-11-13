@@ -238,6 +238,32 @@ func TestResolverNeverSendsNameOnlyHomonymToAI(t *testing.T) {
 	}
 }
 
+func TestFallbackIdentitySourceUsesRegionalCatalogOnlyWithoutPrimaryEvidence(t *testing.T) {
+	input := IdentityContext{ArtistID: "artist", Name: "ANIKV", Albums: []IdentityRelease{{Title: "Киносеанс"}}}
+	primary := &fakeIdentitySource{candidates: []IdentityCandidate{{
+		ID: "mb", Provider: ProviderMusicBrainz, ProviderArtistID: "mb", Name: "ANIKV", ProviderScore: 1,
+	}}}
+	secondary := &fakeIdentitySource{candidates: []IdentityCandidate{{
+		ID: "ya", Provider: ProviderYandexMusic, ProviderArtistID: "1", Name: "ANIKV",
+		Albums: []IdentityRelease{{Title: "Киносеанс"}},
+	}}}
+	source := NewFallbackIdentitySource(primary, secondary)
+	candidates, err := source.FindIdentityCandidates(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].Provider != ProviderYandexMusic || secondary.callCount() != 1 {
+		t.Fatalf("regional grounded candidate was not selected: %#v calls=%d", candidates, secondary.callCount())
+	}
+
+	primary.candidates[0].Albums = []IdentityRelease{{Title: "Киносеанс"}}
+	secondary.calls = 0
+	candidates, err = source.FindIdentityCandidates(context.Background(), input)
+	if err != nil || len(candidates) != 1 || candidates[0].Provider != ProviderMusicBrainz || secondary.callCount() != 0 {
+		t.Fatalf("regional fallback ran despite primary evidence: %#v calls=%d err=%v", candidates, secondary.callCount(), err)
+	}
+}
+
 func TestResolverOutageRemainsUncertain(t *testing.T) {
 	store := resolverStore(t)
 	source := &fakeIdentitySource{err: errors.New("provider unavailable")}

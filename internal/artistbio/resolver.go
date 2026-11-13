@@ -21,6 +21,55 @@ type IdentityCandidateSource interface {
 	FindIdentityCandidates(ctx context.Context, input IdentityContext) ([]IdentityCandidate, error)
 }
 
+// FallbackIdentitySource consults the secondary catalog only when the primary
+// has no grounded release/recording evidence. This avoids duplicate candidates
+// for artists already resolved by MusicBrainz while covering regional catalogs.
+type FallbackIdentitySource struct {
+	primary   IdentityCandidateSource
+	secondary IdentityCandidateSource
+}
+
+func NewFallbackIdentitySource(primary, secondary IdentityCandidateSource) *FallbackIdentitySource {
+	return &FallbackIdentitySource{primary: primary, secondary: secondary}
+}
+
+func (s *FallbackIdentitySource) FindIdentityCandidates(ctx context.Context, input IdentityContext) ([]IdentityCandidate, error) {
+	if s == nil || s.primary == nil {
+		return nil, fmt.Errorf("primary identity source is not configured")
+	}
+	primary, primaryErr := s.primary.FindIdentityCandidates(ctx, input)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if hasGroundedIdentityCandidate(input, primary) || s.secondary == nil {
+		return primary, primaryErr
+	}
+	secondary, secondaryErr := s.secondary.FindIdentityCandidates(ctx, input)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if hasGroundedIdentityCandidate(input, secondary) {
+		return secondary, nil
+	}
+	if primaryErr == nil {
+		return primary, nil
+	}
+	if secondaryErr == nil {
+		return secondary, nil
+	}
+	return nil, primaryErr
+}
+
+func hasGroundedIdentityCandidate(input IdentityContext, candidates []IdentityCandidate) bool {
+	for _, candidate := range candidates {
+		score := ScoreIdentityCandidate(input, candidate)
+		if score.Decisive && score.Confidence >= AutoResolveConfidence || identityScoreEligibleForAI(score) {
+			return true
+		}
+	}
+	return false
+}
+
 type IdentityArbiter interface {
 	ArbitrateIdentity(ctx context.Context, input ai.IdentityArbitrationInput) (ai.IdentityArbitrationDecision, error)
 }

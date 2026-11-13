@@ -45,6 +45,40 @@ func TestYandexBiographySourceMatchesAlbumsBeforeBriefInfo(t *testing.T) {
 	}
 }
 
+func TestYandexBiographySourceReusesGloballyResolvedIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/artists/41075/brief-info" {
+			t.Fatalf("unexpected identity lookup %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"result":{"artist":{"id":"41075","description":{"text":"Настоящее описание"}}}}`))
+	}))
+	defer server.Close()
+	source, _ := newYandexBiographySource(server.URL, nil)
+	artist := yandexResolvedArtist()
+	artist.Identity.Provider = ProviderYandexMusic
+	artist.Identity.ProviderArtistID = "41075"
+	artist.Identity.Confidence = 0.98
+	result, err := source.Fetch(context.Background(), artist)
+	if err != nil || result == nil || result.SourceArtistID != "41075" {
+		t.Fatalf("resolved Yandex identity was not reused: result=%#v err=%v", result, err)
+	}
+}
+
+func TestYandexBiographySourceReturnsOnlyExactWikipediaLink(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"result":{"artist":{"id":"41075","enWikipediaLink":"http://en.wikipedia.org/wiki/Anikv"}}}`))
+	}))
+	defer server.Close()
+	source, _ := newYandexBiographySource(server.URL, nil)
+	artist := yandexResolvedArtist()
+	artist.Identity.Provider = ProviderYandexMusic
+	artist.Identity.ProviderArtistID = "41075"
+	linked, sourceID, err := source.ExactWikipediaLink(context.Background(), artist)
+	if err != nil || linked != "https://en.wikipedia.org/wiki/Anikv" || sourceID != "yandex:41075" {
+		t.Fatalf("unexpected exact Wikipedia link: url=%q id=%q err=%v", linked, sourceID, err)
+	}
+}
+
 func TestYandexBiographySourceRejectsNameOnlyMatch(t *testing.T) {
 	var briefCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
