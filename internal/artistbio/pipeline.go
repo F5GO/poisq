@@ -123,6 +123,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 			if verifyErr != nil {
 				synthesisErr = synthesisStageFailure("summary_verify_failed", verifyErr)
 			} else if !verification.Grounded {
+				logger.Debug("[BIO] artist_id=%q verifier_verdicts=%s", artist.ID, formatVerificationSummary(verification))
 				synthesisErr = discoveryError("summary_not_grounded", fmt.Errorf("summary verification rejected"))
 			}
 			logPipelineStage(artist.ID, artist.Name, "summary_verify", stageStarted, synthesisErr)
@@ -392,4 +393,16 @@ func synthesisStageFailure(fallback string, err error) error {
 		return discoveryError(reason, err)
 	}
 	return discoveryError(fallback, err)
+}
+
+func formatVerificationSummary(v ai.SynthesisVerification) string {
+	parts := make([]string, 0, len(v.Scores))
+	for index, score := range v.Scores {
+		verdict := "unknown"
+		if index < len(v.Verdicts) && v.Verdicts[index] != "" {
+			verdict = v.Verdicts[index]
+		}
+		parts = append(parts, fmt.Sprintf("%d:%s(%.2f)", index+1, verdict, score))
+	}
+	return strings.Join(parts, ",")
 }

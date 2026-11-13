@@ -280,7 +280,7 @@ func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, m
 		if !shouldTryNextGroqModel(status, err, mime) {
 			return "", status, err
 		}
-		logger.Warn("[GROQ-LLM] Модель %s отклонила запрос (HTTP %d), пробую следующую", model, status)
+		logger.Warn("[GROQ-LLM] Модель %s отклонила запрос (HTTP %d): %v — пробую следующую", model, status, err)
 		if isModelUnavailable(status, err) {
 			// Только отсутствие модели означает, что кеш списка мог устареть.
 			g.mu.Lock()
