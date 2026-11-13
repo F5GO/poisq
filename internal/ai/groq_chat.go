@@ -194,6 +194,7 @@ type groqChatRequest struct {
 	Temperature     float64           `json:"temperature"`
 	ResponseFormat  map[string]string `json:"response_format,omitempty"`
 	ReasoningFormat string            `json:"reasoning_format,omitempty"`
+	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
 }
 
 type groqChatResponse struct {
@@ -314,9 +315,12 @@ func buildGroqChatRequest(model, system, user, mime string) groqChatRequest {
 	}
 	if strings.Contains(strings.ToLower(mime), "json") {
 		reqBody.ResponseFormat = map[string]string{"type": "json_object"}
-		if strings.Contains(strings.ToLower(model), "qwen") {
+		lowModel := strings.ToLower(model)
+		if strings.Contains(lowModel, "qwen") {
 			// Qwen3 reasoning models emit <think>...</think> into content unless parsed reasoning is requested.
 			reqBody.ReasoningFormat = "parsed"
+		} else if strings.Contains(lowModel, "gpt-oss") {
+			reqBody.ReasoningEffort = "low"
 		}
 	}
 	return reqBody
