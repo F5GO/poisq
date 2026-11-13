@@ -82,6 +82,37 @@ func TestMusicBrainzBrowseArtistReleaseGroups(t *testing.T) {
 	}
 }
 
+func TestMusicBrainzSearchArtistRecordings(t *testing.T) {
+	const artistID = "cc197bad-dc9c-440d-a5b5-d52ba2e14234"
+	const recordingID = "1b022e01-4da6-387b-8658-8678046e4cef"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("query")
+		if r.URL.Path != "/recording" || !strings.Contains(query, "arid:"+artistID) || !strings.Contains(query, `recording:"Песня"`) || r.URL.Query().Get("limit") != "100" {
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{"recordings":[
+			{"id":"` + recordingID + `","title":"Песня"},
+			{"id":"invalid","title":"bad"}
+		]}`))
+	}))
+	defer server.Close()
+	client := NewMusicBrainzClient()
+	client.baseURL = server.URL
+	recordings, err := client.SearchArtistRecordings(context.Background(), artistID, []string{"Песня"}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recordings) != 1 || recordings[0].RecordingMBID != recordingID || recordings[0].Title != "Песня" {
+		t.Fatalf("unexpected recordings: %#v", recordings)
+	}
+	if _, err := client.SearchArtistRecordings(context.Background(), "../../etc/passwd", []string{"Песня"}, 100); err == nil {
+		t.Fatal("invalid artist MBID accepted")
+	}
+	if _, err := client.SearchArtistRecordings(context.Background(), artistID, nil, 100); err == nil {
+		t.Fatal("empty recording titles accepted")
+	}
+}
+
 func TestMusicBrainzSearchArtistsRejectsInvalidAndMalformedResponses(t *testing.T) {
 	client := NewMusicBrainzClient()
 	if _, err := client.SearchArtists(context.Background(), "", 3); err == nil {

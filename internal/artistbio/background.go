@@ -145,8 +145,8 @@ func (p *BackgroundProcessor) ProcessBatch(ctx context.Context, navDB *sql.DB) (
 			}
 			if resolution.Status != ResolutionResolved {
 				report.Uncertain++
-				logger.Debug("[BIO] artist_id=%q identity=uncertain confidence=%.2f ai_required=%t evidence=%v contradictions=%v",
-					artist.ID, resolution.Confidence, resolution.RequiresAI, resolution.EvidenceCodes, resolution.ContradictionCodes)
+				logger.Debug("[BIO] artist_id=%q artist=%q identity=uncertain confidence=%.2f ai_required=%t evidence=%v contradictions=%v",
+					artist.ID, artist.Name, resolution.Confidence, resolution.RequiresAI, resolution.EvidenceCodes, resolution.ContradictionCodes)
 				continue
 			}
 			report.Resolved++
@@ -165,8 +165,8 @@ func (p *BackgroundProcessor) ProcessBatch(ctx context.Context, navDB *sql.DB) (
 			report.Ingested += ingestionReport.Stored
 			report.Empty += ingestionReport.Empty
 			report.Failed += ingestionReport.Failed
-			logger.Debug("[BIO] artist_id=%q identity=resolved confidence=%.2f candidates=%d empty_sources=%d source_errors=%d", artist.ID,
-				resolution.Confidence, ingestionReport.Stored, ingestionReport.Empty, ingestionReport.Failed)
+			logger.Debug("[BIO] artist_id=%q artist=%q identity=resolved confidence=%.2f candidates=%d empty_sources=%d source_errors=%d", artist.ID,
+				artist.Name, resolution.Confidence, ingestionReport.Stored, ingestionReport.Empty, ingestionReport.Failed)
 			if ingestionReport.Stored == 0 {
 				continue
 			}

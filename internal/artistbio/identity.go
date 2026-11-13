@@ -46,6 +46,7 @@ type IdentityCandidate struct {
 	ProviderArtistID string            `json:"provider_artist_id,omitempty"`
 	Aliases          []string          `json:"aliases,omitempty"`
 	Albums           []IdentityRelease `json:"albums,omitempty"`
+	Tracks           []string          `json:"tracks,omitempty"`
 	ISRCs            []string          `json:"isrcs,omitempty"`
 	Country          string            `json:"country,omitempty"`
 	ProviderScore    float64           `json:"provider_score,omitempty"`
@@ -157,6 +158,16 @@ func ScoreIdentityCandidate(rawContext IdentityContext, rawCandidate IdentityCan
 		result.Decisive = true
 		result.EvidenceCodes = append(result.EvidenceCodes, "album:multiple")
 	}
+	trackMatches := identityTextOverlapCount(context.Tracks, candidate.Tracks)
+	if trackMatches > 0 {
+		result.EvidenceCodes = append(result.EvidenceCodes, "track:overlap")
+		result.Confidence += math.Min(0.35, float64(trackMatches)*0.18)
+	}
+	if trackMatches >= 2 {
+		result.Confidence = math.Max(result.Confidence, 0.96)
+		result.Decisive = true
+		result.EvidenceCodes = append(result.EvidenceCodes, "track:multiple")
+	}
 
 	if context.Country != "" && candidate.Country != "" {
 		if strings.EqualFold(context.Country, candidate.Country) {
@@ -230,7 +241,7 @@ func ResolveIdentityDeterministically(context IdentityContext, candidates []Iden
 func identityScoreEligibleForAI(score IdentityCandidateScore) bool {
 	return score.Confidence >= 0.60 && len(score.ContradictionCodes) == 0 &&
 		containsString(score.EvidenceCodes, "name:equivalent") &&
-		containsString(score.EvidenceCodes, "album:overlap")
+		(containsString(score.EvidenceCodes, "album:overlap") || containsString(score.EvidenceCodes, "track:overlap"))
 }
 
 func resolutionFromScore(score IdentityCandidateScore, status ResolutionStatus) IdentityResolution {
@@ -257,6 +268,7 @@ func boundIdentityCandidate(input IdentityCandidate) (IdentityCandidate, error) 
 	}
 	output := input
 	output.Aliases, _ = boundStrings(input.Aliases, MaxIdentityAliases, MaxIdentityNameBytes, normalizeIdentityText)
+	output.Tracks, _ = boundStrings(input.Tracks, MaxIdentityTracks, MaxIdentityNameBytes, normalizeIdentityText)
 	output.ISRCs, _ = boundStrings(input.ISRCs, MaxIdentityISRCs, 32, normalizeISRC)
 	output.Albums, _ = boundReleases(input.Albums, MaxIdentityAlbums)
 	output.Country = strings.ToUpper(strings.TrimSpace(input.Country))
@@ -399,6 +411,23 @@ func overlapCount(left, right []string) int {
 		}
 	}
 	return count
+}
+
+func identityTextOverlapCount(left, right []string) int {
+	set := make(map[string]struct{}, len(right))
+	for _, value := range right {
+		if normalized := normalizeIdentityText(value); normalized != "" {
+			set[normalized] = struct{}{}
+		}
+	}
+	matched := make(map[string]struct{}, min(len(left), len(set)))
+	for _, value := range left {
+		normalized := normalizeIdentityText(value)
+		if _, exists := set[normalized]; exists {
+			matched[normalized] = struct{}{}
+		}
+	}
+	return len(matched)
 }
 
 func sameStableIdentity(left, right IdentityCandidate) bool {

@@ -48,6 +48,7 @@ type IdentityArbitrationCandidate struct {
 	Name                    string   `json:"name"`
 	Aliases                 []string `json:"aliases,omitempty"`
 	Albums                  []string `json:"albums,omitempty"`
+	Tracks                  []string `json:"tracks,omitempty"`
 	Country                 string   `json:"country,omitempty"`
 	DeterministicConfidence float64  `json:"deterministic_confidence"`
 	Eligible                bool     `json:"eligible"`
@@ -86,9 +87,10 @@ const identityArbitrationSystemPrompt = `Ты — строгий арбитр и
 Нельзя придумывать кандидатов, факты или коды доказательств. Можно выбрать только candidate_id и evidence_codes из входного JSON.
 Кандидат с eligible=false не может получить решение same_artist.
 Коды доказательств вычислены программой по внешним каталогам: name:equivalent означает эквивалентное имя или реальный алиас,
-album:overlap — точное совпадение хотя бы одного локального релиза с дискографией кандидата, album:multiple — двух и более релизов.
-Если ровно один eligible=true кандидат имеет name:equivalent и album:overlap без contradiction_codes, подтверди same_artist
-с confidence 0.98: это уже проверенное совпадение имени и реального релиза, а не просьба угадать артиста по одному имени.
+album:overlap — точное совпадение локального релиза, track:overlap — точное совпадение трека с дискографией кандидата;
+album:multiple и track:multiple означают два и более совпадения.
+Если ровно один eligible=true кандидат имеет name:equivalent и album:overlap или track:overlap без contradiction_codes,
+подтверди same_artist с confidence 0.98: это проверенное совпадение имени и реального каталога, а не угадывание по одному имени.
 Если таких кандидатов несколько и данных недостаточно выбрать одного, верни uncertain. Для uncertain и different_artist candidate_id обязан быть пустым.
 Коды evidence_codes и contradiction_codes можно только дословно скопировать из выбранного кандидата либо вернуть пустыми.
 Ответ должен быть единственным JSON-объектом без Markdown и дополнительного текста:
@@ -167,6 +169,9 @@ func validateIdentityArbitrationInput(input IdentityArbitrationInput) (identityA
 			return identityArbitrationAllowed{}, err
 		}
 		if err := validateArbitrationStrings(candidate.Albums, maxIdentityArbitrationAlbums, maxIdentityArbitrationTextBytes); err != nil {
+			return identityArbitrationAllowed{}, err
+		}
+		if err := validateArbitrationStrings(candidate.Tracks, maxIdentityArbitrationTracks, maxIdentityArbitrationTextBytes); err != nil {
 			return identityArbitrationAllowed{}, err
 		}
 		if len(candidate.Country) > 8 {
