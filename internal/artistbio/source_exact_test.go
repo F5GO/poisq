@@ -135,9 +135,12 @@ func TestExactWikipediaArticleRejectsLookalikeHosts(t *testing.T) {
 	}
 }
 
-func TestWikipediaSourceDoesNotSearchByName(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("provider must not be called without an exact link")
+func TestWikipediaSourceRejectsUnverifiedExactNamePage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("titles") != "Кино" || r.URL.Query().Get("prop") != "extracts|pageprops" {
+			t.Errorf("unexpected exact fallback query: %q", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"query":{"pages":{"9":{"pageid":9,"title":"Кино","extract":"Статья о кинематографе без подтверждённых релизов."}}}}`))
 	}))
 	defer server.Close()
 	source, err := newWikipediaSource(fakeArtistLinks{links: &metadata.MBArtistLinks{ArtistMBID: exactTestMBID}}, server.URL, server.URL)
@@ -146,7 +149,45 @@ func TestWikipediaSourceDoesNotSearchByName(t *testing.T) {
 	}
 	result, err := source.Fetch(context.Background(), exactResolvedArtist())
 	if err != nil || result != nil {
-		t.Fatalf("name-only fallback occurred: result=%#v err=%v", result, err)
+		t.Fatalf("unverified name fallback occurred: result=%#v err=%v", result, err)
+	}
+}
+
+func TestWikipediaSourceUsesExactNameWithLocalReleaseEvidence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("titles") != "Biicla" || r.URL.Query().Get("redirects") != "1" {
+			t.Errorf("unexpected exact fallback query: %q", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"query":{"pages":{"11637091":{"pageid":11637091,"title":"Biicla","pageprops":{"wikibase_item":"Q141738077"},"extract":"Biicla — российский музыкальный продюсер. Его альбом Hyper House стал заметным электронным релизом."}}}}`))
+	}))
+	defer server.Close()
+	source, err := newWikipediaSource(fakeArtistLinks{links: &metadata.MBArtistLinks{ArtistMBID: exactTestMBID}}, server.URL, server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artist := exactResolvedArtist()
+	artist.Context.Name = "Biicla"
+	artist.Context.Albums = []IdentityRelease{{Title: "Hyper House", Year: 2024}}
+	result, err := source.Fetch(context.Background(), artist)
+	if err != nil || result == nil {
+		t.Fatalf("verified exact fallback failed: result=%#v err=%v", result, err)
+	}
+	if result.SourceArtistID != "Q141738077" || result.LanguageHint != "ru" || result.MatchConfidence != 1 ||
+		!containsString(result.EvidenceCodes, "album:mentioned") || !strings.HasPrefix(result.SourceURL, "https://ru.wikipedia.org/wiki/") {
+		t.Fatalf("unexpected exact fallback result: %#v", result)
+	}
+}
+
+func TestWikipediaReleaseEvidenceRequiresAlbumOrTwoTracks(t *testing.T) {
+	extract := "Исполнитель выпустил Hyper House и синглы No Place и Making New."
+	if got := wikipediaReleaseEvidence(extract, []IdentityRelease{{Title: "Hyper House"}}, nil); got != "album:mentioned" {
+		t.Fatalf("album evidence = %q", got)
+	}
+	if got := wikipediaReleaseEvidence(extract, nil, []string{"No Place"}); got != "" {
+		t.Fatalf("single track was decisive: %q", got)
+	}
+	if got := wikipediaReleaseEvidence(extract, nil, []string{"No Place", "Making New"}); got != "track:multiple_mentioned" {
+		t.Fatalf("track evidence = %q", got)
 	}
 }
 

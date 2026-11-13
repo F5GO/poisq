@@ -271,6 +271,7 @@ func (s *Store) ApplyValidationAndSelect(ctx context.Context, validation Candida
 	err = tx.QueryRowContext(ctx, `SELECT id FROM artist_bio_candidates
 		WHERE artist_id = ? AND status = 'accepted'
 		ORDER BY
+			CASE WHEN provider = 'local_library' THEN 1 ELSE 0 END ASC,
 			match_confidence DESC,
 			CASE WHEN russian_text = '' THEN 1 ELSE 0 END DESC,
 			language_confidence DESC,

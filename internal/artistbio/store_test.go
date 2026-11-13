@@ -637,10 +637,18 @@ func TestStoreCandidateValidationAndAutomaticSelection(t *testing.T) {
 	}
 	directID := put(artistbio.ProviderDeezer, "direct", strings.Repeat("Российская музыкальная группа выпустила известный альбом и выступала на фестивалях. ", 2), 0.98)
 	translatedID := put(artistbio.ProviderWikipedia, "translated", strings.Repeat("The music group released a well known album and performed at festivals. ", 2), 0.98)
+	localID := put(artistbio.ProviderLocalLibrary, "artist", strings.Repeat("По метаданным медиатеки это имя указано как исполнитель сохранённых аудиозаписей. ", 2), 1)
 
 	candidates, err := store.Candidates(ctx, "artist", 8)
-	if err != nil || len(candidates) != 2 {
+	if err != nil || len(candidates) != 3 {
 		t.Fatalf("list candidates: count=%d err=%v", len(candidates), err)
+	}
+	if err := store.ApplyValidationAndSelect(ctx, artistbio.CandidateValidation{
+		ArtistID: "artist", CandidateID: localID, DetectedLanguage: "ru",
+		LanguageConfidence: 0.99, RussianShare: 0.99, Status: artistbio.CandidateAccepted,
+		EvidenceJSON: `{"validation":["library:deterministic"]}`,
+	}); err != nil {
+		t.Fatalf("validate local fallback: %v", err)
 	}
 	translation := strings.Repeat("Музыкальная группа выпустила известный альбом и выступала на крупных фестивалях страны. ", 2)
 	if err := store.ApplyValidationAndSelect(ctx, artistbio.CandidateValidation{
