@@ -79,6 +79,35 @@ func TestYandexBiographySourceReturnsOnlyExactWikipediaLink(t *testing.T) {
 	}
 }
 
+func TestYandexIdentityCandidatesUseRealTrackEvidence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/search":
+			_, _ = w.Write([]byte(`{"result":{"artists":{"results":[{"id":6914440,"name":"ANIKV"}]}}}`))
+		case "/artists/6914440/direct-albums":
+			_, _ = w.Write([]byte(`{"result":{"albums":[]}}`))
+		case "/artists/6914440/tracks":
+			if r.URL.Query().Get("page-size") != "100" {
+				t.Errorf("track page size = %q", r.URL.Query().Get("page-size"))
+			}
+			_, _ = w.Write([]byte(`{"result":{"tracks":[{"title":"Меня не будет"},{"title":"Тесно"},{"title":"Чужой трек"}]}}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	source, _ := newYandexBiographySource(server.URL, nil)
+	input := IdentityContext{ArtistID: "artist", Name: "ANIKV", Tracks: []string{"Меня не будет", "Тесно"}}
+	candidates, err := source.FindIdentityCandidates(context.Background(), input)
+	if err != nil || len(candidates) != 1 || len(candidates[0].Tracks) != 2 {
+		t.Fatalf("Yandex track evidence missing: candidates=%#v err=%v", candidates, err)
+	}
+	resolution := ResolveIdentityDeterministically(input, candidates)
+	if resolution.Status != ResolutionResolved || resolution.Provider != ProviderYandexMusic {
+		t.Fatalf("real Yandex tracks did not resolve identity: %#v", resolution)
+	}
+}
+
 func TestYandexBiographySourceRejectsNameOnlyMatch(t *testing.T) {
 	var briefCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

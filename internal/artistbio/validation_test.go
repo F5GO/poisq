@@ -179,3 +179,40 @@ func TestBiographyValidatorCoalescesSameArtist(t *testing.T) {
 		t.Fatalf("same artist was validated more than once: calls=%d", model.calls.Load())
 	}
 }
+
+func TestBiographyValidatorToleratesConcurrentCacheReset(t *testing.T) {
+	store := openValidationStore(t)
+	source := strings.Repeat("The artist released several albums and performed internationally. ", 2)
+	putValidationCandidate(t, store, "artist", "en-reset", source)
+	release := make(chan struct{})
+	russian := strings.Repeat("Исполнитель выпустил несколько альбомов и выступал на международных фестивалях. ", 2)
+	model := &fakeBiographyAI{
+		translation: ai.BiographyTranslation{Items: []ai.BiographyTranslationItem{{ID: 1, Source: source, Text: russian}}, Text: russian},
+		grounding:   ai.BiographyGroundingResult{Grounded: true, Confidence: 0.99, EvidenceCodes: []string{"meaning:preserved"}},
+		wait:        release,
+	}
+	validator, _ := NewBiographyValidator(store, model, 1)
+	done := make(chan struct {
+		report ValidationReport
+		err    error
+	}, 1)
+	go func() {
+		report, err := validator.ValidateArtist(context.Background(), "artist")
+		done <- struct {
+			report ValidationReport
+			err    error
+		}{report, err}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for model.calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := store.ResetAutomaticCache(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	result := <-done
+	if result.err != nil || result.report.Skipped != 1 {
+		t.Fatalf("cache reset escaped validator: report=%#v err=%v", result.report, result.err)
+	}
+}
