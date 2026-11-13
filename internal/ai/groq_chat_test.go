@@ -56,3 +56,25 @@ func TestGroqJSONBadRequestTriesNextModel(t *testing.T) {
 		t.Fatal("model-specific HTTP 429 must try the next model before cooling the key")
 	}
 }
+
+func TestBuildGroqChatRequestSetsParsedReasoningForQwenJSON(t *testing.T) {
+	qwenReq := buildGroqChatRequest("qwen/qwen3.8-27b", "sys", "usr", "application/json")
+	if qwenReq.ResponseFormat["type"] != "json_object" || qwenReq.ReasoningFormat != "parsed" {
+		t.Fatalf("unexpected qwen request: %#v", qwenReq)
+	}
+
+	gptReq := buildGroqChatRequest("openai/gpt-oss-20b", "sys", "usr", "application/json")
+	if gptReq.ResponseFormat["type"] != "json_object" || gptReq.ReasoningFormat != "" {
+		t.Fatalf("unexpected gpt-oss request: %#v", gptReq)
+	}
+}
+
+func TestExtractGroqAPIError(t *testing.T) {
+	detail := extractGroqAPIError([]byte(`{"error":{"message":"Failed to validate JSON","type":"invalid_request_error","code":"json_validate_failed"}}`))
+	if detail != "json_validate_failed: invalid_request_error: Failed to validate JSON" {
+		t.Fatalf("unexpected detail: %q", detail)
+	}
+	if extractGroqAPIError([]byte("not json")) != "" {
+		t.Fatal("expected empty string for non-JSON body")
+	}
+}

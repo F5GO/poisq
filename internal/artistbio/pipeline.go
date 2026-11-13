@@ -114,14 +114,14 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 		stageStarted = time.Now()
 		summary, editErr := p.ai.Edit(ctx, evidence)
 		if editErr != nil {
-			synthesisErr = discoveryError("summary_edit_failed", editErr)
+			synthesisErr = synthesisStageFailure("summary_edit_failed", editErr)
 		}
 		logPipelineStage(artist.ID, artist.Name, "summary_edit", stageStarted, synthesisErr)
 		if editErr == nil {
 			stageStarted = time.Now()
 			verification, verifyErr := p.ai.Verify(ctx, summary, evidence)
 			if verifyErr != nil {
-				synthesisErr = discoveryError("summary_verify_failed", verifyErr)
+				synthesisErr = synthesisStageFailure("summary_verify_failed", verifyErr)
 			} else if !verification.Grounded {
 				synthesisErr = discoveryError("summary_not_grounded", fmt.Errorf("summary verification rejected"))
 			}
@@ -385,4 +385,11 @@ func safePipelineErrorReason(err error) string {
 		return safe.SafeReason()
 	}
 	return "internal_error"
+}
+
+func synthesisStageFailure(fallback string, err error) error {
+	if reason := safePipelineErrorReason(err); reason != "internal_error" {
+		return discoveryError(reason, err)
+	}
+	return discoveryError(fallback, err)
 }

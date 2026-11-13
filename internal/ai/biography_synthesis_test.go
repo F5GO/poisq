@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -115,5 +116,85 @@ func TestBiographyCollectorRetriesInsufficientSourceDiversity(t *testing.T) {
 	})
 	if err != nil || len(cards) != 2 || gen.calls != 2 {
 		t.Fatalf("cards=%#v calls=%d err=%v", cards, gen.calls, err)
+	}
+}
+
+func TestBiographyEditorRetriesValidationFailureAndReportsSafeReason(t *testing.T) {
+	first := "Российский музыкальный коллектив начал творческую деятельность в конце девяностых годов и получил известность благодаря концертным выступлениям, самостоятельным записям и сотрудничеству с другими музыкантами."
+	second := "В источниках также описаны выпущенные группой альбомы, участие в крупных фестивалях и дальнейшее развитие звучания, при этом каждый приведённый факт подтверждается опубликованными материалами о коллективе."
+	validSummary := first + " " + second
+	tooShort, _ := json.Marshal(BiographySummary{
+		Summary:       "Короткий текст.",
+		Sentences:     []SummarySentence{{ID: 1, Text: "Короткий текст.", SourceIDs: []string{"catalog:wikipedia:1"}}},
+		UsedSourceIDs: []string{"catalog:wikipedia:1"},
+	})
+	valid, _ := json.Marshal(BiographySummary{
+		Summary: validSummary,
+		Sentences: []SummarySentence{
+			{ID: 1, Text: first, SourceIDs: []string{"catalog:wikipedia:1"}},
+			{ID: 2, Text: second, SourceIDs: []string{"catalog:yandex_music:2"}},
+		},
+		UsedSourceIDs: []string{"catalog:wikipedia:1", "catalog:yandex_music:2"},
+	})
+	gen := &synthesisSequenceGenerator{responses: []string{string(tooShort), string(valid)}}
+	service := NewBiographySynthesisAI(gen)
+	evidence := []SynthesisEvidence{
+		{ID: "catalog:wikipedia:1", Origin: "wikipedia", Language: "ru", Text: strings.Repeat("Подтверждённый текст источника о группе. ", 6)},
+		{ID: "catalog:yandex_music:2", Origin: "yandex_music", Language: "ru", Text: strings.Repeat("Второй независимый источник подтверждает записи. ", 6)},
+	}
+	result, err := service.Edit(context.Background(), evidence)
+	if err != nil || result.Summary != validSummary || gen.calls != 2 {
+		t.Fatalf("edit retry: result=%#v calls=%d err=%v", result, gen.calls, err)
+	}
+
+	mismatched, _ := json.Marshal(BiographySummary{
+		Summary: validSummary,
+		Sentences: []SummarySentence{
+			{ID: 1, Text: first + " (лишнее)", SourceIDs: []string{"catalog:wikipedia:1"}},
+			{ID: 2, Text: second, SourceIDs: []string{"catalog:yandex_music:2"}},
+		},
+		UsedSourceIDs: []string{"catalog:wikipedia:1", "catalog:yandex_music:2"},
+	})
+	service = NewBiographySynthesisAI(&synthesisSequenceGenerator{responses: []string{string(mismatched), string(mismatched)}})
+	_, err = service.Edit(context.Background(), evidence)
+	var safe interface{ SafeReason() string }
+	if err == nil || !errors.As(err, &safe) || safe.SafeReason() != "summary_edit_sentence_mismatch" {
+		t.Fatalf("expected safe reason summary_edit_sentence_mismatch, got err=%v", err)
+	}
+}
+
+func TestBiographyVerifierRetriesMalformedJSONButNotUngrounded(t *testing.T) {
+	first := "Российский музыкальный коллектив начал творческую деятельность в конце девяностых годов и получил известность благодаря концертным выступлениям, самостоятельным записям и сотрудничеству с другими музыкантами."
+	second := "В источниках также описаны выпущенные группой альбомы, участие в крупных фестивалях и дальнейшее развитие звучания, при этом каждый приведённый факт подтверждается опубликованными материалами о коллективе."
+	summary := BiographySummary{
+		Summary: first + " " + second,
+		Sentences: []SummarySentence{
+			{ID: 1, Text: first, SourceIDs: []string{"catalog:wikipedia:1"}},
+			{ID: 2, Text: second, SourceIDs: []string{"catalog:yandex_music:2"}},
+		},
+		UsedSourceIDs: []string{"catalog:wikipedia:1", "catalog:yandex_music:2"},
+	}
+	evidence := []SynthesisEvidence{
+		{ID: "catalog:wikipedia:1", Origin: "wikipedia", Language: "ru", Text: strings.Repeat("Подтверждённый текст источника о группе. ", 6)},
+		{ID: "catalog:yandex_music:2", Origin: "yandex_music", Language: "ru", Text: strings.Repeat("Второй независимый источник подтверждает записи. ", 6)},
+	}
+
+	gen := &synthesisSequenceGenerator{responses: []string{
+		"```json\n{}\n```",
+		`{"sentences":[{"id":1,"verdict":"grounded","confidence":0.98},{"id":2,"verdict":"grounded","confidence":0.97}]}`,
+	}}
+	service := NewBiographySynthesisAI(gen)
+	verified, err := service.Verify(context.Background(), summary, evidence)
+	if err != nil || !verified.Grounded || gen.calls != 2 {
+		t.Fatalf("verify retry: verified=%#v calls=%d err=%v", verified, gen.calls, err)
+	}
+
+	ungrounded := &synthesisSequenceGenerator{responses: []string{
+		`{"sentences":[{"id":1,"verdict":"not_grounded","confidence":0.99},{"id":2,"verdict":"grounded","confidence":0.97}]}`,
+	}}
+	service = NewBiographySynthesisAI(ungrounded)
+	verified, err = service.Verify(context.Background(), summary, evidence)
+	if err != nil || verified.Grounded || ungrounded.calls != 1 {
+		t.Fatalf("verify ungrounded: verified=%#v calls=%d err=%v", verified, ungrounded.calls, err)
 	}
 }
