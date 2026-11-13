@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	maxCollectorPayload = 4 << 10
+	maxCollectorPayload = 6 << 10
 	maxEditorPayload    = 6 << 10
 	maxVerifierPayload  = 8 << 10
 	maxSynthesisOutput  = 16 << 10
@@ -182,11 +182,11 @@ func parseCollectorResponse(raw string, allowed map[string]struct{}, domains map
 }
 
 func fitCollectorResults(identityJSON json.RawMessage, input []SearchEvidenceInput) []SearchEvidenceInput {
-	bounded := make([]SearchEvidenceInput, 0, min(len(input), 6))
-	for _, original := range input[:min(len(input), 6)] {
+	bounded := make([]SearchEvidenceInput, 0, min(len(input), 8))
+	for _, original := range input[:min(len(input), 8)] {
 		candidate := original
 		candidate.Title = truncateSynthesisBytes(strings.TrimSpace(candidate.Title), 160)
-		candidate.Snippet = truncateSynthesisBytes(strings.TrimSpace(candidate.Snippet), 600)
+		candidate.Snippet = truncateSynthesisBytes(strings.TrimSpace(candidate.Snippet), 800)
 		if candidate.Title == "" || candidate.Snippet == "" {
 			continue
 		}
