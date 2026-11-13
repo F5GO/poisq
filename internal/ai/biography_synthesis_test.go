@@ -83,7 +83,7 @@ func TestBiographySynthesisAIRejectsInventedAndInjectedSources(t *testing.T) {
 
 func TestBiographyCollectorCompactsMultibyteSearchPayload(t *testing.T) {
 	gen := &synthesisSequenceGenerator{responses: []string{
-		`{"cards":[{"id":"fact-1","result_id":"result-1","fact":"Подтвержденный факт об исполнителе и его музыкальной карьере.","language":"ru"}]}`,
+		`{"cards":[{"id":"fact-1","result_id":"result-1","fact":"Подтвержденный факт об исполнителе и его музыкальной карьере.","language":"ru"},{"id":"fact-2","result_id":"result-2","fact":"Независимый источник подтверждает сведения о музыкальной карьере.","language":"ru"}]}`,
 	}}
 	service := NewBiographySynthesisAI(gen)
 	results := make([]SearchEvidenceInput, 6)
@@ -95,10 +95,25 @@ func TestBiographyCollectorCompactsMultibyteSearchPayload(t *testing.T) {
 		}
 	}
 	cards, err := service.Collect(context.Background(), json.RawMessage(`{"name":"Исполнитель"}`), results)
-	if err != nil || len(cards) != 1 || len(gen.inputs) != 1 {
+	if err != nil || len(cards) != 2 || len(gen.inputs) != 1 {
 		t.Fatalf("cards=%#v err=%v calls=%d", cards, err, len(gen.inputs))
 	}
 	if len(gen.inputs[0]) > maxCollectorPayload || strings.Contains(gen.inputs[0], "https://") {
 		t.Fatalf("payload_bytes=%d payload=%q", len(gen.inputs[0]), gen.inputs[0])
+	}
+}
+
+func TestBiographyCollectorRetriesInsufficientSourceDiversity(t *testing.T) {
+	gen := &synthesisSequenceGenerator{responses: []string{
+		`{"cards":[{"id":"fact-1","result_id":"result-1","fact":"First supported fact about the artist and career.","language":"en"}]}`,
+		`{"cards":[{"id":"fact-1","result_id":"result-1","fact":"First supported fact about the artist and career.","language":"en"},{"id":"fact-2","result_id":"result-2","fact":"Second independently supported fact about the artist.","language":"en"}]}`,
+	}}
+	service := NewBiographySynthesisAI(gen)
+	cards, err := service.Collect(context.Background(), json.RawMessage(`{"name":"Artist"}`), []SearchEvidenceInput{
+		{ID: "result-1", Title: "First", URL: "https://one.example/artist", Domain: "one.example", Snippet: "First sufficiently detailed factual source about the artist and music career."},
+		{ID: "result-2", Title: "Second", URL: "https://two.example/artist", Domain: "two.example", Snippet: "Second independent factual source about the same artist and music career."},
+	})
+	if err != nil || len(cards) != 2 || gen.calls != 2 {
+		t.Fatalf("cards=%#v calls=%d err=%v", cards, gen.calls, err)
 	}
 }
