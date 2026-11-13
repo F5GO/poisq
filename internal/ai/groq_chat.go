@@ -256,6 +256,13 @@ func isModelUnavailable(status int, err error) bool {
 		(status == http.StatusBadRequest && strings.Contains(low, "model"))
 }
 
+func shouldTryNextGroqModel(status int, err error, mime string) bool {
+	if isModelUnavailable(status, err) {
+		return true
+	}
+	return status == http.StatusBadRequest && strings.Contains(strings.ToLower(mime), "json")
+}
+
 func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, mime string) (string, int, error) {
 	var lastStatus int
 	var lastErr error
@@ -268,10 +275,10 @@ func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, m
 			return out, status, nil
 		}
 		lastStatus, lastErr = status, err
-		if !isModelUnavailable(status, err) {
+		if !shouldTryNextGroqModel(status, err, mime) {
 			return "", status, err
 		}
-		logger.Warn("[GROQ-LLM] Модель %s недоступна (HTTP %d), пробую следующую", model, status)
+		logger.Warn("[GROQ-LLM] Модель %s отклонила запрос (HTTP %d), пробую следующую", model, status)
 		// Список мог устареть — при следующем вызове запросим заново
 		g.mu.Lock()
 		g.modelsLoaded = time.Time{}
