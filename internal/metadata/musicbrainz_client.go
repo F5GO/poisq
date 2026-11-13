@@ -46,6 +46,15 @@ type MBReleaseInfo struct {
 	Score           int    `json:"score"`
 }
 
+// MBReleaseGroupInfo is a canonical release-group entry belonging to one
+// MusicBrainz artist. Release groups avoid counting regional editions of the
+// same album as separate identity evidence.
+type MBReleaseGroupInfo struct {
+	ReleaseGroupMBID string `json:"releaseGroupMbid"`
+	Title            string `json:"title"`
+	Year             int    `json:"year"`
+}
+
 type MBArtistLinks struct {
 	ArtistMBID   string `json:"artistMbid"`
 	WikidataID   string `json:"wikidataId"`
@@ -80,6 +89,14 @@ type mbReleaseSearchResp struct {
 			} `json:"artist"`
 		} `json:"artist-credit"`
 	} `json:"releases"`
+}
+
+type mbReleaseGroupBrowseResp struct {
+	ReleaseGroups []struct {
+		ID               string `json:"id"`
+		Title            string `json:"title"`
+		FirstReleaseDate string `json:"first-release-date"`
+	} `json:"release-groups"`
 }
 
 type mbArtistLinksResp struct {
@@ -178,6 +195,64 @@ func (mb *MusicBrainzClient) SearchArtists(ctx context.Context, artistName strin
 			SortName: NormalizeNFC(artist.SortName), Country: artist.Country,
 			Aliases: aliases, Score: artist.Score,
 		})
+	}
+	return result, nil
+}
+
+// BrowseArtistReleaseGroups returns canonical releases attached to an exact
+// artist MBID. This is more reliable identity evidence than searching by two
+// free-form strings and is bounded to keep provider latency and payloads small.
+func (mb *MusicBrainzClient) BrowseArtistReleaseGroups(ctx context.Context, artistMBID string, limit int) ([]MBReleaseGroupInfo, error) {
+	artistMBID = strings.TrimSpace(artistMBID)
+	if !validMusicBrainzID(artistMBID) {
+		return nil, fmt.Errorf("invalid MusicBrainz artist id")
+	}
+	if limit < 1 {
+		limit = 25
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	endpoint := fmt.Sprintf("%s/release-group?artist=%s&release-group-status=website-default&fmt=json&limit=%d",
+		mb.baseURL, url.QueryEscape(artistMBID), limit)
+	body, status, _, err := mb.rc.DoWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", musicBrainzUserAgent)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("MusicBrainz release-group browse: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("MusicBrainz release-group browse failed")
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("MusicBrainz release-group HTTP %d", status)
+	}
+	var parsed mbReleaseGroupBrowseResp
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid MusicBrainz release-group response: %w", err)
+	}
+	if len(parsed.ReleaseGroups) > limit {
+		parsed.ReleaseGroups = parsed.ReleaseGroups[:limit]
+	}
+	result := make([]MBReleaseGroupInfo, 0, len(parsed.ReleaseGroups))
+	for _, release := range parsed.ReleaseGroups {
+		title := NormalizeNFC(strings.TrimSpace(release.Title))
+		if title == "" || !validMusicBrainzID(release.ID) {
+			continue
+		}
+		year := 0
+		if len(release.FirstReleaseDate) >= 4 {
+			if value, err := strconv.Atoi(release.FirstReleaseDate[:4]); err == nil && value > 1900 && value < 2100 {
+				year = value
+			}
+		}
+		result = append(result, MBReleaseGroupInfo{ReleaseGroupMBID: release.ID, Title: title, Year: year})
 	}
 	return result, nil
 }

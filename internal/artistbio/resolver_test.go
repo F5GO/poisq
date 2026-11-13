@@ -10,6 +10,7 @@ import (
 
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/db"
+	"github.com/F5GO/poisq/internal/metadata"
 )
 
 type fakeIdentitySource struct {
@@ -132,6 +133,60 @@ func TestResolverUsesAIForExactNameAndReleaseEvidence(t *testing.T) {
 	}
 	if result.Status != ResolutionResolved || result.CandidateID != "kino" || arbiter.calls != 1 {
 		t.Fatalf("AI did not confirm evidence-backed candidate: result=%#v calls=%d", result, arbiter.calls)
+	}
+	if result.Confidence != 0.99 {
+		t.Fatalf("AI confidence was not applied: %#v", result)
+	}
+}
+
+type fakeMusicBrainzIdentityClient struct {
+	artists  []metadata.MBArtistInfo
+	releases map[string][]metadata.MBReleaseGroupInfo
+	browsed  []string
+	limit    int
+}
+
+func (f *fakeMusicBrainzIdentityClient) SearchArtists(context.Context, string, int) ([]metadata.MBArtistInfo, error) {
+	return append([]metadata.MBArtistInfo(nil), f.artists...), nil
+}
+
+func (f *fakeMusicBrainzIdentityClient) BrowseArtistReleaseGroups(_ context.Context, artistID string, limit int) ([]metadata.MBReleaseGroupInfo, error) {
+	f.browsed = append(f.browsed, artistID)
+	f.limit = limit
+	return append([]metadata.MBReleaseGroupInfo(nil), f.releases[artistID]...), nil
+}
+
+func TestMusicBrainzIdentitySourceUsesCanonicalDiscography(t *testing.T) {
+	client := &fakeMusicBrainzIdentityClient{
+		artists: []metadata.MBArtistInfo{
+			{ArtistMBID: "kino", CanonicalName: "Кино", Score: 100},
+			{ArtistMBID: "other", CanonicalName: "Cinema", Score: 90},
+		},
+		releases: map[string][]metadata.MBReleaseGroupInfo{
+			"kino": {{ReleaseGroupMBID: "release", Title: "Группа крови", Year: 1988}},
+		},
+	}
+	source := NewMusicBrainzIdentitySource(client)
+	candidates, err := source.FindIdentityCandidates(context.Background(), IdentityContext{
+		ArtistID: "nav-kino", Name: "Кино", Albums: []IdentityRelease{{Title: "Группа крови", Year: 1988}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.browsed) != 1 || client.browsed[0] != "kino" {
+		t.Fatalf("unexpected discography lookups: %v", client.browsed)
+	}
+	if client.limit != 100 {
+		t.Fatalf("discography browse limit = %d", client.limit)
+	}
+	if len(candidates) != 2 || len(candidates[0].Albums) != 1 || candidates[0].Albums[0].Title != "Группа крови" {
+		t.Fatalf("canonical discography missing: %#v", candidates)
+	}
+	result := ResolveIdentityDeterministically(IdentityContext{
+		ArtistID: "nav-kino", Name: "Кино", Albums: []IdentityRelease{{Title: "Группа крови", Year: 1988}},
+	}, candidates)
+	if !result.RequiresAI || result.Confidence < 0.69 {
+		t.Fatalf("release-backed candidate was not made eligible for arbitration: %#v", result)
 	}
 }
 

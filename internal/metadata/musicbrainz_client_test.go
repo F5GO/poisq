@@ -52,6 +52,36 @@ func TestMusicBrainzLookupArtistCompatibility(t *testing.T) {
 	}
 }
 
+func TestMusicBrainzBrowseArtistReleaseGroups(t *testing.T) {
+	const artistID = "cc197bad-dc9c-440d-a5b5-d52ba2e14234"
+	const releaseID = "1b022e01-4da6-387b-8658-8678046e4cef"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/release-group" || r.URL.Query().Get("artist") != artistID || r.URL.Query().Get("limit") != "30" {
+			t.Errorf("unexpected request: %s", r.URL.String())
+		}
+		if r.URL.Query().Get("release-group-status") != "website-default" {
+			t.Errorf("missing release status filter")
+		}
+		_, _ = w.Write([]byte(`{"release-groups":[
+			{"id":"` + releaseID + `","title":"Группа крови","first-release-date":"1988-01-05"},
+			{"id":"invalid","title":"bad","first-release-date":"oops"}
+		]}`))
+	}))
+	defer server.Close()
+	client := NewMusicBrainzClient()
+	client.baseURL = server.URL
+	releases, err := client.BrowseArtistReleaseGroups(context.Background(), artistID, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(releases) != 1 || releases[0].ReleaseGroupMBID != releaseID || releases[0].Title != "Группа крови" || releases[0].Year != 1988 {
+		t.Fatalf("unexpected release groups: %#v", releases)
+	}
+	if _, err := client.BrowseArtistReleaseGroups(context.Background(), "../../etc/passwd", 30); err == nil {
+		t.Fatal("invalid artist MBID accepted")
+	}
+}
+
 func TestMusicBrainzSearchArtistsRejectsInvalidAndMalformedResponses(t *testing.T) {
 	client := NewMusicBrainzClient()
 	if _, err := client.SearchArtists(context.Background(), "", 3); err == nil {
