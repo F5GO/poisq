@@ -198,3 +198,26 @@ func TestBiographyVerifierRetriesMalformedJSONButNotUngrounded(t *testing.T) {
 		t.Fatalf("verify ungrounded: verified=%#v calls=%d err=%v", verified, ungrounded.calls, err)
 	}
 }
+
+func TestBiographyEditorAcceptsCompact250CharSummary(t *testing.T) {
+	first := "Biicla – российский электронный музыкант и продюсер из Екатеринбурга, работающий в жанрах хаус, трэп и бейс-музыки."
+	second := "Он выпускал релизы на международных и российских лейблах, сотрудничал с отечественными и зарубежными исполнителями, а также выступал на международных фестивалях."
+	compact := first + " " + second // 277 chars
+	payload, _ := json.Marshal(BiographySummary{
+		Summary: compact,
+		Sentences: []SummarySentence{
+			{ID: 1, Text: first, SourceIDs: []string{"catalog:yandex_music:1"}},
+			{ID: 2, Text: second, SourceIDs: []string{"catalog:yandex_music:1", "web:fact-1"}},
+		},
+		UsedSourceIDs: []string{"catalog:yandex_music:1", "web:fact-1"},
+	})
+	gen := &synthesisSequenceGenerator{responses: []string{string(payload)}}
+	service := NewBiographySynthesisAI(gen)
+	result, err := service.Edit(context.Background(), []SynthesisEvidence{
+		{ID: "catalog:yandex_music:1", Origin: "yandex_music", Language: "ru", Text: strings.Repeat("Подтверждённый текст источника о музыканте. ", 4)},
+		{ID: "web:fact-1", Origin: "example.com", Language: "en", Text: strings.Repeat("Confirmed international festival facts. ", 4)},
+	})
+	if err != nil || result.Summary != compact {
+		t.Fatalf("compact summary rejected: err=%v result=%#v", err, result)
+	}
+}
