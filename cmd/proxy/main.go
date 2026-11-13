@@ -309,8 +309,8 @@ func syncData(ctx context.Context, sqliteDB *sql.DB, dict *search.Dictionary, en
 		if err != nil && ctx.Err() == nil {
 			log.Printf("[WARN] Фоновое обогащение биографий завершилось с ошибкой: %v", err)
 		} else if err == nil {
-			log.Printf("[INFO] Биографии артистов: просмотрено=%d пропущено=%d идентифицировано=%d загружено=%d проверено=%d ошибок=%d",
-				report.Scanned, report.Skipped, report.Resolved, report.Ingested, report.Validated, report.Failed)
+			log.Printf("[INFO] Биографии артистов: просмотрено=%d пропущено=%d идентифицировано=%d не_определено=%d кандидатов=%d пустых_источников=%d проверено=%d ошибок_источников=%d",
+				report.Scanned, report.Skipped, report.Resolved, report.Uncertain, report.Ingested, report.Empty, report.Validated, report.Failed)
 		}
 	}
 }

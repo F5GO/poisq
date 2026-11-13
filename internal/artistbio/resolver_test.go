@@ -114,6 +114,43 @@ func TestResolverUsesAIOnlyForDecisiveAmbiguity(t *testing.T) {
 	}
 }
 
+func TestResolverUsesAIForExactNameAndReleaseEvidence(t *testing.T) {
+	store := resolverStore(t)
+	albums := []IdentityRelease{{Title: "Группа крови", Year: 1988}}
+	source := &fakeIdentitySource{candidates: []IdentityCandidate{{
+		ID: "kino", Provider: ProviderMusicBrainz, ProviderArtistID: "kino-mbid", MusicBrainzID: "kino-mbid",
+		Name: "Кино", Albums: albums, ProviderScore: 1,
+	}}}
+	arbiter := &fakeIdentityArbiter{decision: ai.IdentityArbitrationDecision{
+		Decision: "same_artist", CandidateID: "kino", Confidence: 0.99,
+		EvidenceCodes: []string{"name:equivalent", "album:overlap"},
+	}}
+	resolver := NewIdentityResolver(store, nil, source, arbiter)
+	result, err := resolver.Resolve(context.Background(), IdentityContext{ArtistID: "nav-kino", Name: "Кино", Albums: albums})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != ResolutionResolved || result.CandidateID != "kino" || arbiter.calls != 1 {
+		t.Fatalf("AI did not confirm evidence-backed candidate: result=%#v calls=%d", result, arbiter.calls)
+	}
+}
+
+func TestResolverNeverSendsNameOnlyHomonymToAI(t *testing.T) {
+	store := resolverStore(t)
+	source := &fakeIdentitySource{candidates: []IdentityCandidate{{
+		ID: "luna", Provider: ProviderMusicBrainz, ProviderArtistID: "luna-mbid", Name: "Луна", ProviderScore: 1,
+	}}}
+	arbiter := &fakeIdentityArbiter{}
+	resolver := NewIdentityResolver(store, nil, source, arbiter)
+	result, err := resolver.Resolve(context.Background(), IdentityContext{ArtistID: "nav-luna", Name: "Луна"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != ResolutionUncertain || arbiter.calls != 0 {
+		t.Fatalf("name-only homonym reached AI: result=%#v calls=%d", result, arbiter.calls)
+	}
+}
+
 func TestResolverOutageRemainsUncertain(t *testing.T) {
 	store := resolverStore(t)
 	source := &fakeIdentitySource{err: errors.New("provider unavailable")}
