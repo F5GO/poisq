@@ -3,6 +3,7 @@ package artistbio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -353,5 +354,17 @@ func logPipelineStage(artistID, stage string, started time.Time, err error) {
 	if err != nil {
 		outcome = "failed"
 	}
-	logger.Debug("[BIO] artist_id=%q stage=%s duration=%s outcome=%s", artistID, stage, time.Since(started).Round(time.Millisecond), outcome)
+	if err == nil {
+		logger.Debug("[BIO] artist_id=%q stage=%s duration=%s outcome=%s", artistID, stage, time.Since(started).Round(time.Millisecond), outcome)
+		return
+	}
+	logger.Debug("[BIO] artist_id=%q stage=%s duration=%s outcome=%s reason=%s", artistID, stage, time.Since(started).Round(time.Millisecond), outcome, safePipelineErrorReason(err))
+}
+
+func safePipelineErrorReason(err error) string {
+	var safe interface{ SafeReason() string }
+	if errors.As(err, &safe) && safe.SafeReason() != "" {
+		return safe.SafeReason()
+	}
+	return "internal_error"
 }
