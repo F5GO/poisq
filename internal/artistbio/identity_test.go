@@ -84,6 +84,24 @@ func TestIdentity_Contradictions(t *testing.T) {
 	}
 }
 
+func TestIdentity_ReissueYearRemainsReleaseEvidence(t *testing.T) {
+	ctx := IdentityContext{ArtistID: "nav-1", Name: "Кино", Albums: []IdentityRelease{
+		{Title: "Группа крови", Year: 2024},
+		{Title: "Звезда по имени Солнце", Year: 2024},
+	}}
+	candidate := IdentityCandidate{
+		ID: "kino", Provider: ProviderMusicBrainz, Name: "Кино", ProviderScore: 1,
+		Albums: []IdentityRelease{{Title: "Группа крови", Year: 1988}, {Title: "Звезда по имени Солнце", Year: 1989}},
+	}
+	score := ScoreIdentityCandidate(ctx, candidate)
+	if !score.Decisive || score.Confidence < AutoResolveConfidence || !containsString(score.EvidenceCodes, "album:year_variant") {
+		t.Fatalf("reissue years blocked exact release evidence: %#v", score)
+	}
+	if len(score.ContradictionCodes) != 0 {
+		t.Fatalf("reissue years became identity contradictions: %#v", score)
+	}
+}
+
 func TestIdentity_DeterministicAmbiguity(t *testing.T) {
 	ctx := IdentityContext{ArtistID: "nav-1", Name: "Кино"}
 	result := ResolveIdentityDeterministically(ctx, []IdentityCandidate{

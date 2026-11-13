@@ -140,19 +140,22 @@ func ScoreIdentityCandidate(rawContext IdentityContext, rawCandidate IdentityCan
 		result.ContradictionCodes = append(result.ContradictionCodes, "isrc:none")
 	}
 
-	albumMatches, yearConflicts := releaseOverlap(context.Albums, candidate.Albums)
+	albumMatches, yearVariants := releaseOverlap(context.Albums, candidate.Albums)
 	if albumMatches > 0 {
 		result.EvidenceCodes = append(result.EvidenceCodes, "album:overlap")
 		result.Confidence += math.Min(0.35, float64(albumMatches)*0.20)
+	}
+	if yearVariants > 0 {
+		// A MusicBrainz release-group stores the original release date while a
+		// local tag commonly stores the date of a reissue. An exact title match
+		// remains positive evidence; the year variant is useful provenance but
+		// must not turn a real reissue into a different artist.
+		result.EvidenceCodes = append(result.EvidenceCodes, "album:year_variant")
 	}
 	if albumMatches >= 2 {
 		result.Confidence = math.Max(result.Confidence, 0.96)
 		result.Decisive = true
 		result.EvidenceCodes = append(result.EvidenceCodes, "album:multiple")
-	}
-	if yearConflicts > 0 {
-		result.ContradictionCodes = append(result.ContradictionCodes, "album:year_conflict")
-		result.Confidence -= math.Min(0.3, float64(yearConflicts)*0.15)
 	}
 
 	if context.Country != "" && candidate.Country != "" {
@@ -366,21 +369,20 @@ func normalizeISRC(value string) string {
 	return output.String()
 }
 
-func releaseOverlap(left, right []IdentityRelease) (matches, yearConflicts int) {
+func releaseOverlap(left, right []IdentityRelease) (matches, yearVariants int) {
 	for _, l := range left {
 		for _, r := range right {
 			if normalizeIdentityText(l.Title) != normalizeIdentityText(r.Title) {
 				continue
 			}
 			if l.Year > 0 && r.Year > 0 && abs(l.Year-r.Year) > 1 {
-				yearConflicts++
-				continue
+				yearVariants++
 			}
 			matches++
 			break
 		}
 	}
-	return matches, yearConflicts
+	return matches, yearVariants
 }
 
 func overlapCount(left, right []string) int {
