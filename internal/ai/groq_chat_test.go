@@ -44,3 +44,12 @@ func TestIsModelUnavailable(t *testing.T) {
 		t.Fatal("429 не про модель")
 	}
 }
+
+func TestGroqJSONBadRequestTriesNextModel(t *testing.T) {
+	if !shouldTryNextGroqModel(http.StatusBadRequest, errors.New("generated JSON rejected"), "application/json") {
+		t.Fatal("JSON generation HTTP 400 must try the next model")
+	}
+	if shouldTryNextGroqModel(http.StatusBadRequest, errors.New("bad request"), "text/plain") {
+		t.Fatal("non-JSON HTTP 400 must remain terminal")
+	}
+}

@@ -59,13 +59,13 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 		return err
 	}
 	defer func() {
-		logger.Debug("[BIO] artist_id=%q pipeline_duration=%s outcome=%s", artist.ID, time.Since(started).Round(time.Millisecond), pipelineOutcome(err))
+		logger.Debug("[BIO] artist_id=%q artist=%q pipeline_duration=%s outcome=%s", artist.ID, artist.Name, time.Since(started).Round(time.Millisecond), pipelineOutcome(err))
 	}()
 
 	identityContext := p.localContext(ctx, artist)
 	stageStarted := time.Now()
 	resolution, err := p.resolver.Resolve(ctx, identityContext)
-	logPipelineStage(artist.ID, "identity", stageStarted, err)
+	logPipelineStage(artist.ID, artist.Name, "identity", stageStarted, err)
 	if err != nil {
 		return p.retryable(ctx, artist.ID, "identity_unavailable", err)
 	}
@@ -75,20 +75,20 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	identityContext.MusicBrainzID = resolution.MusicBrainzID
 	stageStarted = time.Now()
 	if _, err := p.ingestion.Ingest(ctx, ResolvedArtist{Context: identityContext, Identity: resolution}); err != nil {
-		logPipelineStage(artist.ID, "catalog", stageStarted, err)
+		logPipelineStage(artist.ID, artist.Name, "catalog", stageStarted, err)
 		return p.retryable(ctx, artist.ID, "catalog_unavailable", err)
 	}
-	logPipelineStage(artist.ID, "catalog", stageStarted, nil)
+	logPipelineStage(artist.ID, artist.Name, "catalog", stageStarted, nil)
 	stageStarted = time.Now()
 	if _, err := p.validator.ValidateArtist(ctx, artist.ID); err != nil {
-		logPipelineStage(artist.ID, "source_validation", stageStarted, err)
+		logPipelineStage(artist.ID, artist.Name, "source_validation", stageStarted, err)
 		return p.retryable(ctx, artist.ID, "validation_unavailable", err)
 	}
-	logPipelineStage(artist.ID, "source_validation", stageStarted, nil)
+	logPipelineStage(artist.ID, artist.Name, "source_validation", stageStarted, nil)
 
 	stageStarted = time.Now()
 	prepared, err := p.store.PrepareCatalogEvidence(ctx, artist.ID)
-	logPipelineStage(artist.ID, "evidence", stageStarted, err)
+	logPipelineStage(artist.ID, artist.Name, "evidence", stageStarted, err)
 	if err != nil {
 		return p.retryable(ctx, artist.ID, "evidence_unavailable", err)
 	}
@@ -101,7 +101,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 		} else {
 			discoveryErr = webErr
 		}
-		logPipelineStage(artist.ID, "web_discovery", stageStarted, discoveryErr)
+		logPipelineStage(artist.ID, artist.Name, "web_discovery", stageStarted, discoveryErr)
 	}
 	evidence = boundSynthesisEvidence(evidence, maxSynthesisEvidenceItems)
 	version := prepared.Version
@@ -112,11 +112,11 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	if countEvidenceOrigins(evidence) >= 2 {
 		stageStarted = time.Now()
 		summary, editErr := p.ai.Edit(ctx, evidence)
-		logPipelineStage(artist.ID, "summary_edit", stageStarted, editErr)
+		logPipelineStage(artist.ID, artist.Name, "summary_edit", stageStarted, editErr)
 		if editErr == nil {
 			stageStarted = time.Now()
 			verification, verifyErr := p.ai.Verify(ctx, summary, evidence)
-			logPipelineStage(artist.ID, "summary_verify", stageStarted, verifyErr)
+			logPipelineStage(artist.ID, artist.Name, "summary_verify", stageStarted, verifyErr)
 			if verifyErr == nil && verification.Grounded {
 				finalText := summary.Summary + "\n\n" + synthesisDisclosure(summary.UsedSourceIDs, evidence)
 				proof, _ := json.Marshal(struct {
@@ -352,16 +352,16 @@ func pipelineOutcome(err error) string {
 	return "failed"
 }
 
-func logPipelineStage(artistID, stage string, started time.Time, err error) {
+func logPipelineStage(artistID, artistName, stage string, started time.Time, err error) {
 	outcome := "ok"
 	if err != nil {
 		outcome = "failed"
 	}
 	if err == nil {
-		logger.Debug("[BIO] artist_id=%q stage=%s duration=%s outcome=%s", artistID, stage, time.Since(started).Round(time.Millisecond), outcome)
+		logger.Debug("[BIO] artist_id=%q artist=%q stage=%s duration=%s outcome=%s", artistID, artistName, stage, time.Since(started).Round(time.Millisecond), outcome)
 		return
 	}
-	logger.Debug("[BIO] artist_id=%q stage=%s duration=%s outcome=%s reason=%s", artistID, stage, time.Since(started).Round(time.Millisecond), outcome, safePipelineErrorReason(err))
+	logger.Debug("[BIO] artist_id=%q artist=%q stage=%s duration=%s outcome=%s reason=%s", artistID, artistName, stage, time.Since(started).Round(time.Millisecond), outcome, safePipelineErrorReason(err))
 }
 
 func safePipelineErrorReason(err error) string {
