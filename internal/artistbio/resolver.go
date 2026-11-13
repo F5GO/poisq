@@ -145,10 +145,11 @@ func (r *IdentityResolver) arbitrate(ctx context.Context, input IdentityContext,
 	for _, candidate := range candidates {
 		score := ScoreIdentityCandidate(input, candidate)
 		scores[candidate.ID] = score
+		eligible := score.Decisive && score.Confidence >= AutoResolveConfidence || identityScoreEligibleForAI(score)
 		option := ai.IdentityArbitrationCandidate{
 			ID: candidate.ID, Name: candidate.Name, Aliases: candidate.Aliases, Country: candidate.Country,
 			DeterministicConfidence: score.Confidence,
-			Eligible:                score.Decisive && score.Confidence >= AutoResolveConfidence,
+			Eligible:                eligible,
 			EvidenceCodes:           append([]string(nil), score.EvidenceCodes...),
 			ContradictionCodes:      append([]string(nil), score.ContradictionCodes...),
 		}
@@ -162,7 +163,10 @@ func (r *IdentityResolver) arbitrate(ctx context.Context, input IdentityContext,
 		return IdentityResolution{}, false
 	}
 	score, exists := scores[decision.CandidateID]
-	if !exists || !score.Decisive || score.Confidence < AutoResolveConfidence || !allStringsAllowed(decision.EvidenceCodes, score.EvidenceCodes) {
+	if !exists || !(score.Decisive && score.Confidence >= AutoResolveConfidence || identityScoreEligibleForAI(score)) ||
+		!allStringsAllowed(decision.EvidenceCodes, score.EvidenceCodes) ||
+		(!score.Decisive && identityScoreEligibleForAI(score) && (!containsString(decision.EvidenceCodes, "name:equivalent") ||
+			!containsString(decision.EvidenceCodes, "album:overlap"))) {
 		return IdentityResolution{}, false
 	}
 	result := resolutionFromScore(score, ResolutionResolved)

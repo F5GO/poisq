@@ -265,7 +265,7 @@ func TestArtistInfoDeliveryUsesManualOverrideAndRestoresAutomatic(t *testing.T) 
 	}
 }
 
-func TestArtistInfoResponsePassThroughOnReaderFailureAndTimeout(t *testing.T) {
+func TestArtistInfoResponseRemovesEnglishOnReaderFailureAndTimeout(t *testing.T) {
 	body := `{"subsonic-response":{"status":"ok","artistInfo2":{"biography":"upstream"}}}`
 	for name, reader := range map[string]*fakeBiographyReader{
 		"missing": {values: map[string]artistbio.EffectiveBiography{}},
@@ -276,10 +276,39 @@ func TestArtistInfoResponsePassThroughOnReaderFailureAndTimeout(t *testing.T) {
 			resp := artistInfoResponse(t, body, "application/json")
 			enrichArtistInfoResponse(resp, reader)
 			out, _ := io.ReadAll(resp.Body)
-			if string(out) != body || resp.Header.Get("ETag") != `"old"` {
-				t.Fatalf("response was not passed through: %s", out)
+			_, _, info, ok := decodeArtistInfoJSONDocument(out)
+			var biography string
+			if !ok || json.Unmarshal(info["biography"], &biography) != nil || biography != "" || resp.Header.Get("ETag") != "" {
+				t.Fatalf("English biography was not removed: headers=%v body=%s", resp.Header, out)
 			}
 		})
+	}
+}
+
+func TestArtistInfoResponsePreservesVerifiedRussianUpstream(t *testing.T) {
+	russian := strings.Repeat("Российская музыкальная группа выпустила несколько альбомов и выступала на крупных фестивалях. ", 2)
+	body := `{"subsonic-response":{"status":"ok","artistInfo2":{"biography":` + strconv.Quote(russian) + `,"image":"keep"}}}`
+	resp := artistInfoResponse(t, body, "application/json")
+	enrichArtistInfoResponse(resp, &fakeBiographyReader{values: map[string]artistbio.EffectiveBiography{}})
+	out, _ := io.ReadAll(resp.Body)
+	if string(out) != body || resp.Header.Get("ETag") != `"old"` {
+		t.Fatalf("verified Russian upstream changed: headers=%v body=%s", resp.Header, out)
+	}
+}
+
+func TestArtistInfoResponseRemovesEnglishXMLWithoutLocalResult(t *testing.T) {
+	body := `<subsonic-response status="ok"><artistInfo2><biography>The band released several albums and performed at major international festivals throughout its career.</biography><smallImageUrl>keep</smallImageUrl></artistInfo2></subsonic-response>`
+	resp := artistInfoResponse(t, body, "application/xml")
+	enrichArtistInfoResponse(resp, &fakeBiographyReader{values: map[string]artistbio.EffectiveBiography{}})
+	out, _ := io.ReadAll(resp.Body)
+	var parsed struct {
+		Artist struct {
+			Biography string `xml:"biography"`
+			Image     string `xml:"smallImageUrl"`
+		} `xml:"artistInfo2"`
+	}
+	if xml.Unmarshal(out, &parsed) != nil || parsed.Artist.Biography != "" || parsed.Artist.Image != "keep" || resp.Header.Get("ETag") != "" {
+		t.Fatalf("English XML biography was not removed: headers=%v body=%s", resp.Header, out)
 	}
 }
 

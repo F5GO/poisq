@@ -18,6 +18,8 @@ type fakeBackgroundResolver struct {
 	mu     sync.Mutex
 	calls  []string
 	inputs []IdentityContext
+	result IdentityResolution
+	err    error
 }
 
 func (f *fakeBackgroundResolver) Resolve(_ context.Context, input IdentityContext) (IdentityResolution, error) {
@@ -25,11 +27,67 @@ func (f *fakeBackgroundResolver) Resolve(_ context.Context, input IdentityContex
 	f.calls = append(f.calls, input.ArtistID)
 	f.inputs = append(f.inputs, input)
 	f.mu.Unlock()
+	if f.err != nil {
+		return IdentityResolution{}, f.err
+	}
+	if f.result.Status != "" {
+		return f.result, nil
+	}
 	return IdentityResolution{
 		Status: ResolutionResolved, Provider: ProviderMusicBrainz,
 		ProviderArtistID: exactTestMBID, MusicBrainzID: exactTestMBID,
 		Confidence: 1, EvidenceCodes: []string{"id:musicbrainz"},
 	}, nil
+}
+
+func TestBiographyBackgroundUncertainRetryDoesNotStarveInventory(t *testing.T) {
+	store := ingestionTestStore(t)
+	if err := store.PutIdentity(context.Background(), ArtistIdentity{
+		ArtistID: "a", ArtistName: "Первый", Status: ResolutionUncertain,
+		EvidenceJSON: `{}`, UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resolver := &fakeBackgroundResolver{}
+	processor, err := NewBackgroundProcessor(store, nil, resolver, &fakeBackgroundIngestion{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := processor.ProcessBatch(context.Background(), backgroundNavDB(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Skipped != 1 || report.Resolved != 1 || len(resolver.calls) != 1 || resolver.calls[0] != "b" {
+		t.Fatalf("fresh uncertain artist blocked inventory: report=%#v calls=%v", report, resolver.calls)
+	}
+
+	if _, err := store.db.Exec(`UPDATE artist_bio_identity SET updated_at = ? WHERE artist_id = 'a'`, time.Now().Add(-10*time.Minute).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	resolver.calls = nil
+	processor.batchSize = 1
+	if _, err := processor.ProcessBatch(context.Background(), backgroundNavDB(t)); err != nil {
+		t.Fatal(err)
+	}
+	if len(resolver.calls) != 1 || resolver.calls[0] != "a" {
+		t.Fatalf("expired uncertain artist was not retried: %v", resolver.calls)
+	}
+}
+
+func TestBiographyBackgroundReportsUncertainSeparately(t *testing.T) {
+	store := ingestionTestStore(t)
+	resolver := &fakeBackgroundResolver{result: IdentityResolution{Status: ResolutionUncertain}}
+	processor, err := NewBackgroundProcessor(store, nil, resolver, &fakeBackgroundIngestion{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := processor.ProcessBatch(context.Background(), backgroundNavDB(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Uncertain != 1 || report.Failed != 0 || report.Resolved != 0 {
+		t.Fatalf("uncertain identity counted incorrectly: %#v", report)
+	}
 }
 
 type fakeBackgroundIngestion struct {

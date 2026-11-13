@@ -124,8 +124,9 @@ func artistInfoID(req *http.Request) string {
 	return value
 }
 
-// enrichArtistInfoResponse is intentionally fail-open: any enrichment problem
-// leaves the upstream response readable and unchanged.
+// enrichArtistInfoResponse replaces Navidrome biography text with a verified
+// local Russian biography. If no local result exists, a safely decoded
+// non-Russian upstream biography is removed instead of leaking English text.
 func enrichArtistInfoResponse(resp *http.Response, reader effectiveBiographyReader) {
 	if resp == nil || reader == nil || resp.Request == nil || resp.StatusCode != http.StatusOK ||
 		resp.Body == nil || resp.Header.Get("Content-Encoding") != "" {
@@ -142,14 +143,6 @@ func enrichArtistInfoResponse(resp *http.Response, reader effectiveBiographyRead
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(resp.Request.Context(), artistBiographyReadTimeout)
-	biography, found, err := reader.EffectiveBiography(ctx, artistID)
-	cancel()
-	if err != nil || !found || biography.ArtistID != artistID || strings.TrimSpace(biography.Text) == "" ||
-		len(biography.Text) > artistbio.MaxBiographyBytes || !utf8.ValidString(biography.Text) {
-		return
-	}
-
 	originalBody := resp.Body
 	originalContentLength := resp.ContentLength
 	originalHeaderLength, hadHeaderLength := resp.Header["Content-Length"]
@@ -160,21 +153,37 @@ func enrichArtistInfoResponse(resp *http.Response, reader effectiveBiographyRead
 	}
 	_ = originalBody.Close()
 
+	replacement := ""
+	shouldRewrite := false
+	ctx, cancel := context.WithTimeout(resp.Request.Context(), artistBiographyReadTimeout)
+	biography, found, err := reader.EffectiveBiography(ctx, artistID)
+	cancel()
+	if err == nil && found && biography.ArtistID == artistID && strings.TrimSpace(biography.Text) != "" &&
+		len(biography.Text) <= artistbio.MaxBiographyBytes && utf8.ValidString(biography.Text) {
+		replacement = biography.Text
+		shouldRewrite = true
+	} else if upstream, present := artistInfoBiography(body, isJSON); present {
+		analysis := artistbio.DetectBiographyLanguage(upstream)
+		if analysis.QualityOK && analysis.Language == "ru" && analysis.Confidence >= 0.90 && analysis.RussianShare >= 0.80 {
+			restoreArtistInfoBody(resp, body, originalContentLength, originalHeaderLength, hadHeaderLength)
+			return
+		}
+		shouldRewrite = true
+	}
+	if !shouldRewrite {
+		restoreArtistInfoBody(resp, body, originalContentLength, originalHeaderLength, hadHeaderLength)
+		return
+	}
+
 	var output []byte
 	var changed bool
 	if isJSON {
-		output, changed = rewriteArtistInfoJSON(body, biography.Text)
+		output, changed = rewriteArtistInfoJSON(body, replacement)
 	} else {
-		output, changed = rewriteArtistInfoXML(body, biography.Text)
+		output, changed = rewriteArtistInfoXML(body, replacement)
 	}
 	if !changed {
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-		resp.ContentLength = originalContentLength
-		if hadHeaderLength {
-			resp.Header["Content-Length"] = originalHeaderLength
-		} else {
-			resp.Header.Del("Content-Length")
-		}
+		restoreArtistInfoBody(resp, body, originalContentLength, originalHeaderLength, hadHeaderLength)
 		return
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(output))
@@ -187,25 +196,48 @@ func enrichArtistInfoResponse(resp *http.Response, reader effectiveBiographyRead
 	}
 }
 
+func restoreArtistInfoBody(resp *http.Response, body []byte, contentLength int64, headerLength []string, hadHeaderLength bool) {
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = contentLength
+	if hadHeaderLength {
+		resp.Header["Content-Length"] = headerLength
+	} else {
+		resp.Header.Del("Content-Length")
+	}
+}
+
+func artistInfoBiography(body []byte, isJSON bool) (string, bool) {
+	if isJSON {
+		_, _, info, ok := decodeArtistInfoJSONDocument(body)
+		if !ok {
+			return "", false
+		}
+		raw, exists := info["biography"]
+		var text string
+		if !exists || json.Unmarshal(raw, &text) != nil || strings.TrimSpace(text) == "" {
+			return "", false
+		}
+		return text, true
+	}
+	if len(body) == 0 || len(body) > maxArtistInfoResponseBytes || !utf8.Valid(body) {
+		return "", false
+	}
+	var document struct {
+		XMLName xml.Name `xml:"subsonic-response"`
+		Status  string   `xml:"status,attr"`
+		Artist  struct {
+			Biography string `xml:"biography"`
+		} `xml:"artistInfo2"`
+	}
+	if xml.Unmarshal(body, &document) != nil || document.XMLName.Local != "subsonic-response" || document.Status != "ok" || strings.TrimSpace(document.Artist.Biography) == "" {
+		return "", false
+	}
+	return document.Artist.Biography, true
+}
+
 func rewriteArtistInfoJSON(body []byte, biography string) ([]byte, bool) {
-	if len(body) == 0 || len(body) > maxArtistInfoResponseBytes || !utf8.Valid(body) || rejectDuplicateJSONKeys(body) != nil {
-		return body, false
-	}
-	var root map[string]json.RawMessage
-	if decodeStrictJSON(body, &root) != nil || root == nil {
-		return body, false
-	}
-	var response map[string]json.RawMessage
-	if decodeStrictJSON(root["subsonic-response"], &response) != nil || response == nil {
-		return body, false
-	}
-	rawStatus, ok := response["status"]
-	var status string
-	if !ok || json.Unmarshal(rawStatus, &status) != nil || status != "ok" {
-		return body, false
-	}
-	var info map[string]json.RawMessage
-	if decodeStrictJSON(response["artistInfo2"], &info) != nil || info == nil {
+	root, response, info, ok := decodeArtistInfoJSONDocument(body)
+	if !ok {
 		return body, false
 	}
 	encodedBiography, err := json.Marshal(biography)
@@ -228,6 +260,29 @@ func rewriteArtistInfoJSON(body []byte, biography string) ([]byte, bool) {
 		return body, false
 	}
 	return output, true
+}
+
+func decodeArtistInfoJSONDocument(body []byte) (map[string]json.RawMessage, map[string]json.RawMessage, map[string]json.RawMessage, bool) {
+	if len(body) == 0 || len(body) > maxArtistInfoResponseBytes || !utf8.Valid(body) || rejectDuplicateJSONKeys(body) != nil {
+		return nil, nil, nil, false
+	}
+	var root map[string]json.RawMessage
+	if decodeStrictJSON(body, &root) != nil || root == nil {
+		return nil, nil, nil, false
+	}
+	var response map[string]json.RawMessage
+	if decodeStrictJSON(root["subsonic-response"], &response) != nil || response == nil {
+		return nil, nil, nil, false
+	}
+	var status string
+	if json.Unmarshal(response["status"], &status) != nil || status != "ok" {
+		return nil, nil, nil, false
+	}
+	var info map[string]json.RawMessage
+	if decodeStrictJSON(response["artistInfo2"], &info) != nil || info == nil {
+		return nil, nil, nil, false
+	}
+	return root, response, info, true
 }
 
 func decodeStrictJSON(body []byte, target any) error {

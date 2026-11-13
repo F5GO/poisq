@@ -209,7 +209,7 @@ func ResolveIdentityDeterministically(context IdentityContext, candidates []Iden
 	}
 	meaningful := 0
 	for _, score := range scores {
-		if score.Confidence >= 0.6 && len(score.EvidenceCodes) > 1 {
+		if identityScoreEligibleForAI(score) {
 			meaningful++
 		}
 	}
@@ -217,8 +217,17 @@ func ResolveIdentityDeterministically(context IdentityContext, candidates []Iden
 		Status: ResolutionUncertain, Confidence: top.Confidence,
 		EvidenceCodes:      append([]string(nil), top.EvidenceCodes...),
 		ContradictionCodes: append([]string(nil), top.ContradictionCodes...),
-		RequiresAI:         meaningful >= 2,
+		RequiresAI:         meaningful >= 1,
 	}
+}
+
+// identityScoreEligibleForAI permits the model to confirm a real catalog
+// candidate only when deterministic evidence already ties both the artist name
+// and at least one local release. Name-only homonyms never reach the model.
+func identityScoreEligibleForAI(score IdentityCandidateScore) bool {
+	return score.Confidence >= 0.60 && len(score.ContradictionCodes) == 0 &&
+		containsString(score.EvidenceCodes, "name:equivalent") &&
+		containsString(score.EvidenceCodes, "album:overlap")
 }
 
 func resolutionFromScore(score IdentityCandidateScore, status ResolutionStatus) IdentityResolution {
