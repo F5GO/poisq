@@ -115,6 +115,7 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/cast", s.handleCast)
 	mux.HandleFunc("/api/v1/artist-biographies", s.handleArtistBiographies)
 	mux.HandleFunc("/api/v1/artist-biographies/detail", s.handleArtistBiographyDetail)
+	mux.HandleFunc("/api/v1/artist-biographies/reset", s.handleArtistBiographyReset)
 	mux.HandleFunc("/api/v1/debug/fs", s.handleDebugFS)
 
 	// Встроенный фронтенд (SPA) через //go:embed с антикэшированием для динамических скриптов и стилей

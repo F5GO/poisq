@@ -176,6 +176,55 @@ func TestArtistBiographyAPIMethodsAndUnavailable(t *testing.T) {
 	}
 }
 
+func TestArtistBiographyAPIResetCachePreservesManualAndCSRF(t *testing.T) {
+	server, store := biographyAPIServer(t)
+	if err := store.PutIdentity(context.Background(), artistbio.ArtistIdentity{
+		ArtistID: "kino", ArtistName: "Кино", Status: artistbio.ResolutionResolved, Confidence: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	candidateID, err := store.PutCandidate(context.Background(), artistbio.Candidate{
+		ArtistID: "kino", Provider: artistbio.ProviderWikipedia, SourceArtistID: "kino",
+		SourceURL: "https://ru.wikipedia.org/wiki/Kino", OriginalText: strings.Repeat("Российская группа выпустила альбом. ", 3),
+		DetectedLanguage: "ru", LanguageConfidence: 1, RussianShare: 1, MatchConfidence: 1,
+		Status: artistbio.CandidateAccepted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SelectAutomatic(context.Background(), "kino", candidateID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	manualText := strings.Repeat("Российская музыкальная группа записала несколько известных альбомов. ", 2)
+	if err := store.SetManualOverride(context.Background(), artistbio.ManualOverride{ArtistID: "kino", Text: manualText}); err != nil {
+		t.Fatal(err)
+	}
+
+	csrfRequest := biographyRequest(http.MethodPost, "/api/v1/artist-biographies/reset", `{}`)
+	csrfRequest.Header.Set("Origin", "https://evil.example")
+	csrf := httptest.NewRecorder()
+	server.ServeHTTP(csrf, csrfRequest)
+	if csrf.Code != http.StatusForbidden {
+		t.Fatalf("CSRF reset code=%d", csrf.Code)
+	}
+
+	request := biographyRequest(http.MethodPost, "/api/v1/artist-biographies/reset", `{}`)
+	request.Header.Set("Origin", "http://localhost:4535")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"manualOverridesPreserved":true`) ||
+		!strings.Contains(recorder.Body.String(), `"candidates":1`) {
+		t.Fatalf("reset cache: code=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	effective, found, err := store.EffectiveBiography(context.Background(), "kino")
+	if err != nil || !found || !effective.Manual || effective.Text != manualText {
+		t.Fatalf("manual override after API reset: effective=%#v found=%v err=%v", effective, found, err)
+	}
+	if _, found, err := store.Candidate(context.Background(), "kino", artistbio.ProviderWikipedia, "kino"); err != nil || found {
+		t.Fatalf("automatic candidate survived API reset: found=%v err=%v", found, err)
+	}
+}
+
 func TestArtistBiographyAPIConcurrentReads(t *testing.T) {
 	server, store := biographyAPIServer(t)
 	if err := store.PutIdentity(context.Background(), artistbio.ArtistIdentity{ArtistID: "kino", ArtistName: "Кино", Status: artistbio.ResolutionResolved, Confidence: 1}); err != nil {
