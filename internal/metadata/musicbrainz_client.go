@@ -55,6 +55,12 @@ type MBReleaseGroupInfo struct {
 	Year             int    `json:"year"`
 }
 
+// MBRecordingInfo is a canonical recording credited to one MusicBrainz artist.
+type MBRecordingInfo struct {
+	RecordingMBID string `json:"recordingMbid"`
+	Title         string `json:"title"`
+}
+
 type MBArtistLinks struct {
 	ArtistMBID   string `json:"artistMbid"`
 	WikidataID   string `json:"wikidataId"`
@@ -97,6 +103,13 @@ type mbReleaseGroupBrowseResp struct {
 		Title            string `json:"title"`
 		FirstReleaseDate string `json:"first-release-date"`
 	} `json:"release-groups"`
+}
+
+type mbRecordingBrowseResp struct {
+	Recordings []struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	} `json:"recordings"`
 }
 
 type mbArtistLinksResp struct {
@@ -253,6 +266,77 @@ func (mb *MusicBrainzClient) BrowseArtistReleaseGroups(ctx context.Context, arti
 			}
 		}
 		result = append(result, MBReleaseGroupInfo{ReleaseGroupMBID: release.ID, Title: title, Year: year})
+	}
+	return result, nil
+}
+
+// SearchArtistRecordings searches several local titles under one exact artist
+// MBID. One bounded query avoids paging through large artist discographies.
+func (mb *MusicBrainzClient) SearchArtistRecordings(ctx context.Context, artistMBID string, titles []string, limit int) ([]MBRecordingInfo, error) {
+	artistMBID = strings.TrimSpace(artistMBID)
+	if !validMusicBrainzID(artistMBID) {
+		return nil, fmt.Errorf("invalid MusicBrainz artist id")
+	}
+	phrases := make([]string, 0, min(len(titles), 8))
+	queryBytes := 0
+	for _, title := range titles {
+		clean := strings.TrimSpace(title)
+		if clean == "" {
+			continue
+		}
+		escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(clean)
+		queryBytes += len(escaped)
+		if queryBytes > 4<<10 {
+			break
+		}
+		phrases = append(phrases, `recording:"`+escaped+`"`)
+		if len(phrases) == 8 {
+			break
+		}
+	}
+	if len(phrases) == 0 {
+		return nil, fmt.Errorf("empty MusicBrainz recording titles")
+	}
+	if limit < 1 {
+		limit = 25
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	lucene := "arid:" + artistMBID + " AND (" + strings.Join(phrases, " OR ") + ")"
+	endpoint := fmt.Sprintf("%s/recording?query=%s&fmt=json&limit=%d", mb.baseURL, url.QueryEscape(lucene), limit)
+	body, status, _, err := mb.rc.DoWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", musicBrainzUserAgent)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("MusicBrainz recording search: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("MusicBrainz recording search failed")
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("MusicBrainz recording HTTP %d", status)
+	}
+	var parsed mbRecordingBrowseResp
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid MusicBrainz recording response: %w", err)
+	}
+	if len(parsed.Recordings) > limit {
+		parsed.Recordings = parsed.Recordings[:limit]
+	}
+	result := make([]MBRecordingInfo, 0, len(parsed.Recordings))
+	for _, recording := range parsed.Recordings {
+		title := NormalizeNFC(strings.TrimSpace(recording.Title))
+		if title == "" || !validMusicBrainzID(recording.ID) {
+			continue
+		}
+		result = append(result, MBRecordingInfo{RecordingMBID: recording.ID, Title: title})
 	}
 	return result, nil
 }

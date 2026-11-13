@@ -102,6 +102,22 @@ func TestIdentity_ReissueYearRemainsReleaseEvidence(t *testing.T) {
 	}
 }
 
+func TestIdentity_RecordingEvidence(t *testing.T) {
+	ctx := IdentityContext{ArtistID: "nav", Name: "Артист", Tracks: []string{"Один", "Два"}}
+	one := ScoreIdentityCandidate(ctx, IdentityCandidate{
+		ID: "one", Provider: ProviderMusicBrainz, Name: "Артист", ProviderScore: 1, Tracks: []string{"Один"},
+	})
+	if one.Decisive || !identityScoreEligibleForAI(one) || !containsString(one.EvidenceCodes, "track:overlap") {
+		t.Fatalf("single recording did not require grounded arbitration: %#v", one)
+	}
+	two := ScoreIdentityCandidate(ctx, IdentityCandidate{
+		ID: "two", Provider: ProviderMusicBrainz, Name: "Артист", ProviderScore: 1, Tracks: []string{"Один", "Два"},
+	})
+	if !two.Decisive || two.Confidence < AutoResolveConfidence || !containsString(two.EvidenceCodes, "track:multiple") {
+		t.Fatalf("multiple recordings did not resolve identity: %#v", two)
+	}
+}
+
 func TestIdentity_DeterministicAmbiguity(t *testing.T) {
 	ctx := IdentityContext{ArtistID: "nav-1", Name: "Кино"}
 	result := ResolveIdentityDeterministically(ctx, []IdentityCandidate{

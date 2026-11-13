@@ -140,10 +140,11 @@ func TestResolverUsesAIForExactNameAndReleaseEvidence(t *testing.T) {
 }
 
 type fakeMusicBrainzIdentityClient struct {
-	artists  []metadata.MBArtistInfo
-	releases map[string][]metadata.MBReleaseGroupInfo
-	browsed  []string
-	limit    int
+	artists    []metadata.MBArtistInfo
+	releases   map[string][]metadata.MBReleaseGroupInfo
+	recordings map[string][]metadata.MBRecordingInfo
+	browsed    []string
+	limit      int
 }
 
 func (f *fakeMusicBrainzIdentityClient) SearchArtists(context.Context, string, int) ([]metadata.MBArtistInfo, error) {
@@ -154,6 +155,11 @@ func (f *fakeMusicBrainzIdentityClient) BrowseArtistReleaseGroups(_ context.Cont
 	f.browsed = append(f.browsed, artistID)
 	f.limit = limit
 	return append([]metadata.MBReleaseGroupInfo(nil), f.releases[artistID]...), nil
+}
+
+func (f *fakeMusicBrainzIdentityClient) SearchArtistRecordings(_ context.Context, artistID string, _ []string, limit int) ([]metadata.MBRecordingInfo, error) {
+	f.limit = limit
+	return append([]metadata.MBRecordingInfo(nil), f.recordings[artistID]...), nil
 }
 
 func TestMusicBrainzIdentitySourceUsesCanonicalDiscography(t *testing.T) {
@@ -187,6 +193,32 @@ func TestMusicBrainzIdentitySourceUsesCanonicalDiscography(t *testing.T) {
 	}, candidates)
 	if !result.RequiresAI || result.Confidence < 0.69 {
 		t.Fatalf("release-backed candidate was not made eligible for arbitration: %#v", result)
+	}
+}
+
+func TestMusicBrainzIdentitySourceFallsBackToCanonicalRecordings(t *testing.T) {
+	client := &fakeMusicBrainzIdentityClient{
+		artists: []metadata.MBArtistInfo{{ArtistMBID: "artist", CanonicalName: "Артист", Score: 100}},
+		recordings: map[string][]metadata.MBRecordingInfo{
+			"artist": {
+				{RecordingMBID: "one", Title: "Первый трек"},
+				{RecordingMBID: "two", Title: "Второй трек"},
+				{RecordingMBID: "other", Title: "Чужой трек"},
+			},
+		},
+	}
+	source := NewMusicBrainzIdentitySource(client)
+	input := IdentityContext{ArtistID: "nav", Name: "Артист", Tracks: []string{"Первый трек", "Второй трек"}}
+	candidates, err := source.FindIdentityCandidates(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || len(candidates[0].Tracks) != 2 {
+		t.Fatalf("canonical recording matches missing: %#v", candidates)
+	}
+	result := ResolveIdentityDeterministically(input, candidates)
+	if result.Status != ResolutionResolved || result.Confidence < AutoResolveConfidence {
+		t.Fatalf("two real recording matches did not resolve identity: %#v", result)
 	}
 }
 

@@ -148,17 +148,22 @@ func (r *IdentityResolver) arbitrate(ctx context.Context, input IdentityContext,
 	for _, candidate := range candidates {
 		score := ScoreIdentityCandidate(input, candidate)
 		scores[candidate.ID] = score
+		if containsString(score.ContradictionCodes, "candidate:invalid") {
+			continue
+		}
+		boundedCandidate := score.Candidate
 		eligible := score.Decisive && score.Confidence >= AutoResolveConfidence || identityScoreEligibleForAI(score)
 		option := ai.IdentityArbitrationCandidate{
-			ID: candidate.ID, Name: candidate.Name, Aliases: candidate.Aliases, Country: candidate.Country,
+			ID: boundedCandidate.ID, Name: boundedCandidate.Name, Aliases: boundedCandidate.Aliases, Country: boundedCandidate.Country,
 			DeterministicConfidence: score.Confidence,
 			Eligible:                eligible,
 			EvidenceCodes:           append([]string(nil), score.EvidenceCodes...),
 			ContradictionCodes:      append([]string(nil), score.ContradictionCodes...),
 		}
-		for _, album := range candidate.Albums {
+		for _, album := range boundedCandidate.Albums {
 			option.Albums = append(option.Albums, album.Title)
 		}
+		option.Tracks = append(option.Tracks, boundedCandidate.Tracks...)
 		request.Candidates = append(request.Candidates, option)
 	}
 	decision, err := r.arbiter.ArbitrateIdentity(ctx, request)
@@ -240,6 +245,7 @@ func allStringsAllowed(values, allowed []string) bool {
 type MusicBrainzIdentityClient interface {
 	SearchArtists(ctx context.Context, artistName string, limit int) ([]metadata.MBArtistInfo, error)
 	BrowseArtistReleaseGroups(ctx context.Context, artistMBID string, limit int) ([]metadata.MBReleaseGroupInfo, error)
+	SearchArtistRecordings(ctx context.Context, artistMBID string, titles []string, limit int) ([]metadata.MBRecordingInfo, error)
 }
 
 type MusicBrainzIdentitySource struct {
@@ -271,7 +277,7 @@ func (s *MusicBrainzIdentitySource) FindIdentityCandidates(ctx context.Context, 
 	if input.MusicBrainzID != "" {
 		return candidates, nil
 	}
-	if len(input.Albums) == 0 {
+	if len(input.Albums) == 0 && len(input.Tracks) == 0 {
 		return candidates, nil
 	}
 	// Browse only name-equivalent candidates. This supplies authoritative
@@ -282,19 +288,36 @@ func (s *MusicBrainzIdentitySource) FindIdentityCandidates(ctx context.Context, 
 		if browsed == 3 || !anyNameEquivalent(append([]string{input.Name}, input.Aliases...), append([]string{candidates[i].Name}, candidates[i].Aliases...)) {
 			continue
 		}
-		releases, err := s.client.BrowseArtistReleaseGroups(ctx, candidates[i].MusicBrainzID, maxMusicBrainzReleaseGroups)
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
 		browsed++
-		if err != nil {
-			continue
+		if len(input.Albums) > 0 {
+			releases, err := s.client.BrowseArtistReleaseGroups(ctx, candidates[i].MusicBrainzID, maxMusicBrainzReleaseGroups)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if err == nil {
+				for _, release := range releases {
+					for _, local := range input.Albums {
+						if normalizeIdentityText(release.Title) == normalizeIdentityText(local.Title) {
+							candidates[i].Albums = append(candidates[i].Albums, IdentityRelease{Title: release.Title, Year: release.Year})
+							break
+						}
+					}
+				}
+			}
 		}
-		for _, release := range releases {
-			for _, local := range input.Albums {
-				if normalizeIdentityText(release.Title) == normalizeIdentityText(local.Title) {
-					candidates[i].Albums = append(candidates[i].Albums, IdentityRelease{Title: release.Title, Year: release.Year})
-					break
+		if len(candidates[i].Albums) == 0 && len(input.Tracks) > 0 {
+			recordings, err := s.client.SearchArtistRecordings(ctx, candidates[i].MusicBrainzID, input.Tracks, maxMusicBrainzReleaseGroups)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if err == nil {
+				for _, recording := range recordings {
+					for _, local := range input.Tracks {
+						if normalizeIdentityText(recording.Title) == normalizeIdentityText(local) {
+							candidates[i].Tracks = append(candidates[i].Tracks, recording.Title)
+							break
+						}
+					}
 				}
 			}
 		}
