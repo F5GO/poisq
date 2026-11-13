@@ -178,11 +178,11 @@ func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity Ide
 	}
 	_, queryVersion, err := buildArtistSearchQuery(searchInput)
 	if err != nil {
-		return nil, err
+		return nil, discoveryError("search_query_invalid", err)
 	}
 	report, found, err := p.store.WebSearchCache(ctx, identity.ArtistID, queryVersion, time.Now())
 	if err != nil {
-		return nil, err
+		return nil, discoveryError("search_cache_read_failed", err)
 	}
 	if !found {
 		report, err = p.search.Search(ctx, searchInput)
@@ -192,6 +192,9 @@ func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity Ide
 				ttl = 30 * 24 * time.Hour
 			}
 			err = p.store.PutWebSearchCache(ctx, identity.ArtistID, queryVersion, report.Results, time.Now().Add(ttl))
+			if err != nil {
+				err = discoveryError("search_cache_write_failed", err)
+			}
 		}
 	}
 	if err != nil || len(report.Results) == 0 {
@@ -211,7 +214,7 @@ func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity Ide
 	}
 	cards, err := p.ai.Collect(ctx, identityJSON, inputs)
 	if err != nil {
-		return nil, err
+		return nil, discoveryError("collector_failed", err)
 	}
 	output := make([]ai.SynthesisEvidence, 0, len(cards))
 	for _, card := range cards {

@@ -10,13 +10,15 @@ import (
 
 type synthesisSequenceGenerator struct {
 	responses []string
+	inputs    []string
 	calls     int
 }
 
-func (g *synthesisSequenceGenerator) GenerateText(context.Context, string, string, string) (string, error) {
+func (g *synthesisSequenceGenerator) GenerateText(_ context.Context, _, input, _ string) (string, error) {
 	if g.calls >= len(g.responses) {
 		return "", fmt.Errorf("unexpected call")
 	}
+	g.inputs = append(g.inputs, input)
 	response := g.responses[g.calls]
 	g.calls++
 	return response, nil
@@ -76,5 +78,27 @@ func TestBiographySynthesisAIRejectsInventedAndInjectedSources(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("editor accepted an invented evidence id")
+	}
+}
+
+func TestBiographyCollectorCompactsMultibyteSearchPayload(t *testing.T) {
+	gen := &synthesisSequenceGenerator{responses: []string{
+		`{"cards":[{"id":"fact-1","result_id":"result-1","fact":"Подтвержденный факт об исполнителе и его музыкальной карьере.","language":"ru"}]}`,
+	}}
+	service := NewBiographySynthesisAI(gen)
+	results := make([]SearchEvidenceInput, 6)
+	for index := range results {
+		results[index] = SearchEvidenceInput{
+			ID: fmt.Sprintf("result-%d", index+1), Title: strings.Repeat("Заголовок ", 30),
+			URL: "https://example.com/artist", Domain: fmt.Sprintf("source-%d.example", index+1),
+			Snippet: strings.Repeat("Подробный подтвержденный факт об исполнителе. ", 20),
+		}
+	}
+	cards, err := service.Collect(context.Background(), json.RawMessage(`{"name":"Исполнитель"}`), results)
+	if err != nil || len(cards) != 1 || len(gen.inputs) != 1 {
+		t.Fatalf("cards=%#v err=%v calls=%d", cards, err, len(gen.inputs))
+	}
+	if len(gen.inputs[0]) > maxCollectorPayload || strings.Contains(gen.inputs[0], "https://") {
+		t.Fatalf("payload_bytes=%d payload=%q", len(gen.inputs[0]), gen.inputs[0])
 	}
 }
