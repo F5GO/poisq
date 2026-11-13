@@ -1,0 +1,234 @@
+package artistbio
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+
+	"github.com/F5GO/poisq/internal/db"
+)
+
+const (
+	defaultBiographyBatchSize = 25
+	defaultBiographyFreshTTL  = 30 * 24 * time.Hour
+	defaultValidationRetryTTL = time.Hour
+)
+
+type identityResolverAPI interface {
+	Resolve(ctx context.Context, input IdentityContext) (IdentityResolution, error)
+}
+
+type ingestionAPI interface {
+	Ingest(ctx context.Context, artist ResolvedArtist) (IngestionReport, error)
+}
+
+type validationAPI interface {
+	ValidateArtist(ctx context.Context, artistID string) (ValidationReport, error)
+}
+
+type BackgroundProcessor struct {
+	store     *Store
+	local     LocalIdentityContextSource
+	resolver  identityResolverAPI
+	ingestion ingestionAPI
+	validator validationAPI
+	batchSize int
+	freshTTL  time.Duration
+	retryTTL  time.Duration
+}
+
+type BackgroundReport struct {
+	Scanned   int
+	Skipped   int
+	Resolved  int
+	Ingested  int
+	Validated int
+	Failed    int
+}
+
+func NewBackgroundProcessor(store *Store, local LocalIdentityContextSource, resolver identityResolverAPI, ingestion ingestionAPI, batchSize int) (*BackgroundProcessor, error) {
+	if store == nil || resolver == nil || ingestion == nil {
+		return nil, fmt.Errorf("biography background processor requires store, resolver, and ingestion")
+	}
+	if batchSize < 1 {
+		batchSize = defaultBiographyBatchSize
+	}
+	if batchSize > 100 {
+		batchSize = 100
+	}
+	return &BackgroundProcessor{
+		store: store, local: local, resolver: resolver, ingestion: ingestion,
+		batchSize: batchSize, freshTTL: defaultBiographyFreshTTL, retryTTL: defaultValidationRetryTTL,
+	}, nil
+}
+
+// SetValidator attaches validation to the existing background lifecycle.
+// Construction performs no model or provider request.
+func (p *BackgroundProcessor) SetValidator(validator validationAPI) {
+	p.validator = validator
+}
+
+// ProcessBatch scans inventory locally and performs external work for at most batchSize stale artists.
+func (p *BackgroundProcessor) ProcessBatch(ctx context.Context, navDB *sql.DB) (BackgroundReport, error) {
+	var report BackgroundReport
+	cursor := ""
+	processed := 0
+	for processed < p.batchSize {
+		artists, err := db.LoadArtistInventoryPage(ctx, navDB, cursor, db.MaxArtistInventoryPage)
+		if err != nil {
+			return report, err
+		}
+		if len(artists) == 0 {
+			break
+		}
+		for _, artist := range artists {
+			if ctx.Err() != nil {
+				return report, ctx.Err()
+			}
+			cursor = artist.ID
+			report.Scanned++
+			if p.validator != nil {
+				ready, err := p.validationReady(ctx, artist.ID)
+				if err != nil {
+					report.Failed++
+					continue
+				}
+				if ready {
+					processed++
+					if _, err := p.validator.ValidateArtist(ctx, artist.ID); err != nil {
+						if ctx.Err() != nil {
+							return report, ctx.Err()
+						}
+						report.Failed++
+					} else {
+						report.Validated++
+					}
+					if processed >= p.batchSize {
+						break
+					}
+					continue
+				}
+			}
+			fresh, err := p.hasFreshState(ctx, artist.ID)
+			if err != nil {
+				report.Failed++
+				continue
+			}
+			if fresh {
+				report.Skipped++
+				continue
+			}
+			processed++
+			identityContext := p.localContext(ctx, artist)
+			resolution, err := p.resolver.Resolve(ctx, identityContext)
+			if err != nil {
+				if ctx.Err() != nil {
+					return report, ctx.Err()
+				}
+				report.Failed++
+				continue
+			}
+			if resolution.Status != ResolutionResolved {
+				report.Failed++
+				continue
+			}
+			report.Resolved++
+			identityContext.MusicBrainzID = resolution.MusicBrainzID
+			if _, err := p.ingestion.Ingest(ctx, ResolvedArtist{
+				Context:  identityContext,
+				Identity: resolution,
+			}); err != nil {
+				if ctx.Err() != nil {
+					return report, ctx.Err()
+				}
+				report.Failed++
+				continue
+			}
+			report.Ingested++
+			if p.validator != nil {
+				if _, err := p.validator.ValidateArtist(ctx, artist.ID); err != nil {
+					if ctx.Err() != nil {
+						return report, ctx.Err()
+					}
+					report.Failed++
+				} else {
+					report.Validated++
+				}
+			}
+			if processed >= p.batchSize {
+				break
+			}
+		}
+		if len(artists) < db.MaxArtistInventoryPage {
+			break
+		}
+	}
+	return report, nil
+}
+
+func (p *BackgroundProcessor) localContext(ctx context.Context, artist db.LibraryArtist) IdentityContext {
+	result := IdentityContext{ArtistID: artist.ID, Name: artist.Name}
+	if p.local == nil {
+		return result
+	}
+	local, err := p.local.ArtistIdentityContext(ctx, artist.Name, MaxIdentityAlbums, MaxIdentityTracks)
+	if err != nil {
+		return result
+	}
+	for _, album := range local.Albums {
+		result.Albums = append(result.Albums, IdentityRelease{Title: album.Title, Year: album.Year})
+	}
+	result.Tracks = append(result.Tracks, local.Tracks...)
+	bounded, err := BoundIdentityContext(result)
+	if err != nil {
+		return IdentityContext{ArtistID: artist.ID, Name: artist.Name}
+	}
+	return bounded
+}
+
+func (p *BackgroundProcessor) hasFreshState(ctx context.Context, artistID string) (bool, error) {
+	cutoff := time.Now().Add(-p.freshTTL).Unix()
+	if p.validator == nil {
+		var exists int
+		err := p.store.db.QueryRowContext(ctx, `SELECT EXISTS(
+			SELECT 1 FROM artist_bio_candidates WHERE artist_id = ? AND updated_at >= ?
+			UNION ALL
+			SELECT 1 FROM artist_bio_identity WHERE artist_id = ? AND status = 'uncertain' AND updated_at >= ?
+		)`, artistID, cutoff, artistID, cutoff).Scan(&exists)
+		if err != nil {
+			return false, fmt.Errorf("read biography refresh state: %w", err)
+		}
+		return exists == 1, nil
+	}
+	retryCutoff := time.Now().Add(-p.retryTTL).Unix()
+	var exists int
+	err := p.store.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM artist_bio_candidates
+			WHERE artist_id = ? AND status = 'accepted' AND updated_at >= ?
+		UNION ALL
+		SELECT 1 FROM artist_bio_candidates
+			WHERE artist_id = ? AND status = 'translation_pending' AND updated_at >= ?
+		UNION ALL
+		SELECT 1 FROM artist_bio_identity WHERE artist_id = ? AND status = 'uncertain' AND updated_at >= ?
+	)`, artistID, cutoff, artistID, retryCutoff, artistID, cutoff).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("read biography refresh state: %w", err)
+	}
+	return exists == 1, nil
+}
+
+func (p *BackgroundProcessor) validationReady(ctx context.Context, artistID string) (bool, error) {
+	retryCutoff := time.Now().Add(-p.retryTTL).Unix()
+	var exists int
+	err := p.store.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM artist_bio_candidates
+		WHERE artist_id = ? AND (
+			status = 'fetched' OR (status = 'translation_pending' AND updated_at <= ?)
+		)
+	)`, artistID, retryCutoff).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("read biography validation state: %w", err)
+	}
+	return exists == 1, nil
+}

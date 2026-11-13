@@ -65,6 +65,10 @@ func (it *Interceptor) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// getArtistInfo2 проходит в Navidrome без задержки; сохраняем только безопасный ID
+	// в контексте, чтобы после upstream-ответа выполнить один локальный lookup.
+	captureArtistInfoRequest(req)
+
 	// Для объявления расширения нужен несжатый ответ, чтобы его можно было дополнить.
 	if isExtensionsPath(path) {
 		req.Header.Del("Accept-Encoding")

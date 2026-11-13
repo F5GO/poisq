@@ -141,3 +141,43 @@ func TestSQLInjectionPrevention(t *testing.T) {
 		t.Errorf("Ожидалась ошибка валидации SQL injection в имени столбца")
 	}
 }
+
+func TestResetDatabaseClearsArtistBiographies(t *testing.T) {
+	database, err := OpenPoisqDatabase(filepath.Join(t.TempDir(), "poisq.db"))
+	if err != nil {
+		t.Fatalf("open poisq database: %v", err)
+	}
+	defer database.Close()
+
+	if _, err := database.Exec(`
+		INSERT INTO api_keys(provider, label, key_encrypted, key_mask) VALUES ('gemini', 'keep', 'encrypted', '***');
+		INSERT INTO artist_bio_identity(artist_id, status) VALUES ('artist', 'resolved');
+		INSERT INTO artist_bio_candidates(
+			artist_id, provider, source_artist_id, original_text, status
+		) VALUES ('artist', 'deezer', '42', 'Описание', 'accepted');
+		INSERT INTO artist_biographies(artist_id, automatic_candidate_id, manual_text)
+		SELECT 'artist', id, 'Ручной вариант' FROM artist_bio_candidates WHERE artist_id = 'artist';
+	`); err != nil {
+		t.Fatalf("seed biography state: %v", err)
+	}
+
+	if err := ResetDatabase(database, true); err != nil {
+		t.Fatalf("reset database: %v", err)
+	}
+	for _, table := range []string{"artist_biographies", "artist_bio_candidates", "artist_bio_identity"} {
+		var count int
+		if err := database.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("table %s was not cleared: %d", table, count)
+		}
+	}
+	var keyCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM api_keys WHERE label = 'keep'`).Scan(&keyCount); err != nil {
+		t.Fatalf("count preserved API keys: %v", err)
+	}
+	if keyCount != 1 {
+		t.Fatalf("API keys were not preserved: %d", keyCount)
+	}
+}

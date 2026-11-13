@@ -58,6 +58,7 @@
           <span>Задачи</span>
           <span class="badge-count" id="badge-jobs-count">0</span>
         </button>
+        <button class="nav-tab" data-tab="biographies">Биографии</button>
         <button class="nav-tab" data-tab="keys">Настройки</button>
       </nav>
 
@@ -337,7 +338,72 @@
     </section>
 
     <!-- ============================================================== -->
-    <!-- Вкладка 5: Настройки (ключи API, трансляция на колонки) -->
+    <!-- Вкладка 5: Необязательные ручные биографии -->
+    <!-- ============================================================== -->
+    <section id="panel-biographies" class="tab-panel">
+      <div class="panel-header">
+        <div>
+          <h1 class="panel-title">Биографии исполнителей</h1>
+          <p class="panel-desc">
+            Ручное описание необязательно. Если оно сохранено, то имеет приоритет над автоматическими источниками до сброса.
+          </p>
+        </div>
+      </div>
+
+      <div class="biography-studio">
+        <aside class="biography-picker">
+          <div class="search-input-wrap biography-search-wrap">
+            <input type="search" id="biography-search-input" class="search-field search-compact" maxlength="100"
+              placeholder="Найти исполнителя..." autocomplete="off" />
+          </div>
+          <div id="biography-artist-list" class="biography-artist-list" aria-live="polite">
+            <p class="biography-empty">Загрузка исполнителей...</p>
+          </div>
+        </aside>
+
+        <div class="biography-workspace">
+          <div id="biography-editor-empty" class="biography-editor-empty">
+            Выберите исполнителя слева, чтобы проверить автоматическое описание или задать ручное.
+          </div>
+          <div id="biography-editor" class="hidden">
+            <div class="biography-editor-header">
+              <div>
+                <h2 id="biography-artist-name" class="biography-artist-title"></h2>
+                <p id="biography-effective-state" class="panel-desc"></p>
+              </div>
+              <span id="biography-state-badge" class="biography-state-badge"></span>
+            </div>
+
+            <section class="biography-preview-block">
+              <h3 class="form-label">Автоматическое описание</h3>
+              <p id="biography-automatic-meta" class="form-hint"></p>
+              <div id="biography-automatic-preview" class="biography-preview"></div>
+            </section>
+
+            <form id="biography-manual-form" autocomplete="off">
+              <div class="form-group">
+                <label class="form-label" for="biography-manual-text">Ручное описание на русском</label>
+                <textarea id="biography-manual-text" class="biography-textarea" maxlength="65536"
+                  placeholder="Оставьте пустым, если достаточно автоматического описания."></textarea>
+                <span class="form-hint">Текст должен быть фактическим, достаточно подробным и написанным на русском языке.</span>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="biography-source-url">Источник (необязательно)</label>
+                <input type="url" id="biography-source-url" class="form-input" maxlength="2048"
+                  placeholder="https://example.org/artist" autocomplete="off" />
+              </div>
+              <div class="biography-actions">
+                <button type="submit" id="btn-save-biography" class="btn btn-primary">Сохранить ручное описание</button>
+                <button type="button" id="btn-reset-biography" class="btn btn-danger-outline">Вернуться к автоматическому</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- Вкладка 6: Настройки (ключи API, трансляция на колонки) -->
     <!-- ============================================================== -->
     <section id="panel-keys" class="tab-panel">
       <div class="panel-header">

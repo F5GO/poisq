@@ -1,0 +1,73 @@
+# Tasks: `bio-delivery`
+
+- [x] Task 1: Capture an exact bounded `getArtistInfo2` artist ID.
+  - Acceptance:
+    - Only exact `/rest/getArtistInfo2` and `/rest/getArtistInfo2.view` path endings are eligible; substring lookalikes are ignored.
+    - GET query and `application/x-www-form-urlencoded` POST requests are supported.
+    - Empty, duplicate, oversized, control-character, malformed, unsupported-method, and unsupported-content-type IDs are ignored for enrichment.
+    - POST bodies are limited to 64 KiB, restored byte-for-byte, and retain their original content length.
+    - Only a validated artist ID is placed in request context; credentials and form/query values are never logged.
+    - `Accept-Encoding` is removed only for a valid eligible request.
+  - Verify: `go test -count=1 -run 'TestArtistInfoRequest' ./internal/proxy`
+  - Files: `internal/proxy/artist_info.go`, `internal/proxy/artist_info_test.go`, `internal/proxy/interceptor.go`
+
+- [x] Task 2: Add the local biography-reader boundary and bounded pass-through adapter.
+  - Acceptance:
+    - The proxy depends only on a narrow `EffectiveBiography` reader interface.
+    - `Server.SetBiographyReader` performs dependency injection without any read or external request.
+    - Eligible HTTP 200 responses perform at most one local lookup under a short request-scoped timeout.
+    - Missing data, reader error/timeout, cancellation, compressed response, unsupported content type, or invalid stored text returns the upstream body unchanged.
+    - Body inspection is capped at 2 MiB plus one byte; oversized streams are reconstructed without truncation.
+    - Errors and logs contain no biography, request parameters, credentials, or upstream body.
+  - Verify: `go test -count=1 -run 'TestArtistInfo(Response|Reader|Oversize|PassThrough)' ./internal/proxy`
+  - Files: `internal/proxy/artist_info.go`, `internal/proxy/artist_info_test.go`, `internal/proxy/proxy.go`
+
+- [x] Task 3: Implement strict JSON biography replacement.
+  - Acceptance:
+    - Only successful `subsonic-response.artistInfo2` objects are modified.
+    - Existing biography is replaced and a missing biography is added using JSON string encoding.
+    - All unknown sibling fields, numeric values, nulls, images, similar artists, status, and OpenSubsonic data remain semantically unchanged.
+    - Duplicate keys, trailing data, malformed UTF-8/JSON, non-object layers, failed status, and oversized input fail closed to the original body.
+    - The transformer returns a separate output buffer and never mutates the fallback body.
+  - Verify: `go test -count=1 -run 'TestArtistInfoJSON' ./internal/proxy`
+  - Files: `internal/proxy/artist_info.go`, `internal/proxy/artist_info_test.go`
+
+- [x] Task 4: Implement bounded tokenized XML biography replacement.
+  - Acceptance:
+    - A direct existing `artistInfo2/biography` value is replaced, or a missing direct child is inserted before `artistInfo2` closes.
+    - Stored text is emitted as escaped character data, never raw markup.
+    - Namespaces, attributes, unknown children, comments, processing instructions, and unrelated text are preserved safely.
+    - DTD/directives, malformed XML, excessive depth/token count, duplicate `artistInfo2`, and conflicting/nested biography elements fail closed.
+    - No regex or raw string replacement is used for XML.
+  - Verify: `go test -count=1 -run 'TestArtistInfoXML' ./internal/proxy`
+  - Files: `internal/proxy/artist_info.go`, `internal/proxy/artist_info_test.go`
+
+- [x] Task 5: Compose delivery with the existing reverse proxy and runtime.
+  - Acceptance:
+    - Biography rewriting is composed with, and does not replace, extension advertisement and CORS processing.
+    - A successful rewrite updates `Content-Length` and removes only invalid content validators.
+    - Status, content type, cookies, CORS, cache policy, and unrelated headers remain unchanged.
+    - The existing `bioStore` is attached before HTTP servers start and construction performs no read/network work.
+    - Search, native API, extension, cast, auth, and ordinary pass-through behavior remain unchanged.
+    - No provider, MusicBrainz, detector, translator, or AI interface is reachable from the request path.
+  - Verify:
+    - `go test -race -count=1 -run 'TestArtistInfo(Proxy|Concurrent|Headers|Post)' ./internal/proxy`
+    - `go test -count=1 ./internal/proxy ./cmd/proxy`
+  - Files: `internal/proxy/artist_info.go`, `internal/proxy/artist_info_test.go`, `internal/proxy/proxy.go`, `internal/proxy/interceptor.go`, `cmd/proxy/main.go`
+
+- [x] Task 6: Complete the security, regression, and release audit.
+  - Acceptance:
+    - Malformed/duplicate JSON, DTD/deep XML, oversized/chunked bodies, compressed responses, hostile IDs, cancellation, timeout, concurrent artist isolation, and header tests pass.
+    - No response body, biography, Subsonic credential, form/query value, database path, or secret appears in errors/logs.
+    - No new dependency, cache, service, plugin, worker, provider call, or AI call is introduced.
+    - Existing ingestion, validation, search, proxy, extension, cast, Studio, database, and unrelated iOS changes remain intact.
+    - Full tests, race detector, vet, production build, vulnerability scan, formatting, and diff checks pass.
+  - Verify:
+    - `gofmt -w internal/proxy/artist_info.go internal/proxy/artist_info_test.go internal/proxy/proxy.go internal/proxy/interceptor.go cmd/proxy/main.go`
+    - `go test -count=1 ./...`
+    - `go test -race -count=1 ./...`
+    - `go vet ./...`
+    - `go build -trimpath -o /tmp/poisq-proxy ./cmd/proxy`
+    - `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`
+    - `git diff --check`
+  - Files: only files already touched by Tasks 1–5 plus this checklist

@@ -37,13 +37,19 @@ type MBArtistInfo struct {
 
 // MBReleaseInfo содержит данные официального альбома/релиза из MusicBrainz.
 type MBReleaseInfo struct {
-	ReleaseMBID   string `json:"releaseMbid"`
-	ArtistMBID    string `json:"artistMbid"`
+	ReleaseMBID     string `json:"releaseMbid"`
+	ArtistMBID      string `json:"artistMbid"`
 	CanonicalArtist string `json:"canonicalArtist"`
-	AlbumTitle    string `json:"albumTitle"`
-	Year          int    `json:"year"`
-	TrackCount    int    `json:"trackCount"`
-	Score         int    `json:"score"`
+	AlbumTitle      string `json:"albumTitle"`
+	Year            int    `json:"year"`
+	TrackCount      int    `json:"trackCount"`
+	Score           int    `json:"score"`
+}
+
+type MBArtistLinks struct {
+	ArtistMBID   string `json:"artistMbid"`
+	WikidataID   string `json:"wikidataId"`
+	WikipediaURL string `json:"wikipediaUrl"`
 }
 
 type mbArtistSearchResp struct {
@@ -61,11 +67,11 @@ type mbArtistSearchResp struct {
 
 type mbReleaseSearchResp struct {
 	Releases []struct {
-		ID          string `json:"id"`
-		Title       string `json:"title"`
-		Score       int    `json:"score"`
-		Date        string `json:"date"`
-		TrackCount  int    `json:"track-count"`
+		ID           string `json:"id"`
+		Title        string `json:"title"`
+		Score        int    `json:"score"`
+		Date         string `json:"date"`
+		TrackCount   int    `json:"track-count"`
 		ArtistCredit []struct {
 			Name   string `json:"name"`
 			Artist struct {
@@ -76,9 +82,20 @@ type mbReleaseSearchResp struct {
 	} `json:"releases"`
 }
 
+type mbArtistLinksResp struct {
+	ID        string `json:"id"`
+	Relations []struct {
+		Type string `json:"type"`
+		URL  struct {
+			Resource string `json:"resource"`
+		} `json:"url"`
+	} `json:"relations"`
+}
+
 // MusicBrainzClient управляет запросами к MusicBrainz API с защитой от бана по IP (1 req/sec).
 type MusicBrainzClient struct {
-	rc *httpclient.ResilientClient
+	rc      *httpclient.ResilientClient
+	baseURL string
 
 	namesMu    sync.Mutex
 	namesCache map[string]mbNamesEntry
@@ -94,19 +111,29 @@ type mbNamesEntry struct {
 func NewMusicBrainzClient() *MusicBrainzClient {
 	return &MusicBrainzClient{
 		// Строго 1 параллельный запрос с интервалом 1.1 секунды согласно правилам MusicBrainz
-		rc: httpclient.NewResilientClient(12*time.Second, 1, 1100*time.Millisecond, 3),
+		rc:      httpclient.NewResilientClient(12*time.Second, 1, 1100*time.Millisecond, 3),
+		baseURL: musicBrainzBaseURL,
 	}
 }
 
-// LookupArtist ищет каноничное написание имени артиста (например, "Максим" -> "МакSим") и его алиасы.
-func (mb *MusicBrainzClient) LookupArtist(ctx context.Context, artistName string) (*MBArtistInfo, error) {
+// SearchArtists возвращает до восьми реальных кандидатов MusicBrainz для дальнейшей проверки контекстом медиатеки.
+func (mb *MusicBrainzClient) SearchArtists(ctx context.Context, artistName string, limit int) ([]MBArtistInfo, error) {
 	q := strings.TrimSpace(artistName)
 	if q == "" {
 		return nil, fmt.Errorf("пустое имя артиста")
 	}
+	if len(q) > 2<<10 {
+		return nil, fmt.Errorf("имя артиста превышает допустимый размер")
+	}
+	if limit < 1 {
+		limit = 3
+	}
+	if limit > 8 {
+		limit = 8
+	}
 
-	endpoint := fmt.Sprintf("%s/artist?query=%s&fmt=json&limit=3",
-		musicBrainzBaseURL, url.QueryEscape(fmt.Sprintf(`artist:"%s" OR alias:"%s"`, q, q)))
+	endpoint := fmt.Sprintf("%s/artist?query=%s&fmt=json&limit=%d",
+		mb.baseURL, url.QueryEscape(fmt.Sprintf(`artist:"%s" OR alias:"%s"`, q, q)), limit)
 
 	body, status, _, err := mb.rc.DoWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -118,7 +145,10 @@ func (mb *MusicBrainzClient) LookupArtist(ctx context.Context, artistName string
 		return req, nil
 	})
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("MusicBrainz artist search: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("MusicBrainz artist search failed")
 	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("MusicBrainz Artist HTTP %d", status)
@@ -126,31 +156,119 @@ func (mb *MusicBrainzClient) LookupArtist(ctx context.Context, artistName string
 
 	var parsed mbArtistSearchResp
 	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("invalid MusicBrainz artist response: %w", err)
+	}
+	if len(parsed.Artists) > limit {
+		parsed.Artists = parsed.Artists[:limit]
+	}
+	result := make([]MBArtistInfo, 0, len(parsed.Artists))
+	for _, artist := range parsed.Artists {
+		aliases := make([]string, 0, len(artist.Aliases))
+		seen := map[string]bool{strings.ToLower(NormalizeNFC(artist.Name)): true}
+		for _, alias := range artist.Aliases {
+			cleanAlias := NormalizeNFC(strings.TrimSpace(alias.Name))
+			key := strings.ToLower(cleanAlias)
+			if cleanAlias != "" && !seen[key] {
+				seen[key] = true
+				aliases = append(aliases, cleanAlias)
+			}
+		}
+		result = append(result, MBArtistInfo{
+			ArtistMBID: artist.ID, CanonicalName: NormalizeNFC(artist.Name),
+			SortName: NormalizeNFC(artist.SortName), Country: artist.Country,
+			Aliases: aliases, Score: artist.Score,
+		})
+	}
+	return result, nil
+}
+
+// LookupArtist ищет каноничное написание имени артиста (например, "Максим" -> "МакSим") и его алиасы.
+func (mb *MusicBrainzClient) LookupArtist(ctx context.Context, artistName string) (*MBArtistInfo, error) {
+	artists, err := mb.SearchArtists(ctx, artistName, 3)
+	if err != nil {
 		return nil, err
 	}
-	if len(parsed.Artists) == 0 || parsed.Artists[0].Score < 85 {
+	if len(artists) == 0 || artists[0].Score < 85 {
 		return nil, fmt.Errorf("артист %q не найден с высокой точностью", artistName)
 	}
+	artist := artists[0]
+	return &artist, nil
+}
 
-	top := parsed.Artists[0]
-	var aliases []string
-	seen := map[string]bool{strings.ToLower(top.Name): true}
-	for _, al := range top.Aliases {
-		cleanAl := NormalizeNFC(strings.TrimSpace(al.Name))
-		if cleanAl != "" && !seen[strings.ToLower(cleanAl)] {
-			seen[strings.ToLower(cleanAl)] = true
-			aliases = append(aliases, cleanAl)
+// LookupArtistLinks returns only exact Wikipedia/Wikidata links attached to a MusicBrainz artist ID.
+func (mb *MusicBrainzClient) LookupArtistLinks(ctx context.Context, artistMBID string) (*MBArtistLinks, error) {
+	artistMBID = strings.TrimSpace(artistMBID)
+	if !validMusicBrainzID(artistMBID) {
+		return nil, fmt.Errorf("invalid MusicBrainz artist id")
+	}
+	endpoint := fmt.Sprintf("%s/artist/%s?inc=url-rels&fmt=json", mb.baseURL, url.PathEscape(artistMBID))
+	body, status, _, err := mb.rc.DoWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", musicBrainzUserAgent)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("MusicBrainz artist links request failed")
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("MusicBrainz artist links HTTP %d", status)
+	}
+	var parsed mbArtistLinksResp
+	if err := json.Unmarshal(body, &parsed); err != nil || !strings.EqualFold(parsed.ID, artistMBID) {
+		return nil, fmt.Errorf("invalid MusicBrainz artist links response")
+	}
+	result := &MBArtistLinks{ArtistMBID: artistMBID}
+	for _, relation := range parsed.Relations {
+		linked, err := url.Parse(relation.URL.Resource)
+		if err != nil || linked.Scheme != "https" {
+			continue
+		}
+		switch strings.ToLower(relation.Type) {
+		case "wikidata":
+			if strings.EqualFold(linked.Host, "www.wikidata.org") {
+				id := strings.TrimPrefix(linked.Path, "/wiki/")
+				if validWikidataID(id) {
+					result.WikidataID = id
+				}
+			}
+		case "wikipedia":
+			if strings.HasSuffix(strings.ToLower(linked.Host), ".wikipedia.org") && strings.HasPrefix(linked.Path, "/wiki/") {
+				result.WikipediaURL = linked.String()
+			}
 		}
 	}
+	return result, nil
+}
 
-	return &MBArtistInfo{
-		ArtistMBID:    top.ID,
-		CanonicalName: NormalizeNFC(top.Name),
-		SortName:      NormalizeNFC(top.SortName),
-		Country:       top.Country,
-		Aliases:       aliases,
-		Score:         top.Score,
-	}, nil
+func validMusicBrainzID(value string) bool {
+	if len(value) < 8 || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func validWikidataID(value string) bool {
+	if len(value) < 2 || len(value) > 32 || value[0] != 'Q' {
+		return false
+	}
+	for _, r := range value[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // LookupRelease ищет официальный релиз альбома в MusicBrainz для канонизации тегов папки.
@@ -163,7 +281,7 @@ func (mb *MusicBrainzClient) LookupRelease(ctx context.Context, artist, album st
 
 	lucene := fmt.Sprintf(`artist:"%s" AND release:"%s"`, cleanArtist, cleanAlbum)
 	endpoint := fmt.Sprintf("%s/release?query=%s&fmt=json&limit=5",
-		musicBrainzBaseURL, url.QueryEscape(lucene))
+		mb.baseURL, url.QueryEscape(lucene))
 
 	body, status, _, err := mb.rc.DoWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

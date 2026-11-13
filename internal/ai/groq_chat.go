@@ -144,7 +144,10 @@ func (g *GroqChatClient) listModels(ctx context.Context, apiKey string) ([]strin
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("Groq model list request failed")
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
@@ -152,7 +155,7 @@ func (g *GroqChatClient) listModels(ctx context.Context, apiKey string) ([]strin
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("Groq model list HTTP %d", resp.StatusCode)
 	}
 	var parsed struct {
 		Data []struct {
@@ -299,7 +302,10 @@ func (g *GroqChatClient) callOnce(ctx context.Context, model, apiKey, system, us
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return "", 0, err
+		if ctx.Err() != nil {
+			return "", 0, ctx.Err()
+		}
+		return "", 0, fmt.Errorf("Groq LLM request failed")
 	}
 	defer resp.Body.Close()
 
@@ -308,7 +314,7 @@ func (g *GroqChatClient) callOnce(ctx context.Context, model, apiKey, system, us
 		return "", resp.StatusCode, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", resp.StatusCode, fmt.Errorf("Groq LLM HTTP %d (%s): %s", resp.StatusCode, model, strings.TrimSpace(string(body)))
+		return "", resp.StatusCode, fmt.Errorf("Groq LLM HTTP %d (%s)", resp.StatusCode, model)
 	}
 
 	var parsed groqChatResponse
