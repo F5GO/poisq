@@ -39,7 +39,7 @@ func (s *Server) SetBiographyCoordinator(requester biographyRequester, wait time
 	if wait >= 5*time.Second && wait <= 30*time.Second {
 		s.bioWait = wait
 	} else {
-		s.bioWait = 20 * time.Second
+		s.bioWait = 25 * time.Second
 	}
 }
 

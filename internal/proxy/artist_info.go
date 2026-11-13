@@ -170,7 +170,7 @@ func enrichArtistInfoResponseOnDemand(resp *http.Response, reader effectiveBiogr
 		done, _, requestErr := requester.Request(resp.Request.Context(), artistID, false)
 		if requestErr == nil && done != nil {
 			if wait < 5*time.Second || wait > 30*time.Second {
-				wait = 20 * time.Second
+				wait = 25 * time.Second
 			}
 			timer := time.NewTimer(wait)
 			select {

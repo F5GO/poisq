@@ -10,7 +10,7 @@ func TestBiographyFirstRequestWaitBounds(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("BIO_FIRST_REQUEST_WAIT", raw)
 			cfg, err := Load()
-			if err != nil || cfg.BiographyFirstRequestWait != 20*time.Second {
+			if err != nil || cfg.BiographyFirstRequestWait != 25*time.Second {
 				t.Fatalf("raw=%q wait=%s err=%v", raw, cfg.BiographyFirstRequestWait, err)
 			}
 		})

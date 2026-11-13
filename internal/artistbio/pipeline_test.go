@@ -93,6 +93,13 @@ func (f *pipelineSynthesisAI) Verify(context.Context, ai.BiographySummary, []ai.
 	return ai.SynthesisVerification{Grounded: true, Scores: []float64{0.99, 0.99}}, nil
 }
 
+type failingPipelineSynthesisAI struct{ pipelineSynthesisAI }
+
+func (f *failingPipelineSynthesisAI) Edit(context.Context, []ai.SynthesisEvidence) (ai.BiographySummary, error) {
+	f.edits++
+	return ai.BiographySummary{}, errors.New("model quota")
+}
+
 func openPipelineStore(t *testing.T) *Store {
 	t.Helper()
 	database, err := db.OpenPoisqDatabase(filepath.Join(t.TempDir(), "pipeline.db"))
@@ -146,5 +153,46 @@ func TestSynthesisPipelineSearchFailureWithoutSourcesIsRetryable(t *testing.T) {
 	state, found, err := store.JobState(context.Background(), "artist")
 	if err != nil || !found || state.Status != JobRetryable || state.LastError != "search_unavailable" {
 		t.Fatalf("state=%#v found=%v err=%v", state, found, err)
+	}
+}
+
+func TestSynthesisPipelineSummaryFailureIsRetryableWithProviderFallbackPreserved(t *testing.T) {
+	store := openPipelineStore(t)
+	if err := store.PutIdentity(context.Background(), ArtistIdentity{
+		ArtistID: "artist", ArtistName: "Артист", Status: ResolutionResolved,
+		ResolvedSource: ProviderMusicBrainz, ResolvedArtistID: "mbid", MusicBrainzID: "mbid",
+		Confidence: 0.99, EvidenceJSON: `{"evidence":["name:equivalent","release:exact"]}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previousID, err := store.PutCandidate(context.Background(), Candidate{
+		ArtistID: "artist", Provider: ProviderYandexMusic, SourceArtistID: "previous",
+		SourceURL: "https://example.com/previous", OriginalText: strings.Repeat("Проверенное прежнее описание исполнителя и его музыкальной карьеры. ", 8),
+		OriginalLanguage: "ru", DetectedLanguage: "ru", LanguageConfidence: 0.99,
+		RussianShare: 1, MatchConfidence: 0.99, Status: CandidateAccepted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SelectAutomatic(context.Background(), "artist", previousID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	model := &failingPipelineSynthesisAI{}
+	pipeline, err := NewSynthesisPipeline(store, nil, pipelineResolver{store}, pipelineIngestion{store, []Provider{ProviderYandexMusic, ProviderWikipedia}}, pipelineValidator{}, &pipelineSearch{}, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, admitted, err := store.QueueJob(context.Background(), "artist", "Артист", false, time.Now()); err != nil || !admitted {
+		t.Fatalf("queue admitted=%v err=%v", admitted, err)
+	}
+	if err := pipeline.Run(context.Background(), db.LibraryArtist{ID: "artist", Name: "Артист"}); err == nil {
+		t.Fatal("summary outage unexpectedly completed")
+	}
+	state, found, err := store.JobState(context.Background(), "artist")
+	if err != nil || !found || state.Status != JobRetryable || state.LastError != "summary_unavailable" {
+		t.Fatalf("state=%#v found=%v err=%v", state, found, err)
+	}
+	if fallback, found, err := store.AutomaticCandidate(context.Background(), "artist"); err != nil || !found || fallback.Provider == ProviderAISummary {
+		t.Fatalf("fallback=%#v found=%v err=%v", fallback, found, err)
 	}
 }
