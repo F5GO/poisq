@@ -22,6 +22,10 @@ type artistLinksLookup interface {
 	LookupArtistLinks(ctx context.Context, artistMBID string) (*metadata.MBArtistLinks, error)
 }
 
+type regionalWikipediaLinkSource interface {
+	ExactWikipediaLink(ctx context.Context, artist ResolvedArtist) (rawURL, sourceID string, err error)
+}
+
 type biographyKeyPool interface {
 	Acquire(provider string) (*keypool.LeasedKey, error)
 	ReportSuccess(keyID int64)
@@ -31,11 +35,20 @@ type biographyKeyPool interface {
 }
 
 func NewDefaultBiographySources(links artistLinksLookup, keys biographyKeyPool) ([]BiographySource, error) {
+	yandex, err := NewYandexBiographySource(keys)
+	if err != nil {
+		return nil, err
+	}
+	wikipedia, err := NewWikipediaSource(links)
+	if err != nil {
+		return nil, err
+	}
+	wikipedia.regionalLinks = yandex
 	constructors := []func() (BiographySource, error){
-		func() (BiographySource, error) { return NewWikipediaSource(links) },
+		func() (BiographySource, error) { return wikipedia, nil },
 		func() (BiographySource, error) { return NewTheAudioDBSource() },
 		func() (BiographySource, error) { return NewLastFMSource(keys) },
-		func() (BiographySource, error) { return NewYandexBiographySource(keys) },
+		func() (BiographySource, error) { return yandex, nil },
 		func() (BiographySource, error) { return NewDeezerBiographySource() },
 		func() (BiographySource, error) { return NewAppleMusicBiographySource(keys) },
 		func() (BiographySource, error) { return NewDiscogsBiographySource(keys) },
@@ -52,16 +65,31 @@ func NewDefaultBiographySources(links artistLinksLookup, keys biographyKeyPool) 
 }
 
 type WikipediaSource struct {
-	links     artistLinksLookup
-	wikidata  *providerHTTPClient
-	wikipedia *providerHTTPClient
+	links         artistLinksLookup
+	regionalLinks regionalWikipediaLinkSource
+	wikidata      *providerHTTPClient
+	wikipedias    map[string]*providerHTTPClient
 }
 
 func NewWikipediaSource(links artistLinksLookup) (*WikipediaSource, error) {
-	return newWikipediaSource(links, "https://www.wikidata.org", "https://ru.wikipedia.org")
+	return newWikipediaSourceWithLanguages(links, "https://www.wikidata.org", map[string]string{
+		"ru": "https://ru.wikipedia.org", "en": "https://en.wikipedia.org", "de": "https://de.wikipedia.org",
+		"fr": "https://fr.wikipedia.org", "es": "https://es.wikipedia.org", "it": "https://it.wikipedia.org",
+		"pl": "https://pl.wikipedia.org", "uk": "https://uk.wikipedia.org",
+	})
 }
 
 func newWikipediaSource(links artistLinksLookup, wikidataBase, wikipediaBase string) (*WikipediaSource, error) {
+	bases := make(map[string]string, len(wikipediaLanguagePriority))
+	for _, language := range wikipediaLanguagePriority {
+		bases[language] = wikipediaBase
+	}
+	return newWikipediaSourceWithLanguages(links, wikidataBase, bases)
+}
+
+var wikipediaLanguagePriority = []string{"ru", "en", "de", "fr", "es", "it", "pl", "uk"}
+
+func newWikipediaSourceWithLanguages(links artistLinksLookup, wikidataBase string, wikipediaBases map[string]string) (*WikipediaSource, error) {
 	if links == nil {
 		return nil, fmt.Errorf("wikipedia source requires artist links")
 	}
@@ -69,27 +97,40 @@ func newWikipediaSource(links artistLinksLookup, wikidataBase, wikipediaBase str
 	if err != nil {
 		return nil, err
 	}
-	wp, err := newProviderHTTPClient(wikipediaBase, biographyUserAgent, 100*time.Millisecond)
-	if err != nil {
-		return nil, err
+	wikipedias := make(map[string]*providerHTTPClient, len(wikipediaLanguagePriority))
+	for _, language := range wikipediaLanguagePriority {
+		base := strings.TrimSpace(wikipediaBases[language])
+		if base == "" {
+			continue
+		}
+		client, err := newProviderHTTPClient(base, biographyUserAgent, 100*time.Millisecond)
+		if err != nil {
+			return nil, err
+		}
+		wikipedias[language] = client
 	}
-	return &WikipediaSource{links: links, wikidata: wd, wikipedia: wp}, nil
+	if wikipedias["ru"] == nil {
+		return nil, fmt.Errorf("wikipedia source requires Russian endpoint")
+	}
+	return &WikipediaSource{links: links, wikidata: wd, wikipedias: wikipedias}, nil
 }
 
 func (*WikipediaSource) Provider() Provider { return ProviderWikipedia }
 
 func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*BiographySourceResult, error) {
 	mbid := strings.TrimSpace(artist.Identity.MusicBrainzID)
-	if mbid == "" {
-		return nil, nil
+	links := &metadata.MBArtistLinks{}
+	if mbid != "" {
+		var err error
+		links, err = s.links.LookupArtistLinks(ctx, mbid)
+		if err != nil {
+			return nil, fmt.Errorf("wikipedia identity links unavailable")
+		}
 	}
-	links, err := s.links.LookupArtistLinks(ctx, mbid)
-	if err != nil {
-		return nil, fmt.Errorf("wikipedia identity links unavailable")
-	}
-	title := russianWikipediaTitle(links.WikipediaURL)
+	article, linkedArticle := exactWikipediaArticle(links.WikipediaURL)
 	sourceID := ""
-	if title == "" && links.WikidataID != "" {
+	evidenceCodes := []string{"id:musicbrainz", "link:wikipedia"}
+	if (article.Language != "ru" || article.Title == "") && links.WikidataID != "" {
 		var entity struct {
 			Entities map[string]struct {
 				Sitelinks map[string]struct {
@@ -100,13 +141,32 @@ func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Bi
 		if _, err := s.wikidata.getJSON(ctx, "/wiki/Special:EntityData/"+links.WikidataID+".json", nil, nil, &entity); err != nil {
 			return nil, fmt.Errorf("wikidata artist link unavailable")
 		}
-		title = entity.Entities[links.WikidataID].Sitelinks["ruwiki"].Title
+		for _, language := range wikipediaLanguagePriority {
+			title := strings.TrimSpace(entity.Entities[links.WikidataID].Sitelinks[language+"wiki"].Title)
+			if title != "" && s.wikipedias[language] != nil {
+				article = wikipediaArticle{Language: language, Title: title}
+				break
+			}
+		}
 		sourceID = links.WikidataID
 	}
-	if strings.TrimSpace(title) == "" || len(title) > MaxIdentityNameBytes {
+	if article.Title == "" && s.regionalLinks != nil {
+		rawURL, regionalID, err := s.regionalLinks.ExactWikipediaLink(ctx, artist)
+		if err != nil {
+			return nil, fmt.Errorf("regional wikipedia identity link unavailable")
+		}
+		if linked, ok := exactWikipediaArticle(rawURL); ok {
+			article, linkedArticle, sourceID = linked, true, regionalID
+			evidenceCodes = []string{"catalog:yandex", "link:wikipedia"}
+		}
+	}
+	if article.Title == "" && linkedArticle {
+		article, _ = exactWikipediaArticle(links.WikipediaURL)
+	}
+	if strings.TrimSpace(article.Title) == "" || len(article.Title) > MaxIdentityNameBytes || s.wikipedias[article.Language] == nil {
 		return nil, nil
 	}
-	query := url.Values{"action": {"query"}, "prop": {"extracts"}, "exintro": {"1"}, "explaintext": {"1"}, "redirects": {"1"}, "format": {"json"}, "titles": {title}}
+	query := url.Values{"action": {"query"}, "prop": {"extracts"}, "exintro": {"1"}, "explaintext": {"1"}, "redirects": {"1"}, "format": {"json"}, "titles": {article.Title}}
 	var response struct {
 		Query struct {
 			Pages map[string]struct {
@@ -116,7 +176,7 @@ func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Bi
 			} `json:"pages"`
 		} `json:"query"`
 	}
-	if _, err := s.wikipedia.getJSON(ctx, "/w/api.php", query, nil, &response); err != nil {
+	if _, err := s.wikipedias[article.Language].getJSON(ctx, "/w/api.php", query, nil, &response); err != nil {
 		return nil, fmt.Errorf("wikipedia summary unavailable")
 	}
 	pageIDs := make([]string, 0, len(response.Query.Pages))
@@ -134,24 +194,41 @@ func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Bi
 			sourceID = "page:" + strconv.FormatInt(page.PageID, 10)
 		}
 		return &BiographySourceResult{
-			SourceArtistID: sourceID, SourceURL: "https://ru.wikipedia.org/wiki/" + url.PathEscape(page.Title),
-			OriginalText: text, LanguageHint: "ru", MatchConfidence: 1,
-			EvidenceCodes: []string{"id:musicbrainz", "link:wikipedia"},
+			SourceArtistID: sourceID, SourceURL: "https://" + article.Language + ".wikipedia.org/wiki/" + url.PathEscape(page.Title),
+			OriginalText: text, LanguageHint: article.Language, MatchConfidence: 1,
+			EvidenceCodes: evidenceCodes,
 		}, nil
 	}
 	return nil, nil
 }
 
-func russianWikipediaTitle(raw string) string {
+type wikipediaArticle struct {
+	Language string
+	Title    string
+}
+
+func exactWikipediaArticle(raw string) (wikipediaArticle, bool) {
 	parsed, err := url.Parse(raw)
-	if err != nil || !strings.EqualFold(parsed.Host, "ru.wikipedia.org") || !strings.HasPrefix(parsed.Path, "/wiki/") {
-		return ""
+	if err != nil || parsed.Scheme != "https" || !strings.HasPrefix(parsed.Path, "/wiki/") {
+		return wikipediaArticle{}, false
+	}
+	hostParts := strings.Split(strings.ToLower(parsed.Hostname()), ".")
+	if len(hostParts) != 3 || hostParts[1] != "wikipedia" || hostParts[2] != "org" || len(hostParts[0]) < 2 || len(hostParts[0]) > 12 {
+		return wikipediaArticle{}, false
 	}
 	title, err := url.PathUnescape(strings.TrimPrefix(parsed.Path, "/wiki/"))
 	if err != nil {
+		return wikipediaArticle{}, false
+	}
+	return wikipediaArticle{Language: hostParts[0], Title: strings.ReplaceAll(title, "_", " ")}, true
+}
+
+func russianWikipediaTitle(raw string) string {
+	article, ok := exactWikipediaArticle(raw)
+	if !ok || article.Language != "ru" {
 		return ""
 	}
-	return strings.ReplaceAll(title, "_", " ")
+	return article.Title
 }
 
 type TheAudioDBSource struct{ http *providerHTTPClient }

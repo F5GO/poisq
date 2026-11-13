@@ -17,6 +17,18 @@ type YandexBiographySource struct {
 	keys biographyKeyPool
 }
 
+type yandexBriefInfo struct {
+	Result struct {
+		Artist struct {
+			ID              json.RawMessage `json:"id"`
+			EnWikipediaLink string          `json:"enWikipediaLink"`
+			Description     struct {
+				Text string `json:"text"`
+			} `json:"description"`
+		} `json:"artist"`
+	} `json:"result"`
+}
+
 func NewYandexBiographySource(keys biographyKeyPool) (*YandexBiographySource, error) {
 	return newYandexBiographySource("https://api.music.yandex.net", keys)
 }
@@ -31,7 +43,7 @@ func newYandexBiographySource(base string, keys biographyKeyPool) (*YandexBiogra
 
 func (*YandexBiographySource) Provider() Provider { return ProviderYandexMusic }
 
-func (s *YandexBiographySource) Fetch(ctx context.Context, artist ResolvedArtist) (*BiographySourceResult, error) {
+func (s *YandexBiographySource) FindIdentityCandidates(ctx context.Context, input IdentityContext) ([]IdentityCandidate, error) {
 	var search struct {
 		Result struct {
 			Artists struct {
@@ -42,7 +54,7 @@ func (s *YandexBiographySource) Fetch(ctx context.Context, artist ResolvedArtist
 			} `json:"artists"`
 		} `json:"result"`
 	}
-	query := url.Values{"text": {artist.Context.Name}, "type": {"artist"}, "page": {"0"}, "nocorrect": {"false"}}
+	query := url.Values{"text": {input.Name}, "type": {"artist"}, "page": {"0"}, "nocorrect": {"false"}}
 	if _, err := s.http.getJSON(ctx, "/search", query, nil, &search); err != nil {
 		return nil, fmt.Errorf("yandex artist search unavailable")
 	}
@@ -67,20 +79,33 @@ func (s *YandexBiographySource) Fetch(ctx context.Context, artist ResolvedArtist
 				} `json:"albums"`
 			} `json:"result"`
 		}
-		albumQuery := url.Values{"page": {"0"}, "page-size": {"30"}, "sort-by": {"year"}}
+		albumQuery := url.Values{"page": {"0"}, "page-size": {"100"}, "sort-by": {"year"}}
 		if _, err := s.http.getJSON(ctx, "/artists/"+id+"/direct-albums", albumQuery, nil, &albums); err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			continue
 		}
-		if len(albums.Result.Albums) > MaxIdentityAlbums {
-			albums.Result.Albums = albums.Result.Albums[:MaxIdentityAlbums]
-		}
 		for _, album := range albums.Result.Albums {
-			candidate.Albums = append(candidate.Albums, IdentityRelease{Title: album.Title, Year: album.Year})
+			for _, local := range input.Albums {
+				if normalizeIdentityText(album.Title) == normalizeIdentityText(local.Title) {
+					candidate.Albums = append(candidate.Albums, IdentityRelease{Title: album.Title, Year: album.Year})
+					break
+				}
+			}
 		}
 		candidates = append(candidates, candidate)
+	}
+	return candidates, nil
+}
+
+func (s *YandexBiographySource) Fetch(ctx context.Context, artist ResolvedArtist) (*BiographySourceResult, error) {
+	if artist.Identity.Provider == ProviderYandexMusic && artist.Identity.ProviderArtistID != "" {
+		return s.fetchDescription(ctx, artist.Identity.ProviderArtistID, artist.Identity.Confidence, artist.Identity.EvidenceCodes)
+	}
+	candidates, err := s.FindIdentityCandidates(ctx, artist.Context)
+	if err != nil {
+		return nil, err
 	}
 	resolution := ResolveIdentityDeterministically(artist.Context, candidates)
 	if resolution.Status != ResolutionResolved || resolution.Provider != ProviderYandexMusic || resolution.Confidence < AutoResolveConfidence {
@@ -90,17 +115,23 @@ func (s *YandexBiographySource) Fetch(ctx context.Context, artist ResolvedArtist
 }
 
 func (s *YandexBiographySource) fetchDescription(ctx context.Context, id string, confidence float64, evidence []string) (*BiographySourceResult, error) {
-	type briefResponse struct {
-		Result struct {
-			Artist struct {
-				ID          json.RawMessage `json:"id"`
-				Description struct {
-					Text string `json:"text"`
-				} `json:"description"`
-			} `json:"artist"`
-		} `json:"result"`
+	response, err := s.fetchBriefInfo(ctx, id)
+	if err != nil {
+		return nil, err
 	}
-	var response briefResponse
+	text := strings.TrimSpace(response.Result.Artist.Description.Text)
+	if text == "" {
+		return nil, nil
+	}
+	return &BiographySourceResult{
+		SourceArtistID: id, SourceURL: "https://music.yandex.ru/artist/" + id,
+		OriginalText: text, LanguageHint: "ru", MatchConfidence: confidence,
+		EvidenceCodes: append([]string(nil), evidence...),
+	}, nil
+}
+
+func (s *YandexBiographySource) fetchBriefInfo(ctx context.Context, id string) (yandexBriefInfo, error) {
+	var response yandexBriefInfo
 	status, err := s.http.getJSON(ctx, "/artists/"+id+"/brief-info", nil, nil, &response)
 	if err != nil && (status == http.StatusUnauthorized || status == http.StatusForbidden) && s.keys != nil {
 		leased, keyErr := s.keys.Acquire("yandex")
@@ -118,18 +149,29 @@ func (s *YandexBiographySource) fetchDescription(ctx context.Context, id string,
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("yandex artist description unavailable")
+		return yandexBriefInfo{}, fmt.Errorf("yandex artist description unavailable")
 	}
 	if boundedNumericJSONID(response.Result.Artist.ID) != id {
-		return nil, nil
+		return yandexBriefInfo{}, fmt.Errorf("yandex artist identity mismatch")
 	}
-	text := strings.TrimSpace(response.Result.Artist.Description.Text)
-	if text == "" {
-		return nil, nil
+	return response, nil
+}
+
+func (s *YandexBiographySource) ExactWikipediaLink(ctx context.Context, artist ResolvedArtist) (string, string, error) {
+	if artist.Identity.Provider != ProviderYandexMusic || !safeCatalogID(artist.Identity.ProviderArtistID) {
+		return "", "", nil
 	}
-	return &BiographySourceResult{
-		SourceArtistID: id, SourceURL: "https://music.yandex.ru/artist/" + id,
-		OriginalText: text, LanguageHint: "ru", MatchConfidence: confidence,
-		EvidenceCodes: append([]string(nil), evidence...),
-	}, nil
+	id := artist.Identity.ProviderArtistID
+	response, err := s.fetchBriefInfo(ctx, id)
+	if err != nil {
+		return "", "", err
+	}
+	linked, err := url.Parse(strings.TrimSpace(response.Result.Artist.EnWikipediaLink))
+	if err != nil || !strings.EqualFold(linked.Hostname(), "en.wikipedia.org") || !strings.HasPrefix(linked.Path, "/wiki/") {
+		return "", "", nil
+	}
+	linked.Scheme = "https"
+	linked.Host = "en.wikipedia.org"
+	linked.RawQuery, linked.Fragment, linked.User = "", "", nil
+	return linked.String(), "yandex:" + id, nil
 }

@@ -19,6 +19,15 @@ type fakeArtistLinks struct {
 	err   error
 }
 
+type fakeRegionalWikipediaLink struct {
+	rawURL   string
+	sourceID string
+}
+
+func (f fakeRegionalWikipediaLink) ExactWikipediaLink(context.Context, ResolvedArtist) (string, string, error) {
+	return f.rawURL, f.sourceID, nil
+}
+
 func (f fakeArtistLinks) LookupArtistLinks(context.Context, string) (*metadata.MBArtistLinks, error) {
 	return f.links, f.err
 }
@@ -60,6 +69,69 @@ func TestWikipediaSourceUsesExactWikidataRussianLink(t *testing.T) {
 	}
 	if result == nil || result.SourceArtistID != "Q123" || result.OriginalText != "Настоящее русское описание." || result.LanguageHint != "ru" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestWikipediaSourceFallsBackToExactForeignArticleForTranslation(t *testing.T) {
+	wikidata := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"entities":{"Q456":{"sitelinks":{"dewiki":{"title":"Phil Fuldner"}}}}}`))
+	}))
+	deWikipedia := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("titles") != "Phil Fuldner" {
+			t.Errorf("wikipedia title = %q", r.URL.Query().Get("titles"))
+		}
+		_, _ = w.Write([]byte(`{"query":{"pages":{"456":{"pageid":456,"title":"Phil Fuldner","extract":"Philipp André Fuldner ist ein deutscher DJ und Musikproduzent. Er veröffentlichte mehrere Singles und arbeitete als Moderator."}}}}`))
+	}))
+	defer wikidata.Close()
+	defer deWikipedia.Close()
+	source, err := newWikipediaSourceWithLanguages(fakeArtistLinks{links: &metadata.MBArtistLinks{
+		ArtistMBID: exactTestMBID, WikidataID: "Q456", WikipediaURL: "https://de.wikipedia.org/wiki/Phil_Fuldner",
+	}}, wikidata.URL, map[string]string{"ru": deWikipedia.URL, "de": deWikipedia.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := source.Fetch(context.Background(), exactResolvedArtist())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.SourceArtistID != "Q456" || result.LanguageHint != "de" || !strings.Contains(result.OriginalText, "Musikproduzent") || !strings.HasPrefix(result.SourceURL, "https://de.wikipedia.org/wiki/") {
+		t.Fatalf("unexpected foreign Wikipedia result: %#v", result)
+	}
+}
+
+func TestWikipediaSourceUsesRegionalCatalogExactLink(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("titles") != "Anikv" {
+			t.Errorf("title = %q", r.URL.Query().Get("titles"))
+		}
+		_, _ = w.Write([]byte(`{"query":{"pages":{"7":{"pageid":7,"title":"Anikv","extract":"Anikv is a Georgian singer and songwriter whose releases include several studio recordings and collaborations."}}}}`))
+	}))
+	defer server.Close()
+	source, err := newWikipediaSourceWithLanguages(fakeArtistLinks{links: &metadata.MBArtistLinks{}}, server.URL, map[string]string{
+		"ru": server.URL, "en": server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.regionalLinks = fakeRegionalWikipediaLink{rawURL: "https://en.wikipedia.org/wiki/Anikv", sourceID: "yandex:41075"}
+	artist := exactResolvedArtist()
+	artist.Identity.MusicBrainzID = ""
+	result, err := source.Fetch(context.Background(), artist)
+	if err != nil || result == nil || result.LanguageHint != "en" || result.SourceArtistID != "yandex:41075" ||
+		!containsString(result.EvidenceCodes, "catalog:yandex") || containsString(result.EvidenceCodes, "id:musicbrainz") {
+		t.Fatalf("regional Wikipedia fallback failed: result=%#v err=%v", result, err)
+	}
+}
+
+func TestExactWikipediaArticleRejectsLookalikeHosts(t *testing.T) {
+	for _, raw := range []string{
+		"http://de.wikipedia.org/wiki/Artist",
+		"https://wikipedia.org.evil.example/wiki/Artist",
+		"https://evil.de.wikipedia.org/wiki/Artist",
+	} {
+		if _, ok := exactWikipediaArticle(raw); ok {
+			t.Fatalf("unsafe Wikipedia URL accepted: %s", raw)
+		}
 	}
 }
 

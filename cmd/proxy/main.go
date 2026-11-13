@@ -138,9 +138,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("[FATAL] Не удалось инициализировать сбор биографий: %v", err)
 	}
-	identityResolver := artistbio.NewIdentityResolver(
-		bioStore, trackRepo, artistbio.NewMusicBrainzIdentitySource(mbClient), artistJudge,
-	)
+	var regionalIdentitySource artistbio.IdentityCandidateSource
+	for _, source := range bioSources {
+		if source.Provider() == artistbio.ProviderYandexMusic {
+			regionalIdentitySource, _ = source.(artistbio.IdentityCandidateSource)
+			break
+		}
+	}
+	identitySource := artistbio.NewFallbackIdentitySource(artistbio.NewMusicBrainzIdentitySource(mbClient), regionalIdentitySource)
+	identityResolver := artistbio.NewIdentityResolver(bioStore, trackRepo, identitySource, artistJudge)
 	bioValidator, err := artistbio.NewBiographyValidator(bioStore, ai.NewBiographyAI(llm), 4)
 	if err != nil {
 		log.Fatalf("[FATAL] Не удалось инициализировать проверку биографий: %v", err)
