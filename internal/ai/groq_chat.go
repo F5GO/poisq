@@ -49,6 +49,7 @@ type GroqChatClient struct {
 	mu           sync.Mutex
 	models       []string // отранжированные доступные модели
 	modelsLoaded time.Time
+	lastKeyID    int64
 }
 
 // NewGroqChatClient создаёт клиент. Ключи берутся из пула провайдера "groq".
@@ -209,13 +210,21 @@ func (g *GroqChatClient) GenerateText(ctx context.Context, systemPrompt, userPro
 	var lastErr error
 
 	for attempt := 1; attempt <= maxKeySwitches; attempt++ {
-		leased, err := g.keyPool.Acquire("groq")
+		g.mu.Lock()
+		excludeID := g.lastKeyID
+		g.mu.Unlock()
+
+		leased, err := g.keyPool.AcquireExcluding("groq", excludeID)
 		if err != nil {
 			if lastErr != nil {
 				return "", fmt.Errorf("%w (последняя ошибка Groq: %v)", err, lastErr)
 			}
 			return "", err
 		}
+
+		g.mu.Lock()
+		g.lastKeyID = leased.ID
+		g.mu.Unlock()
 
 		started := time.Now()
 		out, status, err := g.callModels(ctx, leased.PlainKey, systemPrompt, userPrompt, responseMimeType)

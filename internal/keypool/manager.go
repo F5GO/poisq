@@ -92,11 +92,17 @@ func (m *Manager) ListKeys() ([]db.APIKeyRecord, error) {
 
 // Acquire выбирает следующий активный ключ провайдера по алгоритму LRU и расшифровывает его в памяти.
 func (m *Manager) Acquire(provider string) (*LeasedKey, error) {
+	return m.AcquireExcluding(provider, 0)
+}
+
+// AcquireExcluding выбирает следующий активный ключ провайдера по LRU, предпочитая ключ,
+// отличный от excludeKeyID, если в пуле есть другие активные ключи.
+func (m *Manager) AcquireExcluding(provider string, excludeKeyID int64) (*LeasedKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	cleanProvider := strings.ToLower(strings.TrimSpace(provider))
-	rec, err := m.repo.AcquireLRUKey(cleanProvider, time.Now().Unix())
+	rec, err := m.repo.AcquireLRUKeyExcluding(cleanProvider, time.Now().Unix(), excludeKeyID)
 	if err != nil {
 		return nil, err
 	}
