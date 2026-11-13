@@ -96,7 +96,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	var discoveryErr error
 	if !prepared.Sufficient && p.search != nil {
 		stageStarted = time.Now()
-		if web, webErr := p.collectWebEvidence(ctx, identityContext, resolution); len(web) > 0 {
+		if web, webErr := p.collectWebEvidence(ctx, identityContext, resolution, hasRussianCatalogEvidence(prepared.Items)); len(web) > 0 {
 			evidence = append(evidence, web...)
 		} else {
 			discoveryErr = webErr
@@ -182,15 +182,25 @@ func (p *SynthesisPipeline) localContext(ctx context.Context, artist db.LibraryA
 	return bounded
 }
 
-func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity IdentityContext, resolution IdentityResolution) ([]ai.SynthesisEvidence, error) {
+func hasRussianCatalogEvidence(items []EvidenceItem) bool {
+	for _, item := range items {
+		if item.Provider == ProviderYandexMusic || strings.EqualFold(item.Language, "ru") {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity IdentityContext, resolution IdentityResolution, preferRussian bool) ([]ai.SynthesisEvidence, error) {
 	albums := make([]string, 0, min(3, len(identity.Albums)))
 	for _, album := range identity.Albums[:min(3, len(identity.Albums))] {
 		albums = append(albums, album.Title)
 	}
 	searchInput := ArtistSearchQuery{
-		ArtistID: identity.ArtistID, Name: identity.Name, MusicBrainzID: resolution.MusicBrainzID,
-		ProviderIDs: []string{string(resolution.Provider) + ":" + resolution.ProviderArtistID},
-		Albums:      albums, Tracks: identity.Tracks[:min(5, len(identity.Tracks))],
+		ArtistID: identity.ArtistID, Name: identity.Name, PreferRussian: preferRussian,
+		MusicBrainzID: resolution.MusicBrainzID,
+		ProviderIDs:   []string{string(resolution.Provider) + ":" + resolution.ProviderArtistID},
+		Albums:        albums, Tracks: identity.Tracks[:min(5, len(identity.Tracks))],
 	}
 	_, queryVersion, err := buildArtistSearchQuery(searchInput)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/F5GO/poisq/internal/httpclient"
@@ -32,6 +33,7 @@ type ArtistSearchQuery struct {
 	Name          string
 	Aliases       []string
 	Country       string
+	PreferRussian bool
 	MusicBrainzID string
 	ProviderIDs   []string
 	Albums        []string
@@ -164,35 +166,50 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 	if err != nil || leased == nil || strings.TrimSpace(leased.PlainKey) == "" {
 		return WebSearchReport{}, discoveryError("tavily_key_unavailable", err)
 	}
+	results, status, headers, err := s.searchTavilyOnce(ctx, leased.PlainKey, query, "basic", 0)
+	if err != nil {
+		if ctx.Err() != nil {
+			return WebSearchReport{}, discoveryError("tavily_timeout", ctx.Err())
+		}
+		reportSearchKeyFailure(s.keys, leased.ID, status, headers)
+		return WebSearchReport{}, err
+	}
+	if !hasEnoughSearchResults(results) && ctx.Err() == nil {
+		advResults, _, _, advErr := s.searchTavilyOnce(ctx, leased.PlainKey, query, "advanced", 3)
+		if advErr == nil && len(advResults) > 0 {
+			results = mergeSearchResults(advResults, results, maxSearchResults)
+		}
+	}
+	s.keys.ReportSuccess(leased.ID)
+	return WebSearchReport{QueryVersion: version, Results: results}, nil
+}
+
+func (s *TavilySearch) searchTavilyOnce(ctx context.Context, apiKey, query, depth string, chunksPerSource int) ([]WebSearchResult, int, http.Header, error) {
 	payload, err := json.Marshal(struct {
 		Query             string `json:"query"`
 		SearchDepth       string `json:"search_depth"`
+		ChunksPerSource   int    `json:"chunks_per_source,omitempty"`
 		MaxResults        int    `json:"max_results"`
 		IncludeAnswer     bool   `json:"include_answer"`
 		IncludeRawContent bool   `json:"include_raw_content"`
-	}{query, "basic", tavilyFetchResults, false, false})
+	}{query, depth, chunksPerSource, tavilyFetchResults, false, false})
 	if err != nil {
-		return WebSearchReport{}, discoveryError("tavily_encode_failed", err)
+		return nil, 0, nil, discoveryError("tavily_encode_failed", err)
 	}
 	body, status, headers, requestErr := s.client.DoWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint.String(), bytes.NewReader(payload))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Accept", "application/json")
-			req.Header.Set("Authorization", "Bearer "+leased.PlainKey)
+			req.Header.Set("Authorization", "Bearer "+apiKey)
 		}
 		return req, err
 	})
 	if requestErr != nil {
-		if ctx.Err() != nil {
-			return WebSearchReport{}, discoveryError("tavily_timeout", ctx.Err())
-		}
-		reportSearchKeyFailure(s.keys, leased.ID, status, headers)
-		return WebSearchReport{}, discoveryError("tavily_transport", requestErr)
+		return nil, status, headers, discoveryError("tavily_transport", requestErr)
 	}
 	if status < 200 || status >= 300 {
-		reportSearchKeyFailure(s.keys, leased.ID, status, headers)
-		return WebSearchReport{}, discoveryError(fmt.Sprintf("tavily_http_%d", status), nil)
+		return nil, status, headers, discoveryError(fmt.Sprintf("tavily_http_%d", status), nil)
 	}
 	var response struct {
 		Results []struct {
@@ -203,10 +220,14 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		return WebSearchReport{}, discoveryError("tavily_malformed_response", err)
+		return nil, status, headers, discoveryError("tavily_malformed_response", err)
 	}
 	results := make([]WebSearchResult, 0, min(maxSearchResults, len(response.Results)))
 	seen := make(map[string]struct{}, maxSearchResults)
+	prefix := "tavily"
+	if depth == "advanced" {
+		prefix = "tavily-adv"
+	}
 	for index, result := range response.Results {
 		if len(results) >= maxSearchResults {
 			break
@@ -228,12 +249,65 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 		}
 		seen[canonical] = struct{}{}
 		results = append(results, WebSearchResult{
-			ID: fmt.Sprintf("tavily:%d", index), Title: title, URL: canonical,
+			ID: fmt.Sprintf("%s:%d", prefix, index), Title: title, URL: canonical,
 			Domain: domain, Snippet: snippet, Score: clamp01(result.Score),
 		})
 	}
-	s.keys.ReportSuccess(leased.ID)
-	return WebSearchReport{QueryVersion: version, Results: results}, nil
+	return results, status, headers, nil
+}
+
+func hasEnoughSearchResults(results []WebSearchResult) bool {
+	if len(results) < 2 {
+		return false
+	}
+	domains := make(map[string]struct{}, len(results))
+	totalRunes := 0
+	for _, r := range results {
+		domains[r.Domain] = struct{}{}
+		totalRunes += utf8.RuneCountInString(r.Snippet)
+	}
+	return len(domains) >= 2 && totalRunes >= 800
+}
+
+func mergeSearchResults(primary, fallback []WebSearchResult, limit int) []WebSearchResult {
+	out := make([]WebSearchResult, 0, limit)
+	seen := make(map[string]struct{}, limit)
+	for _, list := range [][]WebSearchResult{primary, fallback} {
+		for _, item := range list {
+			if len(out) >= limit {
+				return out
+			}
+			if _, ok := seen[item.URL]; ok {
+				continue
+			}
+			seen[item.URL] = struct{}{}
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func isRussianSearchArtist(input ArtistSearchQuery) bool {
+	if input.PreferRussian {
+		return true
+	}
+	switch strings.ToUpper(strings.TrimSpace(input.Country)) {
+	case "RU", "BY", "KZ", "UA", "RUSSIA", "РОССИЯ":
+		return true
+	}
+	for _, r := range input.Name {
+		if unicode.In(r, unicode.Cyrillic) {
+			return true
+		}
+	}
+	for _, alias := range input.Aliases {
+		for _, r := range alias {
+			if unicode.In(r, unicode.Cyrillic) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
@@ -244,7 +318,11 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		return "", "", err
 	}
 	name := strings.Join(strings.Fields(input.Name), " ")
-	parts := []string{name, "music artist biography interview"}
+	suffix := "music artist biography interview"
+	if isRussianSearchArtist(input) {
+		suffix = "музыкант биография интервью"
+	}
+	parts := []string{name, suffix}
 	var extra []string
 	appendBounded := func(values []string, limit int) {
 		for _, value := range values[:min(limit, len(values))] {
@@ -254,13 +332,16 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 			}
 		}
 	}
-	appendBounded(input.Aliases, 2)
-	appendBounded(input.Albums, 2)
-	if len(input.Albums) == 0 {
-		appendBounded(input.Tracks, 2)
+	if len(input.Aliases) > 0 {
+		aliases := append([]string(nil), input.Aliases...)
+		sort.Strings(aliases)
+		appendBounded(aliases, 1)
 	}
-	if value := strings.TrimSpace(input.Country); value != "" && len(value) <= 128 {
-		extra = append(extra, value)
+	if utf8.RuneCountInString(name) <= 5 {
+		appendBounded(input.Albums, 1)
+		if len(input.Albums) == 0 {
+			appendBounded(input.Tracks, 1)
+		}
 	}
 	sort.Strings(extra)
 	parts = append(parts, extra...)
