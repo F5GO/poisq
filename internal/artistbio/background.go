@@ -145,14 +145,17 @@ func (p *BackgroundProcessor) ProcessBatch(ctx context.Context, navDB *sql.DB) (
 				logger.Debug("[BIO] artist_id=%q identity_error=%v", artist.ID, err)
 				continue
 			}
+			localFallback := false
 			if err := p.ensureLocalLibraryFallback(ctx, identityContext, resolution); err != nil {
 				report.Failed++
 				logger.Debug("[BIO] artist_id=%q local_fallback_error=%v", artist.ID, err)
+			} else {
+				localFallback = true
 			}
 			if resolution.Status != ResolutionResolved {
 				report.Uncertain++
-				logger.Debug("[BIO] artist_id=%q artist=%q identity=uncertain confidence=%.2f ai_required=%t evidence=%v contradictions=%v",
-					artist.ID, artist.Name, resolution.Confidence, resolution.RequiresAI, resolution.EvidenceCodes, resolution.ContradictionCodes)
+				logger.Debug("[BIO] artist_id=%q artist=%q identity=uncertain confidence=%.2f ai_required=%t local_fallback=%t evidence=%v contradictions=%v",
+					artist.ID, artist.Name, resolution.Confidence, resolution.RequiresAI, localFallback, resolution.EvidenceCodes, resolution.ContradictionCodes)
 				continue
 			}
 			report.Resolved++
@@ -171,8 +174,8 @@ func (p *BackgroundProcessor) ProcessBatch(ctx context.Context, navDB *sql.DB) (
 			report.Ingested += ingestionReport.Stored
 			report.Empty += ingestionReport.Empty
 			report.Failed += ingestionReport.Failed
-			logger.Debug("[BIO] artist_id=%q artist=%q identity=resolved confidence=%.2f candidates=%d empty_sources=%d source_errors=%d", artist.ID,
-				artist.Name, resolution.Confidence, ingestionReport.Stored, ingestionReport.Empty, ingestionReport.Failed)
+			logger.Debug("[BIO] artist_id=%q artist=%q identity=resolved confidence=%.2f local_fallback=%t candidates=%d empty_sources=%d source_errors=%d", artist.ID,
+				artist.Name, resolution.Confidence, localFallback, ingestionReport.Stored, ingestionReport.Empty, ingestionReport.Failed)
 			if ingestionReport.Stored == 0 {
 				continue
 			}
@@ -256,15 +259,37 @@ func (p *BackgroundProcessor) ensureLocalLibraryFallback(ctx context.Context, ar
 }
 
 func localLibraryBiography(artist IdentityContext) string {
+	albumLimit := min(4, len(artist.Albums))
+	trackLimit := min(5, len(artist.Tracks))
+	for {
+		text := buildLocalLibraryBiography(artist, albumLimit, trackLimit)
+		analysis := DetectBiographyLanguage(text)
+		if analysis.QualityOK && analysis.Language == "ru" && analysis.Confidence >= 0.90 && analysis.RussianShare >= 0.80 {
+			return text
+		}
+		// Track titles are weaker context than album titles, so remove them
+		// first when Latin proper names would make the whole text look mixed.
+		if trackLimit > 0 {
+			trackLimit--
+			continue
+		}
+		if albumLimit > 0 {
+			albumLimit--
+			continue
+		}
+		return text
+	}
+}
+
+func buildLocalLibraryBiography(artist IdentityContext, albumLimit, trackLimit int) string {
 	name := strings.TrimSpace(artist.Name)
 	var text strings.Builder
 	text.WriteString("По метаданным медиатеки, имя «")
 	text.WriteString(name)
 	text.WriteString("» указано как исполнитель сохранённых аудиозаписей. Эта справка не содержит внешних биографических сведений и перечисляет только данные музыкальной коллекции.")
-	if len(artist.Albums) > 0 {
+	if albumLimit > 0 {
 		text.WriteString(" Сохранённые релизы: ")
-		limit := min(4, len(artist.Albums))
-		for index := 0; index < limit; index++ {
+		for index := 0; index < albumLimit; index++ {
 			if index > 0 {
 				text.WriteString(", ")
 			}
@@ -274,10 +299,9 @@ func localLibraryBiography(artist IdentityContext) string {
 		}
 		text.WriteString(".")
 	}
-	if len(artist.Tracks) > 0 {
+	if trackLimit > 0 {
 		text.WriteString(" Среди сохранённых композиций: ")
-		limit := min(5, len(artist.Tracks))
-		for index := 0; index < limit; index++ {
+		for index := 0; index < trackLimit; index++ {
 			if index > 0 {
 				text.WriteString(", ")
 			}

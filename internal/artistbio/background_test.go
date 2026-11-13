@@ -122,6 +122,24 @@ func TestBiographyBackgroundCreatesTruthfulLocalFallback(t *testing.T) {
 	}
 }
 
+func TestLocalLibraryBiographyStaysRussianWithLatinCatalog(t *testing.T) {
+	artist := IdentityContext{
+		ArtistID: "radiohead", Name: "Radiohead",
+		Albums: []IdentityRelease{
+			{Title: "Pablo Honey"}, {Title: "The Bends"}, {Title: "OK Computer"}, {Title: "Kid A"},
+		},
+		Tracks: []string{"Creep", "Karma Police", "No Surprises", "Paranoid Android", "Everything in Its Right Place"},
+	}
+	text := localLibraryBiography(artist)
+	analysis := DetectBiographyLanguage(text)
+	if !analysis.QualityOK || analysis.Language != "ru" || analysis.Confidence < 0.90 || analysis.RussianShare < 0.80 {
+		t.Fatalf("Latin catalog broke Russian fallback: text=%q analysis=%#v", text, analysis)
+	}
+	if !strings.Contains(text, "Radiohead") || !strings.Contains(text, "не содержит внешних биографических сведений") {
+		t.Fatalf("fallback lost required provenance: %q", text)
+	}
+}
+
 type fakeBackgroundIngestion struct {
 	mu    sync.Mutex
 	calls []string
