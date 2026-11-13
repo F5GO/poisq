@@ -84,8 +84,8 @@ final class AppModel {
     private var reachabilityTask: Task<Void, Never>?
     private var lastOffline = false
     /// Режим «только загруженные»: музыка берётся с устройства, сеть не нужна.
-    var downloadedOnly: Bool = UserDefaults.standard.bool(forKey: "downloadedOnly") {
-        didSet { UserDefaults.standard.set(downloadedOnly, forKey: "downloadedOnly"); applyOfflineState() }
+    var downloadedOnly = false {
+        didSet { applyOfflineState() }
     }
     /// Работаем без сервера: вручную выбрано «Загруженные» либо нет связи (и включено автопереключение).
     var offline: Bool { downloadedOnly || (autoOffline && (!network.isConnected || !serverReachable)) }
@@ -497,7 +497,7 @@ final class AppModel {
             let start = remote.songs.firstIndex { $0.id == remote.current } ?? 0
             chosen = PlayerSnapshot(songs: Array(remote.songs[start...]), position: Double(remote.positionMs) / 1000,
                                     shuffleOn: local?.shuffleOn ?? false, repeatMode: local?.repeatMode ?? .off, endless: false,
-                                    savedAt: changed)
+                                    savedAt: changed, favoriteOverrides: local?.favoriteOverrides)
         }
         guard let chosen, self.player === player else { return }       // за время запроса сервер могли сменить
         player.restore(chosen)

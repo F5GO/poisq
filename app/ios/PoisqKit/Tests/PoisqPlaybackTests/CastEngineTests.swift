@@ -113,10 +113,50 @@ final class CastStub: URLProtocol, @unchecked Sendable {
         await waitForRequests(3)
     }
 
+    @Test func seekHoldsCounterUntilSpeakerRestarts() async throws {
+        CastStub.seen = []
+        let c = client()
+        let engine = CastEngine(client: c, zone: "kitchen", pollInterval: .seconds(60))
+        engine.play(try c.streamURL(for: Song(id: "a", title: "A")))
+        await waitForRequests(1)
+        engine.apply(.init(state: "playing", index: 0, position: 40, volume: 20))
+        engine.seek(to: 1.6)
+        await waitForRequests(2)
+        let calls = CastStub.seen.filter { !$0.path.hasSuffix("poisqCastStatus") }
+        #expect(query(calls[1])["action"] == ["seek"] && query(calls[1])["position"] == ["1"])
+        engine.apply(.init(state: "playing", index: 0, position: 41, volume: 20))   // колонка ещё не перезапустилась
+        #expect(engine.progress < 2)
+        engine.apply(.init(state: "playing", index: 0, position: 0.5, volume: 20))  // перезапустилась
+        #expect(engine.progress < 2)
+        engine.apply(.init(state: "playing", index: 0, position: 30, volume: 20))   // дальше снова верим колонке
+        #expect(engine.progress >= 30)
+        engine.stop()
+        await waitForRequests(4)
+    }
+
     @Test func zonesParseAndCapabilityNeedsPoisq() async throws {
         CastStub.body = #"{"subsonic-response":{"status":"ok","castZones":[{"id":"k","name":"Кухня","state":"playing","volume":40}]}}"#
         defer { CastStub.body = #"{"subsonic-response":{"status":"ok"}}"# }
         let zones = try await client().castZones()
         #expect(zones == [SubsonicClient.CastZone(id: "k", name: "Кухня", state: "playing", volume: 40)])
+    }
+
+    @Test func removedFavoriteSurvivesRestoredQueue() async throws {
+        CastStub.seen = []
+        let c = client()
+        let song = Song(id: "favorite", title: "Favorite", starred: "2026-01-01T00:00:00Z")
+        let first = Player(client: c, engine: CastEngine(client: c, zone: "first", pollInterval: .seconds(60)))
+        first.restore(PlayerSnapshot(songs: [song], position: 0, shuffleOn: false, repeatMode: .off, endless: false))
+        #expect(first.isFavorite(song))
+
+        await first.toggleFavorite(song)
+        #expect(!first.isFavorite(song))
+        let snapshot = try #require(first.snapshot())
+
+        let restored = Player(client: c, engine: CastEngine(client: c, zone: "restored", pollInterval: .seconds(60)))
+        restored.restore(snapshot)
+        #expect(!restored.isFavorite(song))
+        first.stop()
+        restored.stop()
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import PoisqCore
 
 /// Закреплённый на главной альбом или плейлист.
@@ -30,6 +31,16 @@ final class PinStore {
     }
     func toggle(playlist: Playlist) {
         if let i = pins.firstIndex(where: { $0.playlist?.id == playlist.id }) { pins.remove(at: i) } else { pins.append(Pin(playlist: playlist)) }
+        save()
+    }
+
+    func move(from offsets: IndexSet, to destination: Int) {
+        pins.move(fromOffsets: offsets, toOffset: destination)
+        save()
+    }
+
+    func remove(at offsets: IndexSet) {
+        pins.remove(atOffsets: offsets)
         save()
     }
 

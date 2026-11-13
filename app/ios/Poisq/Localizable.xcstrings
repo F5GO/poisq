@@ -388,6 +388,16 @@
         }
       }
     },
+    "Always Shown": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показываются всегда"
+          }
+        }
+      }
+    },
     "Alternate address": {
       "extractionState": "stale",
       "localizations": {
@@ -405,6 +415,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Запасные адреса"
+          }
+        }
+      }
+    },
+    "Appearance": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оформление"
           }
         }
       }
@@ -673,6 +693,16 @@
         }
       }
     },
+    "Choose which actions appear on Home and arrange their order.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите действия для главной и настройте их порядок."
+          }
+        }
+      }
+    },
     "Classical": {
       "extractionState": "stale",
       "localizations": {
@@ -738,12 +768,62 @@
         }
       }
     },
+    "Configure Quick Access": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроить быстрый доступ"
+          }
+        }
+      }
+    },
+    "Configure Quick Actions": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроить быстрые действия"
+          }
+        }
+      }
+    },
     "Connection": {
       "localizations": {
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Подключение"
+          }
+        }
+      }
+    },
+    "Content": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Содержимое"
+          }
+        }
+      }
+    },
+    "Continuous Playback": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Непрерывное воспроизведение"
+          }
+        }
+      }
+    },
+    "Continue": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Продолжить"
           }
         }
       }
@@ -889,6 +969,16 @@
         }
       }
     },
+    "Customize Tab Bar": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроить нижнее меню"
+          }
+        }
+      }
+    },
     "Dance": {
       "extractionState": "stale",
       "localizations": {
@@ -962,6 +1052,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Удалить этот подкаст с сервера?"
+          }
+        }
+      }
+    },
+    "Display Mode": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Режим отображения"
           }
         }
       }
@@ -1744,6 +1844,16 @@
         }
       }
     },
+    "More Buttons": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другие кнопки"
+          }
+        }
+      }
+    },
     "Most Albums": {
       "extractionState": "stale",
       "localizations": {
@@ -2028,6 +2138,26 @@
         }
       }
     },
+    "Number of Cards": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Количество карточек"
+          }
+        }
+      }
+    },
+    "Number of Items": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Количество элементов"
+          }
+        }
+      }
+    },
     "Now Playing": {
       "extractionState": "stale",
       "localizations": {
@@ -2208,6 +2338,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Закреплённое"
+          }
+        }
+      }
+    },
+    "Pin albums and playlists from their menus.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Закрепляйте альбомы и плейлисты через их меню."
+          }
+        }
+      }
+    },
+    "Pinned Items": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Закреплённые элементы"
           }
         }
       }
@@ -2419,6 +2569,26 @@
         }
       }
     },
+    "Quick Actions": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Быстрые действия"
+          }
+        }
+      }
+    },
+    "Quick Access": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Быстрый доступ"
+          }
+        }
+      }
+    },
     "Quality": {
       "extractionState": "stale",
       "localizations": {
@@ -2495,6 +2665,16 @@
         }
       }
     },
+    "Random Album": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Случайный альбом"
+          }
+        }
+      }
+    },
     "Random Songs": {
       "extractionState": "stale",
       "localizations": {
@@ -2567,6 +2747,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Недавно прослушанные"
+          }
+        }
+      }
+    },
+    "Recently Played Albums": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Недавно прослушанные альбомы"
           }
         }
       }
@@ -2911,6 +3101,16 @@
         }
       }
     },
+    "Sections": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разделы"
+          }
+        }
+      }
+    },
     "Server": {
       "extractionState": "stale",
       "localizations": {
@@ -3027,6 +3227,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Свернуть"
+          }
+        }
+      }
+    },
+    "Shown": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показаны"
           }
         }
       }
@@ -3693,16 +3903,6 @@
         }
       }
     },
-    "AirPlay or Bluetooth device": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Устройство AirPlay или Bluetooth"
-          }
-        }
-      }
-    },
     "Speakers": {
       "localizations": {
         "ru": {
@@ -3739,6 +3939,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Играет: %@"
+          }
+        }
+      }
+    },
+    "When Continuous Playback is off, an album or playlist stops after its last track. Lower quality uses less data. The cache saves songs in this quality too. Listening is reported to the server (history, play counts) and the queue is saved there so you can continue on another device. Sound Check evens out loudness using ReplayGain data from the server, if it has any.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Если непрерывное воспроизведение выключено, альбом или плейлист остановится после последнего трека. Низкое качество расходует меньше трафика и также используется для кеша. Прослушивания и очередь могут синхронизироваться с сервером. Выравнивание громкости использует данные ReplayGain, если они доступны."
           }
         }
       }

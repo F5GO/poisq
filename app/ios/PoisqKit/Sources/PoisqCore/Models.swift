@@ -88,12 +88,15 @@ public struct Album: Identifiable, Hashable, Sendable, Codable {
     public let id: String
     public let name: String
     public let artist: String?
+    public let artistId: String?
+    /// Все исполнители альбома с их id (OpenSubsonic).
+    public let artists: [Artist]?
     public let coverArt: String?
     public let songCount: Int?
     public let year: Int?
 
-    public init(id: String, name: String, artist: String? = nil, coverArt: String? = nil, songCount: Int? = nil, year: Int? = nil) {
-        self.id = id; self.name = name; self.artist = artist; self.coverArt = coverArt
+    public init(id: String, name: String, artist: String? = nil, artistId: String? = nil, artists: [Artist]? = nil, coverArt: String? = nil, songCount: Int? = nil, year: Int? = nil) {
+        self.id = id; self.name = name; self.artist = artist; self.artistId = artistId; self.artists = artists; self.coverArt = coverArt
         self.songCount = songCount; self.year = year
     }
 }

@@ -200,16 +200,17 @@ final class CarPlayController: NSObject, CPNowPlayingTemplateObserver {
 
     // MARK: CPNowPlayingTemplateObserver
 
-    /// Кнопка «Далее» (очередь): показываем предстоящие треки, нажатие — переход к треку.
+    /// Кнопка «Далее» (очередь): текущий трек всегда первый, затем предстоящие.
     nonisolated func nowPlayingTemplateUpNextButtonTapped(_ nowPlayingTemplate: CPNowPlayingTemplate) {
         Task { @MainActor [weak self] in
             guard let self, let player = model.player else { return }
-            let upcoming = Array(player.upcoming.prefix(CPListTemplate.maximumItemCount))
-            let items = upcoming.enumerated().map { index, song -> CPListItem in
+            let queue = Array(player.queue.prefix(CPListTemplate.maximumItemCount))
+            let items = queue.enumerated().map { index, song -> CPListItem in
                 let item = CPListItem(text: song.title, detailText: song.displayArtist)
+                item.isPlaying = index == 0
                 setCover(song.coverArt, on: item)
                 item.handler = { [weak self] _, done in
-                    player.jump(toUpcoming: index)
+                    if index > 0 { player.jump(toUpcoming: index - 1) }
                     self?.interface.popTemplate(animated: true, completion: nil)
                     done()
                 }

@@ -116,22 +116,18 @@ struct SongsFeed: View {
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(Array(feed.songs.enumerated()), id: \.element.id) { index, song in
                 let isCurrent = model.player?.current?.id == song.id
-                Button {
+                HStack(spacing: 8) {
+                    PlayableSongRow(song: song, highlighted: isCurrent) {
                     if let player = model.player { feed.start(at: index, player: player, app: model, order: order) }
-                } label: {
-                    HStack(spacing: 8) {
-                        MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.displayArtist, highlighted: isCurrent)
-                        Spacer(minLength: 0)
-                        if isCurrent {
-                            Image(systemName: "waveform").foregroundStyle(.tint)
-                                .symbolEffect(.variableColor.iterative, isActive: model.player?.isPlaying == true)
-                        }
                     }
-                    .padding(.horizontal, 20).padding(.vertical, 6)
-                    .background(isCurrent ? Color.accentColor.opacity(0.10) : .clear)
-                    .contentShape(.rect)       // нажимается вся строка, а не только название
+                    Spacer(minLength: 0)
+                    if isCurrent {
+                        Image(systemName: "waveform").foregroundStyle(.tint)
+                            .symbolEffect(.variableColor.iterative, isActive: model.player?.isPlaying == true)
+                    }
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 20).padding(.vertical, 6)
+                .background(isCurrent ? Color.accentColor.opacity(0.10) : .clear)
                 .songMenu(song)
                 .onAppear { if index >= feed.songs.count - 12 { Task { await feed.loadMore(app: model, order: order) } } }
             }
