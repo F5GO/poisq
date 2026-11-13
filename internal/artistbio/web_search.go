@@ -57,6 +57,19 @@ type TavilySearch struct {
 	keys     biographyKeyPool
 }
 
+type safeDiscoveryError struct {
+	reason string
+	cause  error
+}
+
+func (e *safeDiscoveryError) Error() string      { return e.reason }
+func (e *safeDiscoveryError) Unwrap() error      { return e.cause }
+func (e *safeDiscoveryError) SafeReason() string { return e.reason }
+
+func discoveryError(reason string, cause error) error {
+	return &safeDiscoveryError{reason: reason, cause: cause}
+}
+
 func (s *Store) PutWebSearchCache(ctx context.Context, artistID, queryVersion string, results []WebSearchResult, expiresAt time.Time) error {
 	if err := validateRequired("artist id", artistID, MaxProviderIDBytes); err != nil {
 		return err
@@ -148,37 +161,37 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 	}
 	leased, err := s.keys.Acquire(tavilyKeyProvider)
 	if err != nil || leased == nil || strings.TrimSpace(leased.PlainKey) == "" {
-		return WebSearchReport{}, fmt.Errorf("tavily key is unavailable")
+		return WebSearchReport{}, discoveryError("tavily_key_unavailable", err)
 	}
 	payload, err := json.Marshal(struct {
-		APIKey            string `json:"api_key"`
 		Query             string `json:"query"`
 		SearchDepth       string `json:"search_depth"`
 		MaxResults        int    `json:"max_results"`
 		IncludeAnswer     bool   `json:"include_answer"`
 		IncludeRawContent bool   `json:"include_raw_content"`
-	}{leased.PlainKey, query, "basic", maxSearchResults, false, false})
+	}{query, "basic", maxSearchResults, false, false})
 	if err != nil {
-		return WebSearchReport{}, fmt.Errorf("encode tavily request")
+		return WebSearchReport{}, discoveryError("tavily_encode_failed", err)
 	}
 	body, status, headers, requestErr := s.client.DoWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint.String(), bytes.NewReader(payload))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Accept", "application/json")
+			req.Header.Set("Authorization", "Bearer "+leased.PlainKey)
 		}
 		return req, err
 	})
 	if requestErr != nil {
 		if ctx.Err() != nil {
-			return WebSearchReport{}, ctx.Err()
+			return WebSearchReport{}, discoveryError("tavily_timeout", ctx.Err())
 		}
 		reportSearchKeyFailure(s.keys, leased.ID, status, headers)
-		return WebSearchReport{}, fmt.Errorf("tavily request failed")
+		return WebSearchReport{}, discoveryError("tavily_transport", requestErr)
 	}
 	if status < 200 || status >= 300 {
 		reportSearchKeyFailure(s.keys, leased.ID, status, headers)
-		return WebSearchReport{}, fmt.Errorf("tavily returned HTTP %d", status)
+		return WebSearchReport{}, discoveryError(fmt.Sprintf("tavily_http_%d", status), nil)
 	}
 	var response struct {
 		Results []struct {
@@ -189,7 +202,7 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		return WebSearchReport{}, fmt.Errorf("tavily returned malformed json")
+		return WebSearchReport{}, discoveryError("tavily_malformed_response", err)
 	}
 	results := make([]WebSearchResult, 0, min(maxSearchResults, len(response.Results)))
 	seen := make(map[string]struct{}, maxSearchResults)

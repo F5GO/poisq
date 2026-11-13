@@ -34,7 +34,7 @@ func TestTavilySearchBoundsAndFiltersResults(t *testing.T) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		var request map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request["api_key"] != "secret-tavily-key" || request["search_depth"] != "basic" || request["include_raw_content"] != false {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || r.Header.Get("Authorization") != "Bearer secret-tavily-key" || request["api_key"] != nil || request["search_depth"] != "basic" || request["include_raw_content"] != false {
 			t.Fatalf("unsafe request payload: %#v err=%v", request, err)
 		}
 		_, _ = w.Write([]byte(`{"results":[
@@ -51,6 +51,23 @@ func TestTavilySearchBoundsAndFiltersResults(t *testing.T) {
 	report, err := search.Search(context.Background(), ArtistSearchQuery{ArtistID: "artist", Name: "Artist", Albums: []string{"Album"}, Tracks: []string{"Track"}})
 	if err != nil || len(report.Results) != 1 || report.Results[0].Domain != "artist.example" || keys.success != 1 {
 		t.Fatalf("report=%#v keys=%#v err=%v", report, keys, err)
+	}
+}
+
+func TestTavilySearchReturnsSafeHTTPReason(t *testing.T) {
+	keys := &fakeSearchKeys{key: &keypool.LeasedKey{ID: 7, PlainKey: "invalid-key"}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"detail":"must never be logged"}`))
+	}))
+	defer server.Close()
+	search, err := newTavilySearch(server.URL, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = search.Search(context.Background(), ArtistSearchQuery{ArtistID: "artist", Name: "Artist"})
+	if err == nil || safePipelineErrorReason(err) != "tavily_http_401" || strings.Contains(err.Error(), "must never be logged") || keys.invalid != 1 {
+		t.Fatalf("unexpected safe error: %v reason=%q keys=%#v", err, safePipelineErrorReason(err), keys)
 	}
 }
 
