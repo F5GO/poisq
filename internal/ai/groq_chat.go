@@ -188,10 +188,11 @@ type groqChatMessage struct {
 }
 
 type groqChatRequest struct {
-	Model          string            `json:"model"`
-	Messages       []groqChatMessage `json:"messages"`
-	Temperature    float64           `json:"temperature"`
-	ResponseFormat map[string]string `json:"response_format,omitempty"`
+	Model           string            `json:"model"`
+	Messages        []groqChatMessage `json:"messages"`
+	Temperature     float64           `json:"temperature"`
+	ResponseFormat  map[string]string `json:"response_format,omitempty"`
+	ReasoningFormat string            `json:"reasoning_format,omitempty"`
 }
 
 type groqChatResponse struct {
@@ -293,7 +294,7 @@ func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, m
 	return "", lastStatus, lastErr
 }
 
-func (g *GroqChatClient) callOnce(ctx context.Context, model, apiKey, system, user, mime string) (string, int, error) {
+func buildGroqChatRequest(model, system, user, mime string) groqChatRequest {
 	reqBody := groqChatRequest{
 		Model: model,
 		Messages: []groqChatMessage{
@@ -304,7 +305,43 @@ func (g *GroqChatClient) callOnce(ctx context.Context, model, apiKey, system, us
 	}
 	if strings.Contains(strings.ToLower(mime), "json") {
 		reqBody.ResponseFormat = map[string]string{"type": "json_object"}
+		if strings.Contains(strings.ToLower(model), "qwen") {
+			// Qwen3 reasoning models emit <think>...</think> into content unless parsed reasoning is requested.
+			reqBody.ReasoningFormat = "parsed"
+		}
 	}
+	return reqBody
+}
+
+func extractGroqAPIError(body []byte) string {
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	if code := strings.TrimSpace(parsed.Error.Code); code != "" {
+		parts = append(parts, code)
+	}
+	if typ := strings.TrimSpace(parsed.Error.Type); typ != "" && typ != parsed.Error.Code {
+		parts = append(parts, typ)
+	}
+	if msg := strings.TrimSpace(parsed.Error.Message); msg != "" {
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		parts = append(parts, msg)
+	}
+	return strings.Join(parts, ": ")
+}
+
+func (g *GroqChatClient) callOnce(ctx context.Context, model, apiKey, system, user, mime string) (string, int, error) {
+	reqBody := buildGroqChatRequest(model, system, user, mime)
 	b, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", 0, err
@@ -331,6 +368,9 @@ func (g *GroqChatClient) callOnce(ctx context.Context, model, apiKey, system, us
 		return "", resp.StatusCode, err
 	}
 	if resp.StatusCode != http.StatusOK {
+		if detail := extractGroqAPIError(body); detail != "" {
+			return "", resp.StatusCode, fmt.Errorf("Groq LLM HTTP %d (%s): %s", resp.StatusCode, model, detail)
+		}
 		return "", resp.StatusCode, fmt.Errorf("Groq LLM HTTP %d (%s)", resp.StatusCode, model)
 	}
 
