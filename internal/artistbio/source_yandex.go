@@ -94,6 +94,28 @@ func (s *YandexBiographySource) FindIdentityCandidates(ctx context.Context, inpu
 				}
 			}
 		}
+		if len(candidate.Albums) == 0 && len(input.Tracks) > 0 {
+			var tracks struct {
+				Result struct {
+					Tracks []struct {
+						Title string `json:"title"`
+					} `json:"tracks"`
+				} `json:"result"`
+			}
+			trackQuery := url.Values{"page": {"0"}, "page-size": {"100"}}
+			if _, err := s.http.getJSON(ctx, "/artists/"+id+"/tracks", trackQuery, nil, &tracks); err == nil {
+				for _, track := range tracks.Result.Tracks {
+					for _, local := range input.Tracks {
+						if normalizeIdentityText(track.Title) == normalizeIdentityText(local) {
+							candidate.Tracks = append(candidate.Tracks, track.Title)
+							break
+						}
+					}
+				}
+			} else if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+		}
 		candidates = append(candidates, candidate)
 	}
 	return candidates, nil

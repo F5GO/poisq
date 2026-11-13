@@ -3,6 +3,7 @@ package artistbio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -106,6 +107,13 @@ func (v *BiographyValidator) validateOnce(ctx context.Context, artistID string) 
 		report.Scanned++
 		outcome, err := v.validateCandidate(ctx, candidate)
 		if err != nil {
+			// A user-triggered cache reset may delete a fetched candidate while
+			// its bounded AI translation is in flight. This is a benign race: the
+			// next background pass rebuilds it from the source.
+			if errors.Is(err, ErrCandidateNotFound) {
+				report.Skipped++
+				continue
+			}
 			return report, err
 		}
 		switch outcome {
