@@ -29,14 +29,20 @@ func (f *fakeSearchKeys) ReportInvalid(int64, int, string)           { f.invalid
 
 func TestTavilySearchBoundsAndFiltersResults(t *testing.T) {
 	keys := &fakeSearchKeys{key: &keypool.LeasedKey{ID: 7, PlainKey: "secret-tavily-key"}}
+	var depths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/search" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		var request map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || r.Header.Get("Authorization") != "Bearer secret-tavily-key" || request["api_key"] != nil || request["search_depth"] != "basic" || request["include_raw_content"] != false {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || r.Header.Get("Authorization") != "Bearer secret-tavily-key" || request["api_key"] != nil || request["include_raw_content"] != false {
 			t.Fatalf("unsafe request payload: %#v err=%v", request, err)
 		}
+		depth, _ := request["search_depth"].(string)
+		if depth != "basic" && depth != "advanced" {
+			t.Fatalf("unexpected search_depth: %q", depth)
+		}
+		depths = append(depths, depth)
 		_, _ = w.Write([]byte(`{"results":[
 			{"title":"Official biography","url":"https://artist.example/bio","content":"A sufficiently detailed factual snippet about the music artist, releases, performances, and career history.","score":0.9},
 			{"title":"Private","url":"https://127.0.0.1/admin","content":"A sufficiently long private-network result that must never be accepted as public evidence.","score":1},
@@ -51,6 +57,9 @@ func TestTavilySearchBoundsAndFiltersResults(t *testing.T) {
 	report, err := search.Search(context.Background(), ArtistSearchQuery{ArtistID: "artist", Name: "Artist", Albums: []string{"Album"}, Tracks: []string{"Track"}})
 	if err != nil || len(report.Results) != 1 || report.Results[0].Domain != "artist.example" || keys.success != 1 {
 		t.Fatalf("report=%#v keys=%#v err=%v", report, keys, err)
+	}
+	if len(depths) != 2 || depths[0] != "basic" || depths[1] != "advanced" {
+		t.Fatalf("expected basic then advanced fallback, got depths=%v", depths)
 	}
 }
 
@@ -114,5 +123,20 @@ func TestWebSearchCacheExpiresAndForceRebuildInvalidates(t *testing.T) {
 	}
 	if _, found, err := store.WebSearchCache(ctx, "artist", "version", now); err != nil || found {
 		t.Fatalf("force rebuild retained cache: found=%v err=%v", found, err)
+	}
+}
+
+func TestRussianSearchQueryAdaptation(t *testing.T) {
+	ruByCatalog, _, err := buildArtistSearchQuery(ArtistSearchQuery{ArtistID: "1", Name: "Biicla", PreferRussian: true})
+	if err != nil || !strings.Contains(ruByCatalog, "музыкант биография интервью") {
+		t.Fatalf("expected Russian query for PreferRussian, got %q err=%v", ruByCatalog, err)
+	}
+	ruByCyrillic, _, err := buildArtistSearchQuery(ArtistSearchQuery{ArtistID: "2", Name: "Кино"})
+	if err != nil || !strings.Contains(ruByCyrillic, "музыкант биография интервью") {
+		t.Fatalf("expected Russian query for Cyrillic name, got %q err=%v", ruByCyrillic, err)
+	}
+	enQuery, _, err := buildArtistSearchQuery(ArtistSearchQuery{ArtistID: "3", Name: "Daft Punk"})
+	if err != nil || !strings.Contains(enQuery, "music artist biography interview") {
+		t.Fatalf("expected English query, got %q err=%v", enQuery, err)
 	}
 }
