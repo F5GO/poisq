@@ -35,7 +35,7 @@ type SynthesisEvidence struct {
 type SearchEvidenceInput struct {
 	ID      string `json:"id"`
 	Title   string `json:"title"`
-	URL     string `json:"url"`
+	URL     string `json:"-"`
 	Domain  string `json:"domain"`
 	Snippet string `json:"snippet"`
 }
@@ -74,11 +74,17 @@ func (b *BiographySynthesisAI) Collect(ctx context.Context, identityJSON json.Ra
 	if b == nil || b.gen == nil || len(results) == 0 || len(results) > 10 || len(identityJSON) > 2<<10 || !json.Valid(identityJSON) {
 		return nil, fmt.Errorf("invalid biography collector input")
 	}
-	allowed := make(map[string]struct{}, len(results))
 	for _, result := range results {
 		if err := validateSynthesisID(result.ID); err != nil || strings.TrimSpace(result.URL) == "" || len(result.Snippet) > 2<<10 {
 			return nil, fmt.Errorf("invalid biography collector input")
 		}
+	}
+	results = fitCollectorResults(identityJSON, results)
+	if len(results) == 0 {
+		return nil, fmt.Errorf("biography collector input exceeds limit")
+	}
+	allowed := make(map[string]struct{}, len(results))
+	for _, result := range results {
 		allowed[result.ID] = struct{}{}
 	}
 	payload, err := json.Marshal(struct {
@@ -122,6 +128,53 @@ func (b *BiographySynthesisAI) Collect(ctx context.Context, identityJSON json.Ra
 		cards = append(cards, CollectedEvidence{card.ID, card.ResultID, strings.TrimSpace(card.Fact), card.Language})
 	}
 	return cards, nil
+}
+
+func fitCollectorResults(identityJSON json.RawMessage, input []SearchEvidenceInput) []SearchEvidenceInput {
+	bounded := make([]SearchEvidenceInput, 0, min(len(input), 6))
+	for _, original := range input[:min(len(input), 6)] {
+		candidate := original
+		candidate.Title = truncateSynthesisBytes(strings.TrimSpace(candidate.Title), 160)
+		candidate.Snippet = truncateSynthesisBytes(strings.TrimSpace(candidate.Snippet), 600)
+		if candidate.Title == "" || candidate.Snippet == "" {
+			continue
+		}
+		trial := append(append([]SearchEvidenceInput(nil), bounded...), candidate)
+		payload, _ := marshalCollectorPayload(identityJSON, trial)
+		if len(payload) > maxCollectorPayload {
+			withoutSnippet := candidate
+			withoutSnippet.Snippet = ""
+			base, _ := marshalCollectorPayload(identityJSON, append(append([]SearchEvidenceInput(nil), bounded...), withoutSnippet))
+			candidate.Snippet = truncateSynthesisBytes(candidate.Snippet, maxCollectorPayload-len(base))
+			if len(candidate.Snippet) < 160 {
+				continue
+			}
+		}
+		bounded = append(bounded, candidate)
+	}
+	return bounded
+}
+
+func marshalCollectorPayload(identityJSON json.RawMessage, results []SearchEvidenceInput) ([]byte, error) {
+	return json.Marshal(struct {
+		Identity json.RawMessage       `json:"identity"`
+		Results  []SearchEvidenceInput `json:"results"`
+	}{identityJSON, results})
+}
+
+func truncateSynthesisBytes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	value = string([]byte(value)[:limit])
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return strings.TrimSpace(value)
 }
 
 func (b *BiographySynthesisAI) Edit(ctx context.Context, evidence []SynthesisEvidence) (BiographySummary, error) {
