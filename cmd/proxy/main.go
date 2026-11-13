@@ -22,6 +22,7 @@ import (
 	"github.com/F5GO/poisq/internal/admin"
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/aligner"
+	"github.com/F5GO/poisq/internal/artistbio"
 	"github.com/F5GO/poisq/internal/cast"
 	"github.com/F5GO/poisq/internal/config"
 	"github.com/F5GO/poisq/internal/db"
@@ -120,10 +121,35 @@ func main() {
 	groqWhisper := ai.NewGroqWhisperClient(keyPoolMgr)
 	karaokePipeline := ai.NewKaraokePipeline(audioTranscoder, groqWhisper, llm)
 	tournament.SetQueryExpander(ai.NewLLMQueryExpander(llm, db.NewAliasCacheRepository(poisqDB)))
-	tournament.SetArtistJudge(ai.NewLLMArtistJudge(llm))
+	artistJudge := ai.NewLLMArtistJudge(llm)
+	tournament.SetArtistJudge(artistJudge)
 
 	mbClient := metadata.NewMusicBrainzClient()
 	tournament.SetArtistAliasSource(mbClient)
+	bioStore, err := artistbio.NewStore(poisqDB)
+	if err != nil {
+		log.Fatalf("[FATAL] Не удалось инициализировать хранилище биографий: %v", err)
+	}
+	bioSources, err := artistbio.NewDefaultBiographySources(mbClient, keyPoolMgr)
+	if err != nil {
+		log.Fatalf("[FATAL] Не удалось инициализировать источники биографий: %v", err)
+	}
+	bioIngestion, err := artistbio.NewIngestionService(bioStore, bioSources, 8)
+	if err != nil {
+		log.Fatalf("[FATAL] Не удалось инициализировать сбор биографий: %v", err)
+	}
+	identityResolver := artistbio.NewIdentityResolver(
+		bioStore, trackRepo, artistbio.NewMusicBrainzIdentitySource(mbClient), artistJudge,
+	)
+	bioValidator, err := artistbio.NewBiographyValidator(bioStore, ai.NewBiographyAI(llm), 4)
+	if err != nil {
+		log.Fatalf("[FATAL] Не удалось инициализировать проверку биографий: %v", err)
+	}
+	bioBackground, err := artistbio.NewBackgroundProcessor(bioStore, trackRepo, identityResolver, bioIngestion, 25)
+	if err != nil {
+		log.Fatalf("[FATAL] Не удалось инициализировать фоновое обогащение артистов: %v", err)
+	}
+	bioBackground.SetValidator(bioValidator)
 	coverFetcher := metadata.NewCoverFetcher(pathGuard)
 	libraryScanner := metadata.NewLibraryScanner(
 		pathGuard.Root(), trackRepo, stagingRepo, mbClient, coverFetcher,
@@ -175,6 +201,7 @@ func main() {
 
 	proxyServer := proxy.NewServer(cfg.NavidromeURL, engine, dict, aliasMgr, cfg.EnableDebugAPI)
 	proxyServer.SetCast(castService)
+	proxyServer.SetBiographyReader(bioStore)
 	publicHTTPServer := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           proxyServer,
@@ -201,6 +228,7 @@ func main() {
 	adminHandler.SetConfidenceRepository(confidenceRepo)
 	adminHandler.SetAlignerClient(alignerClient)
 	adminHandler.SetCast(castService)
+	adminHandler.SetBiographyStore(bioStore)
 	if cfg.NavidromeURL != nil {
 		adminHandler.SetNavidromeURL(cfg.NavidromeURL.String())
 	}
@@ -232,10 +260,10 @@ func main() {
 			if err := enricher.InitSchema(); err != nil {
 				log.Printf("[WARN] Не удалось инициализировать схему обогатителя: %v", err)
 			}
-			syncData(sqliteDB, dict, enricher, libraryScanner, cfg)
+			syncData(ctx, sqliteDB, dict, enricher, libraryScanner, bioBackground, cfg)
 			_ = sqliteDB.Close()
 		}
-		runBackgroundSync(ctx, cfg, dict, libraryScanner)
+		runBackgroundSync(ctx, cfg, dict, libraryScanner, bioBackground)
 	}()
 
 	// 9. Ожидание сигнала завершения работы
@@ -253,7 +281,7 @@ func main() {
 
 // syncData вычитывает свежие данные из базы Navidrome, обновляет поисковый словарь,
 // запускает обогащение full_text и синхронизирует список треков в poisq.db.
-func syncData(sqliteDB *sql.DB, dict *search.Dictionary, enricher *db.Enricher, scanner *metadata.LibraryScanner, cfg *config.Config) {
+func syncData(ctx context.Context, sqliteDB *sql.DB, dict *search.Dictionary, enricher *db.Enricher, scanner *metadata.LibraryScanner, bioBackground *artistbio.BackgroundProcessor, cfg *config.Config) {
 	if sqliteDB == nil {
 		return
 	}
@@ -275,10 +303,20 @@ func syncData(sqliteDB *sql.DB, dict *search.Dictionary, enricher *db.Enricher, 
 			log.Printf("[INFO] Каталог poisq.db синхронизирован с Navidrome (%d треков)", synced)
 		}
 	}
+
+	if bioBackground != nil && ctx.Err() == nil {
+		report, err := bioBackground.ProcessBatch(ctx, sqliteDB)
+		if err != nil && ctx.Err() == nil {
+			log.Printf("[WARN] Фоновое обогащение биографий завершилось с ошибкой: %v", err)
+		} else if err == nil {
+			log.Printf("[INFO] Биографии артистов: просмотрено=%d пропущено=%d идентифицировано=%d загружено=%d проверено=%d ошибок=%d",
+				report.Scanned, report.Skipped, report.Resolved, report.Ingested, report.Validated, report.Failed)
+		}
+	}
 }
 
 // runBackgroundSync выполняет периодическое обновление словаря, обогащение базы и синхронизацию треков.
-func runBackgroundSync(ctx context.Context, cfg *config.Config, dict *search.Dictionary, scanner *metadata.LibraryScanner) {
+func runBackgroundSync(ctx context.Context, cfg *config.Config, dict *search.Dictionary, scanner *metadata.LibraryScanner, bioBackground *artistbio.BackgroundProcessor) {
 	ticker := time.NewTicker(cfg.SyncInterval)
 	defer ticker.Stop()
 
@@ -296,7 +334,7 @@ func runBackgroundSync(ctx context.Context, cfg *config.Config, dict *search.Dic
 			enricher := db.NewEnricher(sqliteDB, cfg.EnrichSQLiteFullText)
 			_ = enricher.InitSchema()
 
-			syncData(sqliteDB, dict, enricher, scanner, cfg)
+			syncData(ctx, sqliteDB, dict, enricher, scanner, bioBackground, cfg)
 			_ = sqliteDB.Close()
 		}
 	}

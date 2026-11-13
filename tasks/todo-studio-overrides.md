@@ -1,0 +1,76 @@
+# Tasks: `studio-overrides`
+
+- [x] Task 1: Add bounded Navidrome artist search and exact lookup.
+  - Acceptance:
+    - Empty search reuses `LoadArtistInventoryPage`; non-empty search uses a parameterized query over the existing artist table.
+    - `%`, `_`, and the escape character are treated literally rather than as uncontrolled wildcards.
+    - Query length is capped at 100 UTF-8 bytes; result limit defaults to 25 and is capped at 50.
+    - Results omit empty/oversized rows and are ordered deterministically by normalized name then ID.
+    - Exact lookup validates the bounded ID and returns one real artist or not-found without scanning application-side pages.
+    - Missing schema, cancellation, malformed UTF-8, hostile query/ID values, and SQL metacharacters fail safely.
+  - Verify: `go test -count=1 -run 'Test(SearchArtistInventory|FindLibraryArtist)' ./internal/db`
+  - Files: `internal/db/loader.go`, `internal/db/loader_test.go`
+
+- [x] Task 2: Attach the existing biography store and define strict guarded API contracts.
+  - Acceptance:
+    - `AdminServer.SetBiographyStore` attaches the existing store before serving and performs no read/network work.
+    - List and detail routes are registered inside the existing `AdminGuardMiddleware`.
+    - Nil store/database states fail closed with generic responses.
+    - Mutation JSON is size-capped and rejects unknown, duplicate, missing, trailing, malformed, and invalid-UTF-8 input.
+    - DTOs expose only artist/effective/manual/selected-automatic display data, never candidates/evidence/prompts/internal errors.
+    - Unsupported methods return 405.
+  - Verify: `go test -count=1 -run 'TestArtistBiographyAPI(Methods|StrictJSON|Unavailable)' ./internal/admin`
+  - Files: `internal/admin/api_artist_biographies.go`, `internal/admin/api_artist_biographies_test.go`, `internal/admin/server.go`
+
+- [x] Task 3: Implement artist list and biography detail reads.
+  - Acceptance:
+    - List uses the bounded Navidrome lookup and returns lightweight `{id,name}` results only.
+    - Detail validates/looks up the real Navidrome artist before reading biography state.
+    - Detail distinguishes no biography, automatic original, automatic translated, and active manual override.
+    - Effective and selected automatic source/text/URL are returned only as needed for editing/reset preview.
+    - GET works through the current guard and every DB/store error is generic and body/path/SQL-safe.
+  - Verify: `go test -count=1 -run 'TestArtistBiographyAPI(List|Detail)' ./internal/admin`
+  - Files: `internal/admin/api_artist_biographies.go`, `internal/admin/api_artist_biographies_test.go`, `internal/admin/server.go`
+
+- [x] Task 4: Implement safe optional manual save and reset.
+  - Acceptance:
+    - PUT confirms artist existence, normalizes only surrounding/line whitespace, and saves through `SetManualOverride`.
+    - Text must satisfy existing size/UTF-8/quality and deterministic Russian thresholds; English, Ukrainian, Belarusian, mixed, short, repeated, markup-heavy, and oversized text are rejected.
+    - Optional source URL is validated by the existing manual-override contract and is never fetched.
+    - DELETE confirms artist existence and clears only manual fields; automatic selection/candidates remain unchanged.
+    - Save/reset returns freshly read effective state and obeys current trusted-origin/CSRF mutation policy.
+    - Concurrent delivery reads never observe partial manual state.
+  - Verify: `go test -race -count=1 -run 'TestArtistBiographyAPI(Save|Reset|CSRF|Concurrent)' ./internal/admin`
+  - Files: `internal/admin/api_artist_biographies.go`, `internal/admin/api_artist_biographies_test.go`, `internal/admin/server.go`, `internal/artistbio/store.go`
+
+- [x] Task 5: Add the optional Biographies tab to Studio.
+  - Acceptance:
+    - A `Биографии` tab uses existing navigation, form, surface, button, and toast patterns.
+    - Debounced artist search renders untrusted values with `textContent` or existing escaping.
+    - Selecting an artist shows automatic/effective source and read-only automatic preview.
+    - The editable textarea contains only the active manual value, so automatic text cannot be accidentally saved as manual.
+    - Save disables duplicate submissions, retains unsaved text after failure, and reloads server state after success.
+    - Reset requires confirmation and returns to automatic state.
+    - Copy explicitly says manual entry is optional; there is no AI generation or suggestion control.
+  - Verify:
+    - `rg -n 'artist-biographies|panel-biographies|biography-' internal/admin/ui/index.html internal/admin/ui/app.js internal/admin/ui/css/*.css`
+    - `go test -count=1 ./internal/admin`
+  - Files: `internal/admin/ui/index.html`, `internal/admin/ui/app.js`, `internal/admin/ui/css/forms.css`
+
+- [x] Task 6: Wire runtime and complete security/release verification.
+  - Acceptance:
+    - `cmd/proxy/main.go` attaches the already constructed `bioStore` to `AdminServer` before HTTP serving.
+    - Manual save immediately wins `EffectiveBiography` and `getArtistInfo2`; reset restores the same selected automatic candidate.
+    - No external request, AI/provider call, new dependency, cache, table, migration, framework, or worker is introduced.
+    - Errors/logs contain no biography, source URL, JSON body, credentials, SQL, or database/filesystem path.
+    - Existing ingestion, validation, delivery, Studio, proxy, database, and unrelated iOS changes remain intact.
+    - Focused/full/race tests, vet, build, vulnerability scan, formatting, and diff checks pass.
+  - Verify:
+    - `gofmt -w internal/db/loader.go internal/db/loader_test.go internal/admin/api_artist_biographies.go internal/admin/api_artist_biographies_test.go internal/admin/server.go cmd/proxy/main.go`
+    - `go test -count=1 ./...`
+    - `go test -race -count=1 ./...`
+    - `go vet ./...`
+    - `go build -trimpath -o /tmp/poisq-proxy ./cmd/proxy`
+    - `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`
+    - `git diff --check`
+  - Files: only files already touched by Tasks 1–5, `cmd/proxy/main.go`, and this checklist

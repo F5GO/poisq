@@ -168,3 +168,129 @@
   color: var(--text-primary);
   cursor: pointer;
 }
+
+/* Необязательные ручные биографии */
+.biography-studio {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  min-height: 560px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.biography-picker {
+  padding: 16px;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-surface-secondary);
+}
+
+.biography-search-wrap { max-width: none; }
+
+.biography-artist-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  max-height: 490px;
+  overflow-y: auto;
+}
+
+.biography-artist-button {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.biography-artist-button:hover,
+.biography-artist-button.active {
+  background: var(--bg-surface-elevated);
+  border-color: var(--border-subtle);
+}
+
+.biography-workspace { padding: 24px; }
+
+.biography-editor-empty,
+.biography-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.biography-editor-header,
+.biography-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.biography-artist-title {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+  font-size: 20px;
+}
+
+.biography-state-badge {
+  padding: 5px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.biography-state-badge.manual {
+  color: var(--poisq-blue);
+  border: 1px solid var(--border-focus);
+}
+
+.biography-preview-block { margin: 22px 0; }
+
+.biography-preview {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 8px;
+  padding: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  background: var(--bg-surface-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.biography-textarea {
+  width: 100%;
+  min-height: 190px;
+  resize: vertical;
+  padding: 14px;
+  color: var(--text-primary);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font: inherit;
+  line-height: 1.6;
+}
+
+.biography-textarea:focus {
+  outline: none;
+  border-color: var(--poisq-blue);
+  box-shadow: 0 0 0 3px var(--border-focus);
+}
+
+@media (max-width: 760px) {
+  .biography-studio { grid-template-columns: 1fr; }
+  .biography-picker { border-right: 0; border-bottom: 1px solid var(--border-subtle); }
+  .biography-artist-list { max-height: 220px; }
+  .biography-actions { align-items: stretch; flex-direction: column; }
+}

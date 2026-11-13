@@ -9,10 +9,13 @@ package httpclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -23,6 +26,35 @@ type ResilientClient struct {
 	breaker    *CircuitBreaker
 	maxRetries int
 	maxBytes   int64
+
+	restrictedScheme string
+	restrictedHost   string
+}
+
+// RestrictOrigin pins initial requests and redirects to one origin. Configure it before the first request.
+func (rc *ResilientClient) RestrictOrigin(origin string) error {
+	if rc == nil || rc.client == nil {
+		return fmt.Errorf("resilient client is not configured")
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("restricted origin must be absolute http or https")
+	}
+	if parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("restricted origin must not contain credentials, path, query, or fragment")
+	}
+	rc.restrictedScheme = strings.ToLower(parsed.Scheme)
+	rc.restrictedHost = strings.ToLower(parsed.Host)
+	rc.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("redirect limit exceeded")
+		}
+		if !rc.urlAllowed(req.URL) {
+			return errors.New("redirect rejected by origin policy")
+		}
+		return nil
+	}
+	return nil
 }
 
 // NewResilientClient создает защищенный HTTP-клиент для внешнего провайдера.
@@ -73,10 +105,16 @@ func (rc *ResilientClient) DoWithRetry(ctx context.Context, buildReq func() (*ht
 		if err != nil {
 			return nil, 0, nil, err
 		}
+		if !rc.urlAllowed(req.URL) {
+			return nil, 0, nil, errors.New("request rejected by origin policy")
+		}
 
 		resp, err := rc.client.Do(req.WithContext(ctx))
 		if err != nil {
-			lastErr = err
+			if ctx.Err() != nil {
+				return nil, 0, nil, ctx.Err()
+			}
+			lastErr = errors.New("HTTP request failed")
 			if attempt == rc.maxRetries {
 				rc.breaker.RecordFailure()
 				break
@@ -85,9 +123,13 @@ func (rc *ResilientClient) DoWithRetry(ctx context.Context, buildReq func() (*ht
 			continue
 		}
 
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, rc.maxBytes))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, rc.maxBytes+1))
 		_ = resp.Body.Close()
 		lastStatus = resp.StatusCode
+		if readErr == nil && int64(len(body)) > rc.maxBytes {
+			readErr = errors.New("HTTP response exceeds size limit")
+			body = nil
+		}
 
 		if readErr != nil {
 			lastErr = readErr
@@ -101,7 +143,7 @@ func (rc *ResilientClient) DoWithRetry(ctx context.Context, buildReq func() (*ht
 
 		// Серверные сбои 5xx или временные 429 — кандидаты на ретрай
 		if resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			if attempt == rc.maxRetries {
 				rc.breaker.RecordFailure()
 				break
@@ -115,6 +157,13 @@ func (rc *ResilientClient) DoWithRetry(ctx context.Context, buildReq func() (*ht
 	}
 
 	return nil, lastStatus, nil, lastErr
+}
+
+func (rc *ResilientClient) urlAllowed(target *url.URL) bool {
+	if rc.restrictedHost == "" {
+		return true
+	}
+	return target != nil && strings.EqualFold(target.Scheme, rc.restrictedScheme) && strings.EqualFold(target.Host, rc.restrictedHost)
 }
 
 func sleepWithJitter(ctx context.Context, attempt int) {

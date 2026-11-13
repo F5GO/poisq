@@ -2,7 +2,7 @@
 //
 // Данный файл poisq_db.go инициализирует собственную базу данных микросервиса (poisq.db)
 // в режиме WAL, автоматически создает родительский каталог и выполняет миграции схемы
-// для 5 ключевых таблиц: api_keys, tracks, staging_changes, lyrics_jobs и provider_cache.
+// для служебных таблиц поиска, текстов, метаданных и биографий исполнителей.
 package db
 
 import (
@@ -91,6 +91,8 @@ func initPoisqSchema(sqliteDB *sql.DB) error {
 		updated_at INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE INDEX IF NOT EXISTS idx_tracks_folder ON tracks(folder_path);
+	CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
+	CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist);
 	CREATE INDEX IF NOT EXISTS idx_tracks_lyrics_status ON tracks(lyrics_status);
 	CREATE INDEX IF NOT EXISTS idx_tracks_mojibake ON tracks(is_mojibake);
 
@@ -142,6 +144,53 @@ func initPoisqSchema(sqliteDB *sql.DB) error {
 		created_at INTEGER NOT NULL DEFAULT 0
 	);
 
+	CREATE TABLE IF NOT EXISTS artist_bio_identity (
+		artist_id TEXT PRIMARY KEY,
+		artist_name TEXT NOT NULL DEFAULT '',
+		musicbrainz_id TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'pending',
+		resolved_source TEXT NOT NULL DEFAULT '',
+		resolved_artist_id TEXT NOT NULL DEFAULT '',
+		confidence REAL NOT NULL DEFAULT 0 CHECK(confidence >= 0 AND confidence <= 1),
+		evidence_json TEXT NOT NULL DEFAULT '{}',
+		updated_at INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS idx_artist_bio_identity_status ON artist_bio_identity(status, updated_at);
+
+	CREATE TABLE IF NOT EXISTS artist_bio_candidates (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		artist_id TEXT NOT NULL REFERENCES artist_bio_identity(artist_id) ON DELETE CASCADE,
+		provider TEXT NOT NULL,
+		source_artist_id TEXT NOT NULL,
+		source_url TEXT NOT NULL DEFAULT '',
+		original_text TEXT NOT NULL,
+		russian_text TEXT NOT NULL DEFAULT '',
+		original_language TEXT NOT NULL DEFAULT '',
+		detected_language TEXT NOT NULL DEFAULT '',
+		language_confidence REAL NOT NULL DEFAULT 0 CHECK(language_confidence >= 0 AND language_confidence <= 1),
+		russian_share REAL NOT NULL DEFAULT 0 CHECK(russian_share >= 0 AND russian_share <= 1),
+		match_confidence REAL NOT NULL DEFAULT 0 CHECK(match_confidence >= 0 AND match_confidence <= 1),
+		status TEXT NOT NULL DEFAULT 'fetched',
+		evidence_json TEXT NOT NULL DEFAULT '{}',
+		fetched_at INTEGER NOT NULL DEFAULT 0,
+		updated_at INTEGER NOT NULL DEFAULT 0,
+		UNIQUE(artist_id, provider, source_artist_id),
+		UNIQUE(id, artist_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_artist_bio_candidates_artist_status
+		ON artist_bio_candidates(artist_id, status, match_confidence DESC);
+
+	CREATE TABLE IF NOT EXISTS artist_biographies (
+		artist_id TEXT PRIMARY KEY REFERENCES artist_bio_identity(artist_id) ON DELETE CASCADE,
+		automatic_candidate_id INTEGER,
+		manual_text TEXT NOT NULL DEFAULT '',
+		manual_source_url TEXT NOT NULL DEFAULT '',
+		manual_updated_at INTEGER NOT NULL DEFAULT 0,
+		updated_at INTEGER NOT NULL DEFAULT 0,
+		FOREIGN KEY(automatic_candidate_id, artist_id)
+			REFERENCES artist_bio_candidates(id, artist_id) ON DELETE RESTRICT
+	);
+
 	-- Уверенность акустического выравнивания по строкам (для подсветки сомнительных строк в редакторе)
 	CREATE TABLE IF NOT EXISTS lrc_confidence (
 		track_id TEXT PRIMARY KEY,
@@ -167,7 +216,7 @@ func initPoisqSchema(sqliteDB *sql.DB) error {
 }
 
 // ResetDatabase выполняет полный сброс базы данных poisq.db:
-// очищает таблицы staging_changes, tracks, lyrics_jobs и provider_cache.
+// очищает пользовательские результаты обработки, включая биографии исполнителей.
 // Если keepAPIKeys == true, сохраняет настроенные ключи Gemini/Groq.
 func ResetDatabase(db *sql.DB, keepAPIKeys bool) error {
 	tx, err := db.Begin()
@@ -176,7 +225,10 @@ func ResetDatabase(db *sql.DB, keepAPIKeys bool) error {
 	}
 	defer tx.Rollback()
 
-	tables := []string{"staging_changes", "tracks", "lyrics_jobs", "provider_cache", "lrc_confidence", "lrc_corrections"}
+	tables := []string{
+		"artist_biographies", "artist_bio_candidates", "artist_bio_identity",
+		"staging_changes", "tracks", "lyrics_jobs", "provider_cache", "lrc_confidence", "lrc_corrections",
+	}
 	if !keepAPIKeys {
 		tables = append(tables, "api_keys")
 	}

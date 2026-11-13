@@ -6,8 +6,11 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -57,9 +60,83 @@ type TrackRepository struct {
 	db *sql.DB
 }
 
+type ArtistIdentityRelease struct {
+	Title string
+	Year  int
+}
+
+type ArtistIdentityContext struct {
+	Albums []ArtistIdentityRelease
+	Tracks []string
+	Years  []int
+}
+
 // NewTrackRepository создает экземпляр репозитория треков.
 func NewTrackRepository(db *sql.DB) *TrackRepository {
 	return &TrackRepository{db: db}
+}
+
+// ArtistIdentityContext возвращает только ограниченный каталоговый контекст артиста без путей и текстов песен.
+func (r *TrackRepository) ArtistIdentityContext(ctx context.Context, artistName string, albumLimit, trackLimit int) (ArtistIdentityContext, error) {
+	artistName = strings.TrimSpace(artistName)
+	if artistName == "" || len(artistName) > 2048 {
+		return ArtistIdentityContext{}, fmt.Errorf("недопустимое имя исполнителя")
+	}
+	albumLimit = max(1, min(albumLimit, 30))
+	trackLimit = max(1, min(trackLimit, 50))
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT kind, value, year FROM (
+			SELECT 'album' AS kind, album AS value, MIN(year) AS year
+			FROM tracks
+			WHERE (artist = ? OR album_artist = ?) AND album != ''
+			GROUP BY album
+			ORDER BY MIN(year), album
+			LIMIT ?
+		)
+		UNION ALL
+		SELECT kind, value, year FROM (
+			SELECT 'track' AS kind, title AS value, MIN(year) AS year
+			FROM tracks
+			WHERE (artist = ? OR album_artist = ?) AND title != ''
+			GROUP BY title
+			ORDER BY MIN(year), MIN(track_number), title
+			LIMIT ?
+		)`, artistName, artistName, albumLimit, artistName, artistName, trackLimit)
+	if err != nil {
+		return ArtistIdentityContext{}, fmt.Errorf("чтение контекста исполнителя: %w", err)
+	}
+	defer rows.Close()
+
+	result := ArtistIdentityContext{
+		Albums: make([]ArtistIdentityRelease, 0, albumLimit),
+		Tracks: make([]string, 0, trackLimit),
+	}
+	years := make(map[int]struct{})
+	for rows.Next() {
+		var kind, value string
+		var year int
+		if err := rows.Scan(&kind, &value, &year); err != nil {
+			return ArtistIdentityContext{}, fmt.Errorf("разбор контекста исполнителя: %w", err)
+		}
+		switch kind {
+		case "album":
+			result.Albums = append(result.Albums, ArtistIdentityRelease{Title: value, Year: year})
+		case "track":
+			result.Tracks = append(result.Tracks, value)
+		}
+		if year > 0 {
+			years[year] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return ArtistIdentityContext{}, fmt.Errorf("чтение строк контекста исполнителя: %w", err)
+	}
+	result.Years = make([]int, 0, len(years))
+	for year := range years {
+		result.Years = append(result.Years, year)
+	}
+	sort.Ints(result.Years)
+	return result, nil
 }
 
 // UpsertTrack добавляет или обновляет базовые метаданные трека (не затирая уже найденные тексты).

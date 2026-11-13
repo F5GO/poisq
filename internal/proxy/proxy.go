@@ -20,15 +20,21 @@ import (
 
 // Server инкапсулирует HTTP-обработчик реверс-прокси и вспомогательные сервисы.
 type Server struct {
-	handler http.Handler
-	cast    http.Handler // трансляция на колонки (poisqCast*); nil — выключена
+	handler     http.Handler
+	cast        http.Handler // трансляция на колонки (poisqCast*); nil — выключена
+	biographies effectiveBiographyReader
 }
 
 // SetCast подключает эндпоинты трансляции. Вызывать до запуска HTTP-сервера.
 func (s *Server) SetCast(h http.Handler) { s.cast = h }
 
+// SetBiographyReader подключает локальную выдачу проверенных биографий.
+// Вызывать до запуска HTTP-сервера.
+func (s *Server) SetBiographyReader(reader effectiveBiographyReader) { s.biographies = reader }
+
 // NewServer создает новый экземпляр реверс-прокси сервера с оптимизированным пулом соединений и кэшем.
 func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionary, aliasMgr *search.AliasManager, enableDebugAPI bool) *Server {
+	srv := &Server{}
 	// Высокопроизводительный пул Keep-Alive соединений с Navidrome для мгновенной отдачи ответов
 	transport := &http.Transport{
 		Proxy: nil,
@@ -63,6 +69,7 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 		if err := AdvertisePoisqExtension(resp); err != nil {
 			return err
 		}
+		enrichArtistInfoResponse(resp, srv.biographies)
 		if origin := resp.Request.Header.Get("Origin"); origin != "" {
 			setCORS(resp.Header, origin)
 		}
@@ -75,8 +82,6 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 	debugHandler := HandleDebugTest(engine, dict)
 	aliasHandler := HandleAliasesAPI(aliasMgr)
 	castAuth := newNavidromeAuth(targetURL, transport)
-	srv := &Server{}
-
 	mux := http.NewServeMux()
 
 	// Все входящие запросы проходят централизованную маршрутизацию

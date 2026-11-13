@@ -1,0 +1,89 @@
+# Tasks: `bio-validation`
+
+- [x] Task 1: Pin the secure Go 1.26.11 release baseline.
+  - Acceptance:
+    - `go.mod` requires Go 1.26.11.
+    - The Docker builder uses an explicit Go 1.26.11 Alpine image rather than a floating toolchain.
+    - GitHub Actions test and binary-build jobs use Go 1.26.11.
+    - No unrelated dependency or runtime image is changed.
+    - The project builds and the official vulnerability scan reports no reachable known vulnerability for the selected toolchain.
+  - Verify:
+    - `go version`
+    - `go test -count=1 ./...`
+    - `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`
+    - `git diff --check`
+  - Files: `go.mod`, `Dockerfile`, `.github/workflows/docker-publish.yml`
+
+- [x] Task 2: Implement bounded deterministic language and text-quality analysis.
+  - Acceptance:
+    - `DetectBiographyLanguage` returns only allowlisted language codes, bounded confidence/Russian share, compact evidence, and whether AI classification is required.
+    - Unicode script ratios and Russian/Ukrainian/Belarusian signals are computed without trusting provider hints.
+    - URLs, email addresses, markup, digits, and punctuation do not count as language evidence.
+    - Clear Russian passes the direct path; Ukrainian, Belarusian, materially mixed, very short, repetitive, promotional, markup-heavy, and oversized text fail closed or require classification as specified.
+    - Analysis is pure, bounded, deterministic, and does not mutate the original text.
+  - Verify: `go test -count=1 -run 'Test(DetectBiographyLanguage|BiographyTextQuality)' ./internal/artistbio`
+  - Files: `internal/artistbio/language.go`, `internal/artistbio/language_test.go`
+
+- [x] Task 3: Implement strict AI classification, translation, and grounding contracts.
+  - Acceptance:
+    - The existing `ai.TextGenerator` and fallback composition are reused; no new client or dependency is introduced.
+    - Ambiguous classification accepts only an allowlisted language, bounded confidence, and supplied evidence codes.
+    - Source text is split into at most 120 bounded stable IDs and passed as JSON user data rather than instructions.
+    - Translation output must contain exactly one result per supplied ID with no missing, duplicate, extra, fenced, trailing, or oversized data.
+    - Deterministic checks preserve numbers, dates, URLs, emails, identifiers, and explicit quoted names.
+    - Insufficient deterministic evidence uses a strict grounded/not-grounded/uncertain verdict; uncertainty rejects the result.
+    - Errors contain no biography body, prompt, model response, API key, or path.
+  - Verify: `go test -count=1 -run 'TestBiography(LanguageClassifier|Translation|Grounding)' ./internal/ai`
+  - Files: `internal/ai/biography_translation.go`, `internal/ai/biography_translation_test.go`
+
+- [x] Task 4: Add minimal transactional store operations for validation and selection.
+  - Acceptance:
+    - Candidates can be listed for one artist in deterministic bounded pages.
+    - Validation updates actual language, Russian text, confidence, evidence, status, and timestamp without overwriting original text.
+    - Candidate ownership is rechecked inside the transaction.
+    - The highest accepted automatic candidate is selected atomically using stable ordering.
+    - A transient/rejected update cannot erase an earlier valid automatic result, and manual override fields are never changed.
+    - All SQL remains parameterized and all stored fields are bounded before execution.
+  - Verify: `go test -race -count=1 -run 'TestStore(CandidateValidation|AutomaticSelection|ConcurrentSelection)' ./internal/artistbio`
+  - Files: `internal/artistbio/store.go`, `internal/artistbio/store_test.go`
+
+- [x] Task 5: Implement validation orchestration and deterministic candidate scoring.
+  - Acceptance:
+    - Clear Russian candidates are accepted without an AI call.
+    - Real non-Russian candidates are translated only through the strict translation contract.
+    - Unsafe, ambiguous, malformed, promotional, or insufficiently grounded candidates are rejected or left retryable using stable evidence codes.
+    - Identity confidence outranks provider/length; direct Russian beats an otherwise equal verified translation.
+    - Concurrent validation for one artist is coalesced and all validation shares a bounded global semaphore.
+    - Provider/AI failures do not remove a previously selected valid result, and an empty source set never creates prose.
+  - Verify: `go test -race -count=1 -run 'TestBiographyValidator' ./internal/artistbio`
+  - Files: `internal/artistbio/validation.go`, `internal/artistbio/validation_test.go`, `internal/artistbio/types.go`
+
+- [x] Task 6: Wire validation into the existing background pipeline.
+  - Acceptance:
+    - The current bounded artist batch validates candidates after ingestion without adding another scheduler or worker framework.
+    - Existing store, candidate freshness, AI generator, cancellation, and shutdown lifecycle are reused.
+    - Fresh accepted selections skip redundant work; failures remain retryable.
+    - No provider, classifier, translator, grounding, or selection work occurs on the synchronous Subsonic request path.
+    - Runtime construction performs no external request.
+  - Verify:
+    - `go test -race -count=1 -run 'TestBiographyBackground' ./internal/artistbio`
+    - `go test -count=1 ./internal/proxy ./cmd/proxy`
+  - Files: `internal/artistbio/background.go`, `internal/artistbio/background_test.go`, `cmd/proxy/main.go`
+
+- [x] Task 7: Complete the security, regression, and release audit.
+  - Acceptance:
+    - Prompt injection, language confusion, malformed JSON, missing/extra IDs, new entities, oversized data, cancellation, concurrency, and rollback tests pass.
+    - Errors and logs contain no original/translated biography text, prompts, responses, secrets, source-bearing query strings, or library paths.
+    - No new runtime dependency, AI client, cache, database, queue, scheduler, or request-path network call is present.
+    - Direct Russian validation uses no model request and remains bounded.
+    - Existing ingestion, identity, lyrics, proxy, Studio, database, and iOS-related user changes remain untouched and regressions pass.
+    - Go vulnerability scan, tests, race detector, vet, production build, formatting, and diff checks all pass.
+  - Verify:
+    - `gofmt -w internal/artistbio/*.go internal/ai/biography_translation*.go cmd/proxy/main.go`
+    - `go test -count=1 ./...`
+    - `go test -race -count=1 ./...`
+    - `go vet ./...`
+    - `go build -trimpath -o /tmp/poisq-proxy ./cmd/proxy`
+    - `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`
+    - `git diff --check`
+  - Files: only files already touched by Tasks 1–6 plus this checklist

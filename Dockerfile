@@ -2,7 +2,7 @@
 # Этап 1: Сборка статического бинарного файла на Go (с зашитым через //go:embed фронтендом)
 # Builder всегда работает на нативной архитектуре раннера ($BUILDPLATFORM) и кросс-компилирует Go
 # под целевую платформу — без эмуляции QEMU (она замедляет сборку arm64 в разы).
-FROM --platform=$BUILDPLATFORM golang:alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH

@@ -15,6 +15,7 @@ import (
 
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/aligner"
+	"github.com/F5GO/poisq/internal/artistbio"
 	"github.com/F5GO/poisq/internal/cast"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/keypool"
@@ -47,6 +48,7 @@ type AdminServer struct {
 	confidence   *db.ConfidenceRepository
 	alignerCli   *aligner.Client
 	cast         *cast.Service
+	biographies  *artistbio.Store
 	handler      http.Handler
 }
 
@@ -111,6 +113,8 @@ func NewAdminServer(
 
 	mux.HandleFunc("/api/v1/keys", s.handleKeysAPI)
 	mux.HandleFunc("/api/v1/cast", s.handleCast)
+	mux.HandleFunc("/api/v1/artist-biographies", s.handleArtistBiographies)
+	mux.HandleFunc("/api/v1/artist-biographies/detail", s.handleArtistBiographyDetail)
 	mux.HandleFunc("/api/v1/debug/fs", s.handleDebugFS)
 
 	// Встроенный фронтенд (SPA) через //go:embed с антикэшированием для динамических скриптов и стилей

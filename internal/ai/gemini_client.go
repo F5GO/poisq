@@ -330,7 +330,10 @@ func (g *GeminiClient) callInteractionsAPI(ctx context.Context, modelName, apiKe
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return "", 0, "", err
+		if ctx.Err() != nil {
+			return "", 0, "", ctx.Err()
+		}
+		return "", 0, "", fmt.Errorf("Gemini Interactions request failed")
 	}
 	defer resp.Body.Close()
 
@@ -342,13 +345,11 @@ func (g *GeminiClient) callInteractionsAPI(ctx context.Context, modelName, apiKe
 	if resp.StatusCode != http.StatusOK {
 		var parsedErr geminiInteractionResponse
 		_ = json.Unmarshal(respBytes, &parsedErr)
-		apiMsg := string(respBytes)
 		apiStatus := ""
 		if parsedErr.Error != nil {
-			apiMsg = parsedErr.Error.Message
 			apiStatus = parsedErr.Error.Status
 		}
-		return "", resp.StatusCode, apiStatus, fmt.Errorf("Gemini Interactions HTTP %d (%s): %s", resp.StatusCode, apiStatus, apiMsg)
+		return "", resp.StatusCode, apiStatus, fmt.Errorf("Gemini Interactions HTTP %d (%s)", resp.StatusCode, apiStatus)
 	}
 
 	resText, apiStatus, err := parseInteractionResponse(respBytes)
@@ -391,7 +392,10 @@ func (g *GeminiClient) callGenerateContent(ctx context.Context, modelName, apiKe
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return "", 0, "", err
+		if ctx.Err() != nil {
+			return "", 0, "", ctx.Err()
+		}
+		return "", 0, "", fmt.Errorf("Gemini generateContent request failed")
 	}
 	defer resp.Body.Close()
 
@@ -404,13 +408,11 @@ func (g *GeminiClient) callGenerateContent(ctx context.Context, modelName, apiKe
 	_ = json.Unmarshal(respBytes, &parsed)
 
 	if resp.StatusCode != http.StatusOK || parsed.Error != nil {
-		apiMsg := string(respBytes)
 		apiStatus := ""
 		if parsed.Error != nil {
-			apiMsg = parsed.Error.Message
 			apiStatus = parsed.Error.Status
 		}
-		return "", resp.StatusCode, apiStatus, fmt.Errorf("Gemini generateContent HTTP %d (%s): %s", resp.StatusCode, apiStatus, apiMsg)
+		return "", resp.StatusCode, apiStatus, fmt.Errorf("Gemini generateContent HTTP %d (%s)", resp.StatusCode, apiStatus)
 	}
 
 	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {

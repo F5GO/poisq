@@ -42,6 +42,11 @@ const state = {
   jobsPollTimer: null,
   workerPaused: false,
   lastAppliedStagingId: null,
+  biographyArtists: [],
+  selectedBiography: null,
+  biographySearchTimer: null,
+  biographySearchGeneration: 0,
+  biographyBusy: false,
 
   // Караоке плеер
   audioEl: null,
@@ -172,6 +177,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initDrawer();
   initKeyModal();
   initCastForm();
+  initBiographyStudio();
   loadLibraryData();
   loadKeysData();
 });
@@ -284,9 +290,157 @@ function switchTab(tabName) {
       }
     }, 2500);
   }
+  if (tabName === "biographies") loadBiographyArtists();
   if (tabName === "keys") {
     loadKeysData();
     loadCastSettings();
+  }
+}
+
+// -----------------------------------------------------------------------------
+// 1.1. Биографии: необязательный ручной приоритет над автоматическим результатом
+// -----------------------------------------------------------------------------
+function initBiographyStudio() {
+  const searchInput = document.getElementById("biography-search-input");
+  searchInput?.addEventListener("input", () => {
+    clearTimeout(state.biographySearchTimer);
+    state.biographySearchTimer = setTimeout(() => loadBiographyArtists(searchInput.value), 250);
+  });
+  document.getElementById("biography-manual-form")?.addEventListener("submit", saveManualBiography);
+  document.getElementById("btn-reset-biography")?.addEventListener("click", resetManualBiography);
+}
+
+async function loadBiographyArtists(query) {
+  const input = document.getElementById("biography-search-input");
+  const search = typeof query === "string" ? query.trim() : (input?.value.trim() || "");
+  const list = document.getElementById("biography-artist-list");
+  if (!list) return;
+  const generation = ++state.biographySearchGeneration;
+  list.replaceChildren(createBiographyMessage("Загрузка..."));
+  try {
+    const data = await fetchApi(`/artist-biographies?query=${encodeURIComponent(search)}&limit=50`);
+    if (generation !== state.biographySearchGeneration) return;
+    state.biographyArtists = Array.isArray(data.artists) ? data.artists : [];
+    renderBiographyArtists();
+  } catch (err) {
+    if (generation !== state.biographySearchGeneration) return;
+    list.replaceChildren(createBiographyMessage("Не удалось загрузить исполнителей."));
+    showToast(err.message, "error");
+  }
+}
+
+function createBiographyMessage(text) {
+  const message = document.createElement("p");
+  message.className = "biography-empty";
+  message.textContent = text;
+  return message;
+}
+
+function renderBiographyArtists() {
+  const list = document.getElementById("biography-artist-list");
+  if (!list) return;
+  list.replaceChildren();
+  if (state.biographyArtists.length === 0) {
+    list.append(createBiographyMessage("Исполнители не найдены."));
+    return;
+  }
+  for (const artist of state.biographyArtists) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "biography-artist-button";
+    button.classList.toggle("active", state.selectedBiography?.artistId === artist.id);
+    button.textContent = artist.name;
+    button.addEventListener("click", () => loadBiographyDetail(artist.id));
+    list.append(button);
+  }
+}
+
+async function loadBiographyDetail(artistId) {
+  try {
+    const detail = await fetchApi(`/artist-biographies/detail?id=${encodeURIComponent(artistId)}`);
+    renderBiographyDetail(detail);
+    renderBiographyArtists();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+function renderBiographyDetail(detail) {
+  state.selectedBiography = detail;
+  document.getElementById("biography-editor-empty")?.classList.add("hidden");
+  document.getElementById("biography-editor")?.classList.remove("hidden");
+  const name = document.getElementById("biography-artist-name");
+  const stateText = document.getElementById("biography-effective-state");
+  const badge = document.getElementById("biography-state-badge");
+  const automaticMeta = document.getElementById("biography-automatic-meta");
+  const automaticPreview = document.getElementById("biography-automatic-preview");
+  const manualText = document.getElementById("biography-manual-text");
+  const sourceURL = document.getElementById("biography-source-url");
+
+  if (name) name.textContent = detail.artistName || "Исполнитель";
+  if (stateText) {
+    stateText.textContent = detail.manualActive
+      ? "Сейчас клиентам отдаётся ручное описание."
+      : detail.hasBiography ? "Сейчас клиентам отдаётся автоматическое описание." : "Готового описания пока нет.";
+  }
+  if (badge) {
+    badge.textContent = detail.manualActive ? "Ручное" : detail.hasBiography ? "Автоматическое" : "Нет описания";
+    badge.classList.toggle("manual", Boolean(detail.manualActive));
+  }
+  if (automaticMeta) {
+    automaticMeta.textContent = detail.automatic
+      ? `Источник: ${detail.automatic.source}${detail.automatic.translated ? " · перевод на русский" : ""}`
+      : "Автоматическое описание пока не найдено.";
+  }
+  if (automaticPreview) automaticPreview.textContent = detail.automatic?.text || "Нет автоматического описания.";
+  if (manualText) manualText.value = detail.manualActive ? (detail.manualText || "") : "";
+  if (sourceURL) sourceURL.value = detail.manualActive ? (detail.manualSourceUrl || "") : "";
+  const reset = document.getElementById("btn-reset-biography");
+  if (reset) reset.disabled = !detail.manualActive;
+  setBiographyBusy(false);
+}
+
+function setBiographyBusy(busy) {
+  state.biographyBusy = busy;
+  const save = document.getElementById("btn-save-biography");
+  const reset = document.getElementById("btn-reset-biography");
+  if (save) save.disabled = busy;
+  if (reset) reset.disabled = busy || !state.selectedBiography?.manualActive;
+}
+
+async function saveManualBiography(event) {
+  event.preventDefault();
+  if (state.biographyBusy || !state.selectedBiography) return;
+  const text = document.getElementById("biography-manual-text")?.value || "";
+  const sourceUrl = document.getElementById("biography-source-url")?.value || "";
+  setBiographyBusy(true);
+  try {
+    const detail = await fetchApi("/artist-biographies/detail", "PUT", {
+      artistId: state.selectedBiography.artistId,
+      text,
+      sourceUrl
+    });
+    renderBiographyDetail(detail);
+    renderBiographyArtists();
+    showToast("Ручное описание сохранено", "success");
+  } catch (err) {
+    setBiographyBusy(false);
+    showToast(err.message, "error");
+  }
+}
+
+async function resetManualBiography() {
+  if (state.biographyBusy || !state.selectedBiography?.manualActive) return;
+  if (!confirm("Удалить ручное описание и снова использовать автоматическое?")) return;
+  setBiographyBusy(true);
+  try {
+    const detail = await fetchApi(`/artist-biographies/detail?id=${encodeURIComponent(state.selectedBiography.artistId)}`, "DELETE");
+    renderBiographyDetail(detail);
+    renderBiographyArtists();
+    showToast("Восстановлено автоматическое описание", "success");
+  } catch (err) {
+    setBiographyBusy(false);
+    showToast(err.message, "error");
   }
 }
 
