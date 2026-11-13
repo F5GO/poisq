@@ -9,10 +9,13 @@ import (
 
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/db"
+	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/metadata"
 )
 
 const defaultIdentityCacheTTL = 30 * 24 * time.Hour
+
+const maxMusicBrainzReleaseGroups = 100
 
 type IdentityCandidateSource interface {
 	FindIdentityCandidates(ctx context.Context, input IdentityContext) ([]IdentityCandidate, error)
@@ -159,20 +162,24 @@ func (r *IdentityResolver) arbitrate(ctx context.Context, input IdentityContext,
 		request.Candidates = append(request.Candidates, option)
 	}
 	decision, err := r.arbiter.ArbitrateIdentity(ctx, request)
-	if err != nil || decision.Decision != "same_artist" || decision.Confidence < AutoResolveConfidence {
+	if err != nil {
+		logger.Warn("[AI-JUDGE] identity arbitration rejected: %v", err)
+		return IdentityResolution{}, false
+	}
+	if decision.Decision != "same_artist" || decision.Confidence < AutoResolveConfidence {
 		return IdentityResolution{}, false
 	}
 	score, exists := scores[decision.CandidateID]
 	if !exists || !(score.Decisive && score.Confidence >= AutoResolveConfidence || identityScoreEligibleForAI(score)) ||
-		!allStringsAllowed(decision.EvidenceCodes, score.EvidenceCodes) ||
-		(!score.Decisive && identityScoreEligibleForAI(score) && (!containsString(decision.EvidenceCodes, "name:equivalent") ||
-			!containsString(decision.EvidenceCodes, "album:overlap"))) {
+		!allStringsAllowed(decision.EvidenceCodes, score.EvidenceCodes) {
 		return IdentityResolution{}, false
 	}
 	result := resolutionFromScore(score, ResolutionResolved)
-	if decision.Confidence < result.Confidence {
-		result.Confidence = decision.Confidence
-	}
+	// The deterministic score gates which candidates the model may inspect.
+	// Once the strict arbiter confirms that eligible candidate, its confidence
+	// is the final confidence; retaining the pre-arbitration 0.60-0.94 score
+	// would make every AI-confirmed result unusable by the ingestion guard.
+	result.Confidence = decision.Confidence
 	result.EvidenceCodes = append(result.EvidenceCodes, "ai:confirmed")
 	result.RequiresAI = false
 	return result, true
@@ -232,7 +239,7 @@ func allStringsAllowed(values, allowed []string) bool {
 
 type MusicBrainzIdentityClient interface {
 	SearchArtists(ctx context.Context, artistName string, limit int) ([]metadata.MBArtistInfo, error)
-	LookupRelease(ctx context.Context, artist, album string) (*metadata.MBReleaseInfo, error)
+	BrowseArtistReleaseGroups(ctx context.Context, artistMBID string, limit int) ([]metadata.MBReleaseGroupInfo, error)
 }
 
 type MusicBrainzIdentitySource struct {
@@ -252,7 +259,6 @@ func (s *MusicBrainzIdentitySource) FindIdentityCandidates(ctx context.Context, 
 		return nil, err
 	}
 	candidates := make([]IdentityCandidate, 0, len(artists))
-	byMBID := make(map[string]int, len(artists))
 	for _, artist := range artists {
 		candidate := IdentityCandidate{
 			ID: "musicbrainz:" + artist.ArtistMBID, Provider: ProviderMusicBrainz,
@@ -260,25 +266,37 @@ func (s *MusicBrainzIdentitySource) FindIdentityCandidates(ctx context.Context, 
 			Name: artist.CanonicalName, Aliases: artist.Aliases, Country: artist.Country,
 			ProviderScore: float64(artist.Score) / 100,
 		}
-		byMBID[artist.ArtistMBID] = len(candidates)
 		candidates = append(candidates, candidate)
 	}
 	if input.MusicBrainzID != "" {
 		return candidates, nil
 	}
-	for i, album := range input.Albums {
-		if i == 2 {
-			break
+	if len(input.Albums) == 0 {
+		return candidates, nil
+	}
+	// Browse only name-equivalent candidates. This supplies authoritative
+	// discographies for matching while bounding the worst case to three calls;
+	// unrelated homonyms never gain release evidence from this step.
+	browsed := 0
+	for i := range candidates {
+		if browsed == 3 || !anyNameEquivalent(append([]string{input.Name}, input.Aliases...), append([]string{candidates[i].Name}, candidates[i].Aliases...)) {
+			continue
 		}
-		release, err := s.client.LookupRelease(ctx, input.Name, album.Title)
+		releases, err := s.client.BrowseArtistReleaseGroups(ctx, candidates[i].MusicBrainzID, maxMusicBrainzReleaseGroups)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if err != nil || release == nil {
+		browsed++
+		if err != nil {
 			continue
 		}
-		if index, ok := byMBID[release.ArtistMBID]; ok {
-			candidates[index].Albums = append(candidates[index].Albums, IdentityRelease{Title: release.AlbumTitle, Year: release.Year})
+		for _, release := range releases {
+			for _, local := range input.Albums {
+				if normalizeIdentityText(release.Title) == normalizeIdentityText(local.Title) {
+					candidates[i].Albums = append(candidates[i].Albums, IdentityRelease{Title: release.Title, Year: release.Year})
+					break
+				}
+			}
 		}
 	}
 	return candidates, nil
