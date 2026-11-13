@@ -44,7 +44,7 @@ func TestBiographySchemaIsIdempotent(t *testing.T) {
 	}
 	defer second.Close()
 
-	for _, table := range []string{"artist_bio_identity", "artist_bio_candidates", "artist_biographies"} {
+	for _, table := range []string{"artist_bio_identity", "artist_bio_candidates", "artist_biographies", "artist_bio_jobs", "artist_bio_web_cache"} {
 		var count int
 		if err := second.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
 			t.Fatalf("query table %s: %v", table, err)

@@ -17,9 +17,23 @@ The module must:
 
 This module does not fetch, validate, translate, rank, or edit biographies and does not add a new Navidrome plugin.
 
+## On-Demand Synthesis Amendment
+
+`bio-synthesis` changes the cache-miss behavior while preserving the rule that request goroutines never perform external/AI work inline:
+
+- an effective local biography remains an immediate indexed read and response rewrite;
+- a valid successful upstream artist response with no terminal biography may enqueue one detached artist job through a narrow coordinator interface;
+- the request may wait on that job for the configured `BIO_FIRST_REQUEST_WAIT` duration and re-read the local store once when notified; accept only 5–30 seconds, use 20 seconds provisionally, and select the release default from the `bio-synthesis` cold-path calibration (`p90 + 2 seconds`, clamped to that range);
+- timeout, cancellation, full queue, cooldown, or job failure returns the safe upstream response while an accepted detached job may continue for the next request;
+- concurrent requests join the coordinator's artist singleflight and cannot multiply provider/search/AI calls;
+- terminal `ready` and `no_data` states cause zero queue/external work on later requests;
+- authentication data, full request query/form, and user identity are never copied into the job payload.
+
+This amendment supersedes only statements below that require an unconditional immediate pass-through on a missing biography. All JSON/XML safety, response bounds, local read validation, and fail-open behavior remain unchanged.
+
 ## Assumptions
 
-1. The `id` supplied to `getArtistInfo2` is the same Navidrome artist ID stored by the background inventory pipeline.
+1. The `id` supplied to `getArtistInfo2` is the same Navidrome artist ID used by the biography store and on-demand coordinator.
 2. JSON responses use `subsonic-response.artistInfo2`; XML responses use an `artistInfo2` element in the Subsonic namespace.
 3. A selected manual override or accepted automatic candidate is safe to deliver exactly as stored.
 4. If the selected text is unavailable, the correct behavior is transparent pass-through, not an empty or generated biography.

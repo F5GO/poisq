@@ -6,6 +6,7 @@
 package admin
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -31,25 +32,28 @@ var embeddedUI embed.FS
 
 // AdminServer объединяет все сервисы и репозитории для работы веб-интерфейса на порту :4535.
 type AdminServer struct {
-	tracksRepo   *db.TrackRepository
-	stagingRepo  *db.StagingRepository
-	jobRepo      *db.JobRepository
-	cacheRepo    *db.ProviderCacheRepository
-	keyPool      *keypool.Manager
-	scanner      *metadata.LibraryScanner
-	stagingSvc   *tagger.StagingService
-	lrcWriter    *lyrics.AtomicLRCWriter
-	worker       *worker.QueueProcessor
-	guard        *security.PathGuard
-	openNavDB    func() (*sql.DB, error)
-	poisqDB      *sql.DB
-	arbiter      *ai.MetadataArbiter
-	navidromeURL string
-	confidence   *db.ConfidenceRepository
-	alignerCli   *aligner.Client
-	cast         *cast.Service
-	biographies  *artistbio.Store
-	handler      http.Handler
+	tracksRepo    *db.TrackRepository
+	stagingRepo   *db.StagingRepository
+	jobRepo       *db.JobRepository
+	cacheRepo     *db.ProviderCacheRepository
+	keyPool       *keypool.Manager
+	scanner       *metadata.LibraryScanner
+	stagingSvc    *tagger.StagingService
+	lrcWriter     *lyrics.AtomicLRCWriter
+	worker        *worker.QueueProcessor
+	guard         *security.PathGuard
+	openNavDB     func() (*sql.DB, error)
+	poisqDB       *sql.DB
+	arbiter       *ai.MetadataArbiter
+	navidromeURL  string
+	confidence    *db.ConfidenceRepository
+	alignerCli    *aligner.Client
+	cast          *cast.Service
+	biographies   *artistbio.Store
+	biographyJobs interface {
+		Request(context.Context, string, bool) (<-chan struct{}, artistbio.JobState, error)
+	}
+	handler http.Handler
 }
 
 // NewAdminServer конструирует HTTP-сервер панели управления poisq.
@@ -116,6 +120,7 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/artist-biographies", s.handleArtistBiographies)
 	mux.HandleFunc("/api/v1/artist-biographies/detail", s.handleArtistBiographyDetail)
 	mux.HandleFunc("/api/v1/artist-biographies/reset", s.handleArtistBiographyReset)
+	mux.HandleFunc("/api/v1/artist-biographies/rebuild", s.handleArtistBiographyRebuild)
 	mux.HandleFunc("/api/v1/debug/fs", s.handleDebugFS)
 
 	// Встроенный фронтенд (SPA) через //go:embed с антикэшированием для динамических скриптов и стилей

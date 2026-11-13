@@ -66,6 +66,10 @@ type Config struct {
 
 	// AlignerMusicPath — путь к медиатеке внутри контейнера выравнивания, если он отличается от MUSIC_PATH.
 	AlignerMusicPath string
+
+	// BiographyFirstRequestWait limits how long a Subsonic request waits for
+	// an accepted detached biography job before returning the upstream result.
+	BiographyFirstRequestWait time.Duration
 }
 
 // Load считывает конфигурацию из переменных окружения или устанавливает значения по умолчанию.
@@ -83,6 +87,7 @@ func Load() (*Config, error) {
 	aliasesFile := getEnv("ALIASES_FILE", "/data/aliases.json")
 	aliasesSyncURL := getEnv("ALIASES_SYNC_URL", "https://raw.githubusercontent.com/F5GO/poisq/main/aliases.json")
 	rawDebugAPI := getEnv("ENABLE_DEBUG_API", "false")
+	rawBiographyWait := getEnv("BIO_FIRST_REQUEST_WAIT", "20s")
 
 	parsedURL, err := url.Parse(rawNavidromeURL)
 	if err != nil {
@@ -104,24 +109,30 @@ func Load() (*Config, error) {
 	if err != nil {
 		enableDebugAPI = false
 	}
+	biographyWait, err := time.ParseDuration(rawBiographyWait)
+	if err != nil || biographyWait < 5*time.Second || biographyWait > 30*time.Second {
+		log.Printf("[WARN] Некорректный BIO_FIRST_REQUEST_WAIT %q, используется 20s", rawBiographyWait)
+		biographyWait = 20 * time.Second
+	}
 
 	cfg := &Config{
-		ListenAddr:           listenAddr,
-		AdminListenAddr:      adminListenAddr,
-		NavidromeURL:         parsedURL,
-		NavidromeDBPath:      dbPath,
-		PoisqDBPath:          poisqDBPath,
-		MusicPath:            musicPath,
-		SecretKey:            secretKey,
-		SyncInterval:         syncInterval,
-		EnrichSQLiteFullText: enrichFullText,
-		LogLevel:             logLevel,
-		AliasesFile:          aliasesFile,
-		AliasesSyncURL:       aliasesSyncURL,
-		EnableDebugAPI:       enableDebugAPI,
-		AlignerURL:           strings.TrimSpace(getEnv("ALIGNER_URL", "")),
-		AlignerToken:         getEnv("ALIGNER_TOKEN", ""),
-		AlignerMusicPath:     strings.TrimSpace(getEnv("ALIGNER_MUSIC_PATH", "")),
+		ListenAddr:                listenAddr,
+		AdminListenAddr:           adminListenAddr,
+		NavidromeURL:              parsedURL,
+		NavidromeDBPath:           dbPath,
+		PoisqDBPath:               poisqDBPath,
+		MusicPath:                 musicPath,
+		SecretKey:                 secretKey,
+		SyncInterval:              syncInterval,
+		EnrichSQLiteFullText:      enrichFullText,
+		LogLevel:                  logLevel,
+		AliasesFile:               aliasesFile,
+		AliasesSyncURL:            aliasesSyncURL,
+		EnableDebugAPI:            enableDebugAPI,
+		AlignerURL:                strings.TrimSpace(getEnv("ALIGNER_URL", "")),
+		AlignerToken:              getEnv("ALIGNER_TOKEN", ""),
+		AlignerMusicPath:          strings.TrimSpace(getEnv("ALIGNER_MUSIC_PATH", "")),
+		BiographyFirstRequestWait: biographyWait,
 	}
 
 	return cfg, nil

@@ -151,11 +151,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("[FATAL] Не удалось инициализировать проверку биографий: %v", err)
 	}
-	bioBackground, err := artistbio.NewBackgroundProcessor(bioStore, trackRepo, identityResolver, bioIngestion, 25)
+	tavilySearch, err := artistbio.NewTavilySearch(keyPoolMgr)
 	if err != nil {
-		log.Fatalf("[FATAL] Не удалось инициализировать фоновое обогащение артистов: %v", err)
+		log.Fatalf("[FATAL] Не удалось инициализировать поиск источников биографий: %v", err)
 	}
-	bioBackground.SetValidator(bioValidator)
+	bioPipeline, err := artistbio.NewSynthesisPipeline(bioStore, trackRepo, identityResolver, bioIngestion, bioValidator, tavilySearch, ai.NewBiographySynthesisAI(llm))
+	if err != nil {
+		log.Fatalf("[FATAL] Не удалось инициализировать синтез биографий: %v", err)
+	}
+	bioCoordinator, err := artistbio.NewCoordinator(bioStore, func() (*sql.DB, error) { return db.OpenDatabase(cfg.NavidromeDBPath) }, bioPipeline)
+	if err != nil {
+		log.Fatalf("[FATAL] Не удалось инициализировать очередь биографий: %v", err)
+	}
 	coverFetcher := metadata.NewCoverFetcher(pathGuard)
 	libraryScanner := metadata.NewLibraryScanner(
 		pathGuard.Root(), trackRepo, stagingRepo, mbClient, coverFetcher,
@@ -208,6 +215,7 @@ func main() {
 	proxyServer := proxy.NewServer(cfg.NavidromeURL, engine, dict, aliasMgr, cfg.EnableDebugAPI)
 	proxyServer.SetCast(castService)
 	proxyServer.SetBiographyReader(bioStore)
+	proxyServer.SetBiographyCoordinator(bioCoordinator, cfg.BiographyFirstRequestWait)
 	publicHTTPServer := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           proxyServer,
@@ -235,6 +243,7 @@ func main() {
 	adminHandler.SetAlignerClient(alignerClient)
 	adminHandler.SetCast(castService)
 	adminHandler.SetBiographyStore(bioStore)
+	adminHandler.SetBiographyCoordinator(bioCoordinator)
 	if cfg.NavidromeURL != nil {
 		adminHandler.SetNavidromeURL(cfg.NavidromeURL.String())
 	}
@@ -258,6 +267,7 @@ func main() {
 
 	queueWorker.Start(ctx)
 	aliasMgr.StartDailySync(ctx)
+	bioCoordinator.Start(ctx)
 
 	// Первичная фоновая синхронизация и периодический цикл обновления
 	go func() {
@@ -266,10 +276,10 @@ func main() {
 			if err := enricher.InitSchema(); err != nil {
 				log.Printf("[WARN] Не удалось инициализировать схему обогатителя: %v", err)
 			}
-			syncData(ctx, sqliteDB, dict, enricher, libraryScanner, bioBackground, cfg)
+			syncData(ctx, sqliteDB, dict, enricher, libraryScanner, cfg)
 			_ = sqliteDB.Close()
 		}
-		runBackgroundSync(ctx, cfg, dict, libraryScanner, bioBackground)
+		runBackgroundSync(ctx, cfg, dict, libraryScanner)
 	}()
 
 	// 9. Ожидание сигнала завершения работы
@@ -287,7 +297,7 @@ func main() {
 
 // syncData вычитывает свежие данные из базы Navidrome, обновляет поисковый словарь,
 // запускает обогащение full_text и синхронизирует список треков в poisq.db.
-func syncData(ctx context.Context, sqliteDB *sql.DB, dict *search.Dictionary, enricher *db.Enricher, scanner *metadata.LibraryScanner, bioBackground *artistbio.BackgroundProcessor, cfg *config.Config) {
+func syncData(ctx context.Context, sqliteDB *sql.DB, dict *search.Dictionary, enricher *db.Enricher, scanner *metadata.LibraryScanner, cfg *config.Config) {
 	if sqliteDB == nil {
 		return
 	}
@@ -310,19 +320,10 @@ func syncData(ctx context.Context, sqliteDB *sql.DB, dict *search.Dictionary, en
 		}
 	}
 
-	if bioBackground != nil && ctx.Err() == nil {
-		report, err := bioBackground.ProcessBatch(ctx, sqliteDB)
-		if err != nil && ctx.Err() == nil {
-			log.Printf("[WARN] Фоновое обогащение биографий завершилось с ошибкой: %v", err)
-		} else if err == nil {
-			log.Printf("[INFO] Биографии артистов: просмотрено=%d пропущено=%d идентифицировано=%d не_определено=%d кандидатов=%d пустых_источников=%d проверено=%d ошибок_источников=%d",
-				report.Scanned, report.Skipped, report.Resolved, report.Uncertain, report.Ingested, report.Empty, report.Validated, report.Failed)
-		}
-	}
 }
 
 // runBackgroundSync выполняет периодическое обновление словаря, обогащение базы и синхронизацию треков.
-func runBackgroundSync(ctx context.Context, cfg *config.Config, dict *search.Dictionary, scanner *metadata.LibraryScanner, bioBackground *artistbio.BackgroundProcessor) {
+func runBackgroundSync(ctx context.Context, cfg *config.Config, dict *search.Dictionary, scanner *metadata.LibraryScanner) {
 	ticker := time.NewTicker(cfg.SyncInterval)
 	defer ticker.Stop()
 
@@ -340,7 +341,7 @@ func runBackgroundSync(ctx context.Context, cfg *config.Config, dict *search.Dic
 			enricher := db.NewEnricher(sqliteDB, cfg.EnrichSQLiteFullText)
 			_ = enricher.InitSchema()
 
-			syncData(ctx, sqliteDB, dict, enricher, scanner, bioBackground, cfg)
+			syncData(ctx, sqliteDB, dict, enricher, scanner, cfg)
 			_ = sqliteDB.Close()
 		}
 	}

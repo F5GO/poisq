@@ -380,6 +380,7 @@
             <section class="biography-preview-block">
               <h3 class="form-label">Автоматическое описание</h3>
               <p id="biography-automatic-meta" class="form-hint"></p>
+			  <p id="biography-job-status" class="form-hint"></p>
               <div id="biography-automatic-preview" class="biography-preview"></div>
             </section>
 
@@ -398,6 +399,7 @@
               <div class="biography-actions">
                 <button type="submit" id="btn-save-biography" class="btn btn-primary">Сохранить ручное описание</button>
                 <button type="button" id="btn-reset-biography" class="btn btn-danger-outline">Вернуться к автоматическому</button>
+				<button type="button" id="btn-rebuild-biography" class="btn btn-secondary">Пересобрать описание</button>
               </div>
             </form>
           </div>
@@ -493,6 +495,7 @@
             <option value="groq">Groq Cloud (Whisper Large v3 — транскрибация караоке)</option>
             <option value="yandex">Яндекс Музыка (OAuth токен с Плюсом)</option>
             <option value="genius">Genius API (Поиск текстов андеграунда)</option>
+			<option value="tavily">Tavily Search (поиск источников для биографий)</option>
             <option value="music_assistant">Music Assistant (токен для трансляции на колонки)</option>
           </select>
         </div>

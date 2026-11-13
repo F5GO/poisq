@@ -32,6 +32,10 @@ type effectiveBiographyReader interface {
 	EffectiveBiography(ctx context.Context, artistID string) (artistbio.EffectiveBiography, bool, error)
 }
 
+type biographyRequester interface {
+	Request(ctx context.Context, artistID string, force bool) (<-chan struct{}, artistbio.JobState, error)
+}
+
 type prefixedReadCloser struct {
 	io.Reader
 	io.Closer
@@ -128,6 +132,10 @@ func artistInfoID(req *http.Request) string {
 // local Russian biography. If no local result exists, a safely decoded
 // non-Russian upstream biography is removed instead of leaking English text.
 func enrichArtistInfoResponse(resp *http.Response, reader effectiveBiographyReader) {
+	enrichArtistInfoResponseOnDemand(resp, reader, nil, 0)
+}
+
+func enrichArtistInfoResponseOnDemand(resp *http.Response, reader effectiveBiographyReader, requester biographyRequester, wait time.Duration) {
 	if resp == nil || reader == nil || resp.Request == nil || resp.StatusCode != http.StatusOK ||
 		resp.Body == nil || resp.Header.Get("Content-Encoding") != "" {
 		return
@@ -158,6 +166,25 @@ func enrichArtistInfoResponse(resp *http.Response, reader effectiveBiographyRead
 	ctx, cancel := context.WithTimeout(resp.Request.Context(), artistBiographyReadTimeout)
 	biography, found, err := reader.EffectiveBiography(ctx, artistID)
 	cancel()
+	if (err != nil || !found) && requester != nil && validArtistInfoDocument(body, isJSON) {
+		done, _, requestErr := requester.Request(resp.Request.Context(), artistID, false)
+		if requestErr == nil && done != nil {
+			if wait < 5*time.Second || wait > 30*time.Second {
+				wait = 20 * time.Second
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-done:
+				timer.Stop()
+				readCtx, readCancel := context.WithTimeout(resp.Request.Context(), artistBiographyReadTimeout)
+				biography, found, err = reader.EffectiveBiography(readCtx, artistID)
+				readCancel()
+			case <-resp.Request.Context().Done():
+				timer.Stop()
+			case <-timer.C:
+			}
+		}
+	}
 	if err == nil && found && biography.ArtistID == artistID && strings.TrimSpace(biography.Text) != "" &&
 		len(biography.Text) <= artistbio.MaxBiographyBytes && utf8.ValidString(biography.Text) {
 		replacement = biography.Text
@@ -194,6 +221,22 @@ func enrichArtistInfoResponse(resp *http.Response, reader effectiveBiographyRead
 	for _, header := range []string{"ETag", "Content-MD5", "Digest", "Content-Digest", "Repr-Digest"} {
 		resp.Header.Del(header)
 	}
+}
+
+func validArtistInfoDocument(body []byte, isJSON bool) bool {
+	if isJSON {
+		_, _, _, ok := decodeArtistInfoJSONDocument(body)
+		return ok
+	}
+	if len(body) == 0 || len(body) > maxArtistInfoResponseBytes || !utf8.Valid(body) {
+		return false
+	}
+	var document struct {
+		XMLName xml.Name  `xml:"subsonic-response"`
+		Status  string    `xml:"status,attr"`
+		Artist  *struct{} `xml:"artistInfo2"`
+	}
+	return xml.Unmarshal(body, &document) == nil && document.XMLName.Local == "subsonic-response" && document.Status == "ok" && document.Artist != nil
 }
 
 func restoreArtistInfoBody(resp *http.Response, body []byte, contentLength int64, headerLength []string, hadHeaderLength bool) {

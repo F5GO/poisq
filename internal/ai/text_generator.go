@@ -12,6 +12,23 @@ import (
 	"github.com/F5GO/poisq/internal/logger"
 )
 
+type modelPreferenceContextKey struct{}
+
+func withModelPreference(ctx context.Context, models ...string) context.Context {
+	bounded := make([]string, 0, len(models))
+	for _, model := range models {
+		if model != "" && len(model) <= 128 {
+			bounded = append(bounded, model)
+		}
+	}
+	return context.WithValue(ctx, modelPreferenceContextKey{}, bounded)
+}
+
+func modelPreference(ctx context.Context) []string {
+	models, _ := ctx.Value(modelPreferenceContextKey{}).([]string)
+	return models
+}
+
 // TextGenerator — любая текстовая LLM, умеющая вернуть ответ (при mime "application/json" — валидный JSON).
 type TextGenerator interface {
 	GenerateText(ctx context.Context, systemPrompt, userPrompt, responseMimeType string) (string, error)

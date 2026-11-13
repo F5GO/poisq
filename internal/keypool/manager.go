@@ -53,8 +53,9 @@ func (m *Manager) AddKey(provider, label, plainKey string) (int64, error) {
 
 	cleanProvider := strings.ToLower(strings.TrimSpace(provider))
 	cleanKey := strings.TrimSpace(plainKey)
-	if cleanProvider == "" || cleanKey == "" {
-		return 0, errors.New("провайдер и API-ключ не могут быть пустыми")
+	cleanLabel := strings.TrimSpace(label)
+	if !validProvider(cleanProvider) || cleanKey == "" || len(cleanKey) > 8<<10 || len(cleanLabel) > 128 || strings.ContainsAny(cleanKey, "\r\n\x00") {
+		return 0, errors.New("некорректный провайдер, метка или API-ключ")
 	}
 
 	encrypted, err := m.cipher.Encrypt(cleanKey)
@@ -62,7 +63,17 @@ func (m *Manager) AddKey(provider, label, plainKey string) (int64, error) {
 		return 0, err
 	}
 	mask := security.MaskKey(cleanKey)
-	return m.repo.AddKey(cleanProvider, strings.TrimSpace(label), encrypted, mask)
+	return m.repo.AddKey(cleanProvider, cleanLabel, encrypted, mask)
+}
+
+func validProvider(value string) bool {
+	switch value {
+	case "gemini", "groq", "yandex", "genius", "music_assistant", "acoustid",
+		"apple_music", "lastfm", "discogs", "tavily":
+		return true
+	default:
+		return false
+	}
 }
 
 // DeleteKey удаляет ключ из пула.

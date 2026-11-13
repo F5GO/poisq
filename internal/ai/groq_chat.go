@@ -123,6 +123,13 @@ func (g *GroqChatClient) candidateModels(ctx context.Context, apiKey string) []s
 		}
 	}
 	add(g.pinnedModel)
+	for _, preference := range modelPreference(ctx) {
+		for _, model := range cached {
+			if strings.EqualFold(model, preference) || strings.Contains(strings.ToLower(model), strings.ToLower(preference)) {
+				add(model)
+			}
+		}
+	}
 	for _, m := range cached {
 		add(m)
 	}

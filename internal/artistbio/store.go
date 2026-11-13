@@ -23,13 +23,18 @@ type AutomaticCacheReset struct {
 	Identities int64 `json:"identities"`
 	Candidates int64 `json:"candidates"`
 	Selections int64 `json:"selections"`
+	Jobs       int64 `json:"jobs"`
 }
 
 func NewStore(db *sql.DB) (*Store, error) {
 	if db == nil {
 		return nil, fmt.Errorf("artist biography store requires database")
 	}
-	return &Store{db: db}, nil
+	store := &Store{db: db}
+	if _, err := store.CleanupLegacyLocalLibrary(context.Background()); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 // ResetAutomaticCache clears every derived biography result while preserving
@@ -50,6 +55,7 @@ func (s *Store) ResetAutomaticCache(ctx context.Context) (AutomaticCacheReset, e
 		`SELECT COUNT(*) FROM artist_bio_identity`:                                         &report.Identities,
 		`SELECT COUNT(*) FROM artist_bio_candidates`:                                       &report.Candidates,
 		`SELECT COUNT(*) FROM artist_biographies WHERE automatic_candidate_id IS NOT NULL`: &report.Selections,
+		`SELECT COUNT(*) FROM artist_bio_jobs`:                                             &report.Jobs,
 	} {
 		if err := tx.QueryRowContext(ctx, query).Scan(target); err != nil {
 			return AutomaticCacheReset{}, fmt.Errorf("count biography cache state: %w", err)
@@ -61,6 +67,8 @@ func (s *Store) ResetAutomaticCache(ctx context.Context) (AutomaticCacheReset, e
 		query string
 		args  []any
 	}{
+		{`DELETE FROM artist_bio_jobs`, nil},
+		{`DELETE FROM artist_bio_web_cache`, nil},
 		{`UPDATE artist_biographies SET automatic_candidate_id = NULL, updated_at = ?`, []any{now}},
 		{`DELETE FROM artist_bio_candidates`, nil},
 		{`DELETE FROM artist_bio_identity WHERE artist_id NOT IN (
@@ -271,7 +279,7 @@ func (s *Store) ApplyValidationAndSelect(ctx context.Context, validation Candida
 	err = tx.QueryRowContext(ctx, `SELECT id FROM artist_bio_candidates
 		WHERE artist_id = ? AND status = 'accepted'
 		ORDER BY
-			CASE WHEN provider = 'local_library' THEN 1 ELSE 0 END ASC,
+			CASE WHEN provider = 'ai_summary' THEN 0 WHEN provider = 'local_library' THEN 2 ELSE 1 END ASC,
 			match_confidence DESC,
 			CASE WHEN russian_text = '' THEN 1 ELSE 0 END DESC,
 			language_confidence DESC,

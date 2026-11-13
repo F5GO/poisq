@@ -308,6 +308,7 @@ function initBiographyStudio() {
   });
   document.getElementById("biography-manual-form")?.addEventListener("submit", saveManualBiography);
   document.getElementById("btn-reset-biography")?.addEventListener("click", resetManualBiography);
+	document.getElementById("btn-rebuild-biography")?.addEventListener("click", rebuildBiography);
   document.getElementById("btn-reset-biography-cache")?.addEventListener("click", resetBiographyCache);
 }
 
@@ -377,6 +378,7 @@ function renderBiographyDetail(detail) {
   const automaticPreview = document.getElementById("biography-automatic-preview");
   const manualText = document.getElementById("biography-manual-text");
   const sourceURL = document.getElementById("biography-source-url");
+	const jobStatus = document.getElementById("biography-job-status");
 
   if (name) name.textContent = detail.artistName || "Исполнитель";
   if (stateText) {
@@ -396,17 +398,45 @@ function renderBiographyDetail(detail) {
   if (automaticPreview) automaticPreview.textContent = detail.automatic?.text || "Нет автоматического описания.";
   if (manualText) manualText.value = detail.manualActive ? (detail.manualText || "") : "";
   if (sourceURL) sourceURL.value = detail.manualActive ? (detail.manualSourceUrl || "") : "";
+	if (jobStatus) {
+		const labels = { queued: "В очереди", running: "Собираем и проверяем источники", ready: "Готово", no_data: "Недостаточно подтверждённых данных", retryable: "Временная ошибка — можно повторить позже" };
+		jobStatus.textContent = detail.jobStatus ? `Состояние: ${labels[detail.jobStatus] || detail.jobStatus}` : "Описание ещё не запрашивалось.";
+	}
   const reset = document.getElementById("btn-reset-biography");
   if (reset) reset.disabled = !detail.manualActive;
+	const rebuild = document.getElementById("btn-rebuild-biography");
+	if (rebuild) rebuild.disabled = detail.jobStatus === "queued" || detail.jobStatus === "running";
   setBiographyBusy(false);
+	if ((detail.jobStatus === "queued" || detail.jobStatus === "running") && state.activeTab === "biographies") {
+		clearTimeout(state.biographyPollTimer);
+		state.biographyPollTimer = setTimeout(() => {
+			if (state.selectedBiography?.artistId === detail.artistId) loadBiographyDetail(detail.artistId);
+		}, 2000);
+	}
 }
 
 function setBiographyBusy(busy) {
   state.biographyBusy = busy;
   const save = document.getElementById("btn-save-biography");
   const reset = document.getElementById("btn-reset-biography");
+	const rebuild = document.getElementById("btn-rebuild-biography");
   if (save) save.disabled = busy;
   if (reset) reset.disabled = busy || !state.selectedBiography?.manualActive;
+	if (rebuild) rebuild.disabled = busy || state.selectedBiography?.jobStatus === "queued" || state.selectedBiography?.jobStatus === "running";
+}
+
+async function rebuildBiography() {
+	if (state.biographyBusy || !state.selectedBiography) return;
+	if (!confirm("Заново собрать описание этого исполнителя из проверенных источников?")) return;
+	setBiographyBusy(true);
+	try {
+		await fetchApi("/artist-biographies/rebuild", "POST", { artistId: state.selectedBiography.artistId });
+		await loadBiographyDetail(state.selectedBiography.artistId);
+		showToast("Пересборка поставлена в очередь", "success");
+	} catch (err) {
+		setBiographyBusy(false);
+		showToast(err.message, "error");
+	}
 }
 
 async function saveManualBiography(event) {
@@ -450,7 +480,7 @@ async function resetBiographyCache() {
   if (!confirm(
     "Полностью сбросить автоматическую проверку всех артистов?\n\n" +
     "Будут удалены найденные идентичности, кандидаты, переводы и автоматический выбор. " +
-    "Ручные описания сохранятся. Автоматическая проверка начнётся заново в ближайшем фоновом цикле."
+    "Ручные описания сохранятся. Новая проверка начнётся при открытии страницы исполнителя или ручной пересборке."
   )) return;
   setBiographyBusy(true);
   const button = document.getElementById("btn-reset-biography-cache");
@@ -2817,6 +2847,7 @@ async function loadKeysData() {
     acoustid: "AcoustID (fpcalc)",
     yandex: "Яндекс Музыка",
     genius: "Genius API",
+	avily: "Tavily Search",
     music_assistant: "Music Assistant"
   };
 
