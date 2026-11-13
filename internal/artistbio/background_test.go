@@ -90,6 +90,38 @@ func TestBiographyBackgroundReportsUncertainSeparately(t *testing.T) {
 	}
 }
 
+func TestBiographyBackgroundCreatesTruthfulLocalFallback(t *testing.T) {
+	store := ingestionTestStore(t)
+	trackRepo := db.NewTrackRepository(store.db)
+	if err := trackRepo.UpsertTrack(db.TrackRecord{
+		ID: "local-track", FilePath: "/music/local.flac", Artist: "Первый",
+		Album: "Локальный альбом", Title: "Локальная песня", Year: 2026,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resolver := &fakeBackgroundResolver{result: IdentityResolution{Status: ResolutionUncertain}}
+	processor, err := NewBackgroundProcessor(store, trackRepo, resolver, &fakeBackgroundIngestion{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := processor.ProcessBatch(context.Background(), backgroundNavDB(t)); err != nil {
+		t.Fatal(err)
+	}
+	effective, found, err := store.EffectiveBiography(context.Background(), "a")
+	if err != nil || !found {
+		t.Fatalf("local fallback missing: found=%t err=%v", found, err)
+	}
+	if effective.Source != ProviderLocalLibrary || effective.Manual ||
+		!strings.Contains(effective.Text, "не содержит внешних биографических сведений") ||
+		!strings.Contains(effective.Text, "Локальный альбом") || !strings.Contains(effective.Text, "Локальная песня") {
+		t.Fatalf("unexpected local fallback: %#v", effective)
+	}
+	analysis := DetectBiographyLanguage(effective.Text)
+	if !analysis.QualityOK || analysis.Language != "ru" || analysis.RussianShare < 0.80 {
+		t.Fatalf("local fallback is not verified Russian: %#v", analysis)
+	}
+}
+
 type fakeBackgroundIngestion struct {
 	mu    sync.Mutex
 	calls []string

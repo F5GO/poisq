@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/F5GO/poisq/internal/keypool"
 	"github.com/F5GO/poisq/internal/metadata"
@@ -150,6 +152,15 @@ func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Bi
 		}
 		sourceID = links.WikidataID
 	}
+	if article.Title == "" && mbid != "" {
+		result, err := s.fetchExactRussianReleaseMatch(ctx, artist)
+		if err != nil {
+			return nil, fmt.Errorf("wikipedia exact artist fallback unavailable")
+		}
+		if result != nil {
+			return result, nil
+		}
+	}
 	if article.Title == "" && s.regionalLinks != nil {
 		rawURL, regionalID, err := s.regionalLinks.ExactWikipediaLink(ctx, artist)
 		if err != nil {
@@ -200,6 +211,124 @@ func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Bi
 		}, nil
 	}
 	return nil, nil
+}
+
+// fetchExactRussianReleaseMatch covers recently created Wikipedia articles
+// whose Wikidata/MusicBrainz relations have not propagated yet. It never does
+// a fuzzy search: the exact artist title must resolve to a page whose intro
+// mentions a real album, or at least two tracks, from the local library. The
+// already resolved catalog identity plus this independent release evidence
+// prevents a same-name person or disambiguation page from being accepted.
+func (s *WikipediaSource) fetchExactRussianReleaseMatch(ctx context.Context, artist ResolvedArtist) (*BiographySourceResult, error) {
+	if s.wikipedias["ru"] == nil || (len(artist.Context.Albums) == 0 && len(artist.Context.Tracks) == 0) {
+		return nil, nil
+	}
+	query := url.Values{
+		"action": {"query"}, "prop": {"extracts|pageprops"}, "exintro": {"1"}, "explaintext": {"1"},
+		"ppprop": {"wikibase_item"}, "redirects": {"1"}, "format": {"json"}, "titles": {artist.Context.Name},
+	}
+	var response struct {
+		Query struct {
+			Pages map[string]struct {
+				PageID    int64  `json:"pageid"`
+				Title     string `json:"title"`
+				Extract   string `json:"extract"`
+				PageProps struct {
+					WikibaseItem string `json:"wikibase_item"`
+				} `json:"pageprops"`
+			} `json:"pages"`
+		} `json:"query"`
+	}
+	if _, err := s.wikipedias["ru"].getJSON(ctx, "/w/api.php", query, nil, &response); err != nil {
+		return nil, err
+	}
+	pageIDs := make([]string, 0, len(response.Query.Pages))
+	for id := range response.Query.Pages {
+		pageIDs = append(pageIDs, id)
+	}
+	sort.Strings(pageIDs)
+	for _, id := range pageIDs {
+		page := response.Query.Pages[id]
+		text := strings.TrimSpace(page.Extract)
+		if page.PageID <= 0 || text == "" || !wikipediaTitleMatchesArtist(page.Title, artist.Context.Name) {
+			continue
+		}
+		evidence := wikipediaReleaseEvidence(text, artist.Context.Albums, artist.Context.Tracks)
+		if evidence == "" {
+			continue
+		}
+		sourceID := strings.TrimSpace(page.PageProps.WikibaseItem)
+		if sourceID == "" {
+			sourceID = "page:" + strconv.FormatInt(page.PageID, 10)
+		}
+		return &BiographySourceResult{
+			SourceArtistID: sourceID, SourceURL: "https://ru.wikipedia.org/wiki/" + url.PathEscape(page.Title),
+			OriginalText: text, LanguageHint: "ru", MatchConfidence: 1,
+			EvidenceCodes: []string{"id:musicbrainz", "name:exact", evidence},
+		}, nil
+	}
+	return nil, nil
+}
+
+func wikipediaTitleMatchesArtist(title, artist string) bool {
+	if identityNamesEquivalent(title, artist) {
+		return true
+	}
+	if suffix := strings.Index(title, " ("); suffix > 0 {
+		return identityNamesEquivalent(title[:suffix], artist)
+	}
+	return false
+}
+
+func wikipediaReleaseEvidence(extract string, albums []IdentityRelease, tracks []string) string {
+	haystack := " " + searchableBiographyText(extract) + " "
+	for _, album := range albums {
+		if needle := searchableReleaseTitle(album.Title); needle != "" && strings.Contains(haystack, " "+needle+" ") {
+			return "album:mentioned"
+		}
+	}
+	matches := 0
+	seen := make(map[string]struct{})
+	for _, track := range tracks {
+		needle := searchableReleaseTitle(track)
+		if needle == "" {
+			continue
+		}
+		if _, exists := seen[needle]; exists {
+			continue
+		}
+		seen[needle] = struct{}{}
+		if strings.Contains(haystack, " "+needle+" ") {
+			matches++
+			if matches >= 2 {
+				return "track:multiple_mentioned"
+			}
+		}
+	}
+	return ""
+}
+
+func searchableReleaseTitle(value string) string {
+	normalized := searchableBiographyText(value)
+	if utf8.RuneCountInString(strings.ReplaceAll(normalized, " ", "")) < 6 {
+		return ""
+	}
+	return normalized
+}
+
+func searchableBiographyText(value string) string {
+	var output strings.Builder
+	space := true
+	for _, r := range strings.ToLower(metadata.NormalizeNFC(value)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			output.WriteRune(r)
+			space = false
+		} else if !space {
+			output.WriteByte(' ')
+			space = true
+		}
+	}
+	return strings.Join(strings.Fields(output.String()), " ")
 }
 
 type wikipediaArticle struct {

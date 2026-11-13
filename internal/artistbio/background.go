@@ -3,7 +3,9 @@ package artistbio
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/F5GO/poisq/internal/db"
@@ -143,6 +145,10 @@ func (p *BackgroundProcessor) ProcessBatch(ctx context.Context, navDB *sql.DB) (
 				logger.Debug("[BIO] artist_id=%q identity_error=%v", artist.ID, err)
 				continue
 			}
+			if err := p.ensureLocalLibraryFallback(ctx, identityContext, resolution); err != nil {
+				report.Failed++
+				logger.Debug("[BIO] artist_id=%q local_fallback_error=%v", artist.ID, err)
+			}
 			if resolution.Status != ResolutionResolved {
 				report.Uncertain++
 				logger.Debug("[BIO] artist_id=%q artist=%q identity=uncertain confidence=%.2f ai_required=%t evidence=%v contradictions=%v",
@@ -195,6 +201,95 @@ func (p *BackgroundProcessor) ProcessBatch(ctx context.Context, navDB *sql.DB) (
 	return report, nil
 }
 
+// ensureLocalLibraryFallback guarantees a truthful Russian description even
+// for artists absent from every external catalog. The text states only what is
+// present in local metadata and has the lowest provider priority, so any real
+// accepted biography replaces it automatically.
+func (p *BackgroundProcessor) ensureLocalLibraryFallback(ctx context.Context, artist IdentityContext, resolution IdentityResolution) error {
+	if _, found, err := p.store.Identity(ctx, artist.ArtistID); err != nil {
+		return err
+	} else if !found {
+		identityEvidence, err := json.Marshal(struct {
+			Evidence       []string `json:"evidence"`
+			Contradictions []string `json:"contradictions,omitempty"`
+		}{resolution.EvidenceCodes, resolution.ContradictionCodes})
+		if err != nil {
+			return fmt.Errorf("encode local fallback identity: %w", err)
+		}
+		if err := p.store.PutIdentity(ctx, ArtistIdentity{
+			ArtistID: artist.ArtistID, ArtistName: artist.Name, MusicBrainzID: resolution.MusicBrainzID,
+			Status: resolution.Status, ResolvedSource: resolution.Provider, ResolvedArtistID: resolution.ProviderArtistID,
+			Confidence: resolution.Confidence, EvidenceJSON: string(identityEvidence), UpdatedAt: time.Now(),
+		}); err != nil {
+			return err
+		}
+	}
+	text := localLibraryBiography(artist)
+	analysis := DetectBiographyLanguage(text)
+	if !analysis.QualityOK || analysis.Language != "ru" || analysis.Confidence < 0.90 || analysis.RussianShare < 0.80 {
+		return fmt.Errorf("generated local library description failed Russian validation")
+	}
+	evidence, err := json.Marshal(struct {
+		Evidence []string `json:"evidence"`
+	}{Evidence: []string{"library:artist_id", "library:metadata"}})
+	if err != nil {
+		return fmt.Errorf("encode local library evidence: %w", err)
+	}
+	now := time.Now()
+	candidateID, err := p.store.PutCandidate(ctx, Candidate{
+		ArtistID: artist.ArtistID, Provider: ProviderLocalLibrary, SourceArtistID: artist.ArtistID,
+		OriginalText: text, OriginalLanguage: "ru", MatchConfidence: 1,
+		Status: CandidateFetched, EvidenceJSON: string(evidence), FetchedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		return err
+	}
+	validatedEvidence, err := addValidationEvidence(string(evidence), "validation:deterministic_ru")
+	if err != nil {
+		return err
+	}
+	return p.store.ApplyValidationAndSelect(ctx, CandidateValidation{
+		ArtistID: artist.ArtistID, CandidateID: candidateID, DetectedLanguage: "ru",
+		LanguageConfidence: analysis.Confidence, RussianShare: analysis.RussianShare,
+		Status: CandidateAccepted, EvidenceJSON: validatedEvidence, UpdatedAt: now,
+	})
+}
+
+func localLibraryBiography(artist IdentityContext) string {
+	name := strings.TrimSpace(artist.Name)
+	var text strings.Builder
+	text.WriteString("По метаданным медиатеки, имя «")
+	text.WriteString(name)
+	text.WriteString("» указано как исполнитель сохранённых аудиозаписей. Эта справка не содержит внешних биографических сведений и перечисляет только данные музыкальной коллекции.")
+	if len(artist.Albums) > 0 {
+		text.WriteString(" Сохранённые релизы: ")
+		limit := min(4, len(artist.Albums))
+		for index := 0; index < limit; index++ {
+			if index > 0 {
+				text.WriteString(", ")
+			}
+			text.WriteString("«")
+			text.WriteString(strings.TrimSpace(artist.Albums[index].Title))
+			text.WriteString("»")
+		}
+		text.WriteString(".")
+	}
+	if len(artist.Tracks) > 0 {
+		text.WriteString(" Среди сохранённых композиций: ")
+		limit := min(5, len(artist.Tracks))
+		for index := 0; index < limit; index++ {
+			if index > 0 {
+				text.WriteString(", ")
+			}
+			text.WriteString("«")
+			text.WriteString(strings.TrimSpace(artist.Tracks[index]))
+			text.WriteString("»")
+		}
+		text.WriteString(".")
+	}
+	return text.String()
+}
+
 func (p *BackgroundProcessor) localContext(ctx context.Context, artist db.LibraryArtist) IdentityContext {
 	result := IdentityContext{ArtistID: artist.ID, Name: artist.Name}
 	if p.local == nil {
@@ -221,7 +316,7 @@ func (p *BackgroundProcessor) hasFreshState(ctx context.Context, artistID string
 		identityRetryCutoff := time.Now().Add(-p.identityRetryTTL).Unix()
 		var exists int
 		err := p.store.db.QueryRowContext(ctx, `SELECT EXISTS(
-			SELECT 1 FROM artist_bio_candidates WHERE artist_id = ? AND updated_at >= ?
+			SELECT 1 FROM artist_bio_candidates WHERE artist_id = ? AND provider != 'local_library' AND updated_at >= ?
 			UNION ALL
 			SELECT 1 FROM artist_bio_identity WHERE artist_id = ? AND status IN ('uncertain', 'resolved') AND updated_at >= ?
 		)`, artistID, cutoff, artistID, identityRetryCutoff).Scan(&exists)
@@ -235,7 +330,7 @@ func (p *BackgroundProcessor) hasFreshState(ctx context.Context, artistID string
 	var exists int
 	err := p.store.db.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM artist_bio_candidates
-			WHERE artist_id = ? AND status = 'accepted' AND updated_at >= ?
+			WHERE artist_id = ? AND provider != 'local_library' AND status = 'accepted' AND updated_at >= ?
 		UNION ALL
 		SELECT 1 FROM artist_bio_candidates
 			WHERE artist_id = ? AND status = 'translation_pending' AND updated_at >= ?
