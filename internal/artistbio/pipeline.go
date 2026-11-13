@@ -109,14 +109,23 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 		version = computed
 	}
 
+	var synthesisErr error
 	if countEvidenceOrigins(evidence) >= 2 {
 		stageStarted = time.Now()
 		summary, editErr := p.ai.Edit(ctx, evidence)
-		logPipelineStage(artist.ID, artist.Name, "summary_edit", stageStarted, editErr)
+		if editErr != nil {
+			synthesisErr = discoveryError("summary_edit_failed", editErr)
+		}
+		logPipelineStage(artist.ID, artist.Name, "summary_edit", stageStarted, synthesisErr)
 		if editErr == nil {
 			stageStarted = time.Now()
 			verification, verifyErr := p.ai.Verify(ctx, summary, evidence)
-			logPipelineStage(artist.ID, artist.Name, "summary_verify", stageStarted, verifyErr)
+			if verifyErr != nil {
+				synthesisErr = discoveryError("summary_verify_failed", verifyErr)
+			} else if !verification.Grounded {
+				synthesisErr = discoveryError("summary_not_grounded", fmt.Errorf("summary verification rejected"))
+			}
+			logPipelineStage(artist.ID, artist.Name, "summary_verify", stageStarted, synthesisErr)
 			if verifyErr == nil && verification.Grounded {
 				finalText := summary.Summary + "\n\n" + synthesisDisclosure(summary.UsedSourceIDs, evidence)
 				proof, _ := json.Marshal(struct {
@@ -126,9 +135,15 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 					Evidence  []storedSummarySource `json:"evidence"`
 				}{version, summary.UsedSourceIDs, summary.Sentences, storedSummarySources(summary.UsedSourceIDs, evidence)})
 				_, err = p.store.CommitAISummary(ctx, artist.ID, version, finalText, string(proof), time.Now())
-				return err
+				if err != nil {
+					return p.retryable(ctx, artist.ID, "summary_store_failed", err)
+				}
+				return nil
 			}
 		}
+	}
+	if synthesisErr != nil {
+		return p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
 	}
 	if _, found, readErr := p.store.AutomaticCandidate(ctx, artist.ID); readErr != nil {
 		return p.retryable(ctx, artist.ID, "selection_unavailable", readErr)

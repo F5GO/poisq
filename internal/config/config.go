@@ -87,7 +87,7 @@ func Load() (*Config, error) {
 	aliasesFile := getEnv("ALIASES_FILE", "/data/aliases.json")
 	aliasesSyncURL := getEnv("ALIASES_SYNC_URL", "https://raw.githubusercontent.com/F5GO/poisq/main/aliases.json")
 	rawDebugAPI := getEnv("ENABLE_DEBUG_API", "false")
-	rawBiographyWait := getEnv("BIO_FIRST_REQUEST_WAIT", "20s")
+	rawBiographyWait := getEnv("BIO_FIRST_REQUEST_WAIT", "25s")
 
 	parsedURL, err := url.Parse(rawNavidromeURL)
 	if err != nil {
@@ -111,8 +111,8 @@ func Load() (*Config, error) {
 	}
 	biographyWait, err := time.ParseDuration(rawBiographyWait)
 	if err != nil || biographyWait < 5*time.Second || biographyWait > 30*time.Second {
-		log.Printf("[WARN] Некорректный BIO_FIRST_REQUEST_WAIT %q, используется 20s", rawBiographyWait)
-		biographyWait = 20 * time.Second
+		log.Printf("[WARN] Некорректный BIO_FIRST_REQUEST_WAIT %q, используется 25s", rawBiographyWait)
+		biographyWait = 25 * time.Second
 	}
 
 	cfg := &Config{

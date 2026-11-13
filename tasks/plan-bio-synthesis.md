@@ -84,7 +84,7 @@ Checkpoint: concurrency, restart, cancellation, full queue, cooldown, quota, and
 - Extend the current biography reader boundary with the smallest coordinator trigger/wait contract needed by `getArtistInfo2`.
 - Admit work only after a valid authenticated artist request and successful upstream artist response; never copy credentials, request data, or user identity into jobs.
 - On a miss, enqueue/join, wait for `BIO_FIRST_REQUEST_WAIT`, re-read once when notified, and otherwise return the safe upstream response while the job continues.
-- Parse only 5–30 seconds, provisionally default to 20 seconds, and keep provider/search/AI work outside the request goroutine.
+- Parse only 5–30 seconds, default to 25 seconds after the first deployed cold run exceeded 20 seconds, and keep provider/search/AI work outside the request goroutine. Recalibrate after the full p90 sample is available.
 
 Checkpoint: proxy tests prove bounded latency, exact artist isolation, one admission, pass-through on every failure, and immediate cache hits.
 

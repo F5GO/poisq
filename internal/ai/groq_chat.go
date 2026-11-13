@@ -260,7 +260,8 @@ func shouldTryNextGroqModel(status int, err error, mime string) bool {
 	if isModelUnavailable(status, err) {
 		return true
 	}
-	return status == http.StatusBadRequest && strings.Contains(strings.ToLower(mime), "json")
+	return status == http.StatusTooManyRequests ||
+		(status == http.StatusBadRequest && strings.Contains(strings.ToLower(mime), "json"))
 }
 
 func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, mime string) (string, int, error) {
@@ -279,10 +280,12 @@ func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, m
 			return "", status, err
 		}
 		logger.Warn("[GROQ-LLM] Модель %s отклонила запрос (HTTP %d), пробую следующую", model, status)
-		// Список мог устареть — при следующем вызове запросим заново
-		g.mu.Lock()
-		g.modelsLoaded = time.Time{}
-		g.mu.Unlock()
+		if isModelUnavailable(status, err) {
+			// Только отсутствие модели означает, что кеш списка мог устареть.
+			g.mu.Lock()
+			g.modelsLoaded = time.Time{}
+			g.mu.Unlock()
+		}
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("нет доступных моделей Groq")

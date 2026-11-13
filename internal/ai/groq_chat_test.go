@@ -52,4 +52,7 @@ func TestGroqJSONBadRequestTriesNextModel(t *testing.T) {
 	if shouldTryNextGroqModel(http.StatusBadRequest, errors.New("bad request"), "text/plain") {
 		t.Fatal("non-JSON HTTP 400 must remain terminal")
 	}
+	if !shouldTryNextGroqModel(http.StatusTooManyRequests, errors.New("model rate limit"), "application/json") {
+		t.Fatal("model-specific HTTP 429 must try the next model before cooling the key")
+	}
 }
