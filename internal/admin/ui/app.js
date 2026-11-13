@@ -308,6 +308,7 @@ function initBiographyStudio() {
   });
   document.getElementById("biography-manual-form")?.addEventListener("submit", saveManualBiography);
   document.getElementById("btn-reset-biography")?.addEventListener("click", resetManualBiography);
+  document.getElementById("btn-reset-biography-cache")?.addEventListener("click", resetBiographyCache);
 }
 
 async function loadBiographyArtists(query) {
@@ -441,6 +442,32 @@ async function resetManualBiography() {
   } catch (err) {
     setBiographyBusy(false);
     showToast(err.message, "error");
+  }
+}
+
+async function resetBiographyCache() {
+  if (state.biographyBusy) return;
+  if (!confirm(
+    "Полностью сбросить автоматическую проверку всех артистов?\n\n" +
+    "Будут удалены найденные идентичности, кандидаты, переводы и автоматический выбор. " +
+    "Ручные описания сохранятся. Автоматическая проверка начнётся заново в ближайшем фоновом цикле."
+  )) return;
+  setBiographyBusy(true);
+  const button = document.getElementById("btn-reset-biography-cache");
+  if (button) button.disabled = true;
+  try {
+    const result = await fetchApi("/artist-biographies/reset", "POST", {});
+    state.selectedBiography = null;
+    document.getElementById("biography-editor")?.classList.add("hidden");
+    document.getElementById("biography-editor-empty")?.classList.remove("hidden");
+    await loadBiographyArtists();
+    const cleared = result.cleared || {};
+    showToast(`Проверка сброшена: идентичностей ${cleared.identities || 0}, кандидатов ${cleared.candidates || 0}`, "success");
+  } catch (err) {
+    showToast(err.message, "error");
+  } finally {
+    setBiographyBusy(false);
+    if (button) button.disabled = false;
   }
 }
 

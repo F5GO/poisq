@@ -19,11 +19,66 @@ type Store struct {
 	db *sql.DB
 }
 
+type AutomaticCacheReset struct {
+	Identities int64 `json:"identities"`
+	Candidates int64 `json:"candidates"`
+	Selections int64 `json:"selections"`
+}
+
 func NewStore(db *sql.DB) (*Store, error) {
 	if db == nil {
 		return nil, fmt.Errorf("artist biography store requires database")
 	}
 	return &Store{db: db}, nil
+}
+
+// ResetAutomaticCache clears every derived biography result while preserving
+// manual overrides. Preserved manual artists receive a fresh pending identity
+// so the automatic pipeline can rebuild beneath the override.
+func (s *Store) ResetAutomaticCache(ctx context.Context) (AutomaticCacheReset, error) {
+	if s == nil || s.db == nil {
+		return AutomaticCacheReset{}, fmt.Errorf("artist biography store is unavailable")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AutomaticCacheReset{}, fmt.Errorf("begin biography cache reset: %w", err)
+	}
+	defer tx.Rollback()
+
+	var report AutomaticCacheReset
+	for query, target := range map[string]*int64{
+		`SELECT COUNT(*) FROM artist_bio_identity`:                                         &report.Identities,
+		`SELECT COUNT(*) FROM artist_bio_candidates`:                                       &report.Candidates,
+		`SELECT COUNT(*) FROM artist_biographies WHERE automatic_candidate_id IS NOT NULL`: &report.Selections,
+	} {
+		if err := tx.QueryRowContext(ctx, query).Scan(target); err != nil {
+			return AutomaticCacheReset{}, fmt.Errorf("count biography cache state: %w", err)
+		}
+	}
+
+	now := time.Now().Unix()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`UPDATE artist_biographies SET automatic_candidate_id = NULL, updated_at = ?`, []any{now}},
+		{`DELETE FROM artist_bio_candidates`, nil},
+		{`DELETE FROM artist_bio_identity WHERE artist_id NOT IN (
+			SELECT artist_id FROM artist_biographies WHERE TRIM(manual_text) != ''
+		)`, nil},
+		{`UPDATE artist_bio_identity SET musicbrainz_id = '', status = 'pending', resolved_source = '',
+			resolved_artist_id = '', confidence = 0, evidence_json = '{}', updated_at = 0`, nil},
+		{`DELETE FROM sqlite_sequence WHERE name = 'artist_bio_candidates'`, nil},
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			return AutomaticCacheReset{}, fmt.Errorf("clear biography cache state: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return AutomaticCacheReset{}, fmt.Errorf("commit biography cache reset: %w", err)
+	}
+	return report, nil
 }
 
 func (s *Store) PutIdentity(ctx context.Context, identity ArtistIdentity) error {

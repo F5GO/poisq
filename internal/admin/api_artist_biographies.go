@@ -153,6 +153,31 @@ func (s *AdminServer) handleArtistBiographyDetail(w http.ResponseWriter, r *http
 	}
 }
 
+func (s *AdminServer) handleArtistBiographyReset(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.biographies == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "artist biographies are unavailable")
+		return
+	}
+	var request struct{}
+	if err := decodeStrictAdminJSON(w, r, &request); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	report, err := s.biographies.ResetAutomaticCache(r.Context())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to reset artist biography cache")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok", "cleared": report, "manualOverridesPreserved": true,
+	})
+}
+
 func (s *AdminServer) requireLibraryArtist(w http.ResponseWriter, ctx context.Context, artistID string) (db.LibraryArtist, bool, bool) {
 	database, err := s.openNavDB()
 	if err != nil || database == nil {

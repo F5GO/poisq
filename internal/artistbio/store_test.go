@@ -363,6 +363,65 @@ func TestStore_ManualOverrideAndEffectiveBiography(t *testing.T) {
 	}
 }
 
+func TestStore_ResetAutomaticCachePreservesManualOverrides(t *testing.T) {
+	database := openTestDB(t)
+	store, err := artistbio.NewStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, artistID := range []string{"automatic", "manual"} {
+		if err := store.PutIdentity(ctx, artistbio.ArtistIdentity{
+			ArtistID: artistID, ArtistName: artistID, MusicBrainzID: "mbid-" + artistID,
+			Status: artistbio.ResolutionResolved, ResolvedSource: artistbio.ProviderMusicBrainz,
+			ResolvedArtistID: "mbid-" + artistID, Confidence: 1, EvidenceJSON: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		candidateID, err := store.PutCandidate(ctx, artistbio.Candidate{
+			ArtistID: artistID, Provider: artistbio.ProviderDeezer, SourceArtistID: "deezer-" + artistID,
+			SourceURL: "https://www.deezer.com/artist/42", OriginalText: "Автоматическое описание " + artistID,
+			DetectedLanguage: "ru", LanguageConfidence: 1, RussianShare: 1, MatchConfidence: 1,
+			Status: artistbio.CandidateAccepted, EvidenceJSON: `{}`,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SelectAutomatic(ctx, artistID, candidateID, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manualText := "Проверенное ручное описание исполнителя"
+	if err := store.SetManualOverride(ctx, artistbio.ManualOverride{
+		ArtistID: "manual", Text: manualText, SourceURL: "https://example.com/manual", UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := store.ResetAutomaticCache(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Identities != 2 || report.Candidates != 2 || report.Selections != 2 {
+		t.Fatalf("unexpected reset report: %#v", report)
+	}
+	if _, found, err := store.EffectiveBiography(ctx, "automatic"); err != nil || found {
+		t.Fatalf("automatic cache survived reset: found=%v err=%v", found, err)
+	}
+	effective, found, err := store.EffectiveBiography(ctx, "manual")
+	if err != nil || !found || !effective.Manual || effective.Text != manualText {
+		t.Fatalf("manual override was not preserved: effective=%#v found=%v err=%v", effective, found, err)
+	}
+	identity, found, err := store.Identity(ctx, "manual")
+	if err != nil || !found || identity.Status != artistbio.ResolutionPending || identity.MusicBrainzID != "" || identity.Confidence != 0 {
+		t.Fatalf("manual identity was not reset to pending: identity=%#v found=%v err=%v", identity, found, err)
+	}
+	var candidateCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM artist_bio_candidates`).Scan(&candidateCount); err != nil || candidateCount != 0 {
+		t.Fatalf("candidate cache survived reset: count=%d err=%v", candidateCount, err)
+	}
+}
+
 func TestStore_EffectiveBiographyWithoutContent(t *testing.T) {
 	database := openTestDB(t)
 	store, err := artistbio.NewStore(database)
