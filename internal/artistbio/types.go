@@ -17,6 +17,8 @@ const (
 	MaxEvidenceBytes   = 32 << 10
 	maxArtistNameBytes = 2 << 10
 	maxLanguageBytes   = 32
+	maxJobErrorBytes   = 64
+	maxVersionBytes    = 128
 )
 
 type Provider string
@@ -32,6 +34,7 @@ const (
 	ProviderOfficial     Provider = "official"
 	ProviderNavidrome    Provider = "navidrome"
 	ProviderMusicBrainz  Provider = "musicbrainz"
+	ProviderAISummary    Provider = "ai_summary"
 	ProviderLocalLibrary Provider = "local_library"
 	ProviderManual       Provider = "manual"
 )
@@ -40,7 +43,7 @@ func (p Provider) valid() bool {
 	switch p {
 	case ProviderYandexMusic, ProviderDeezer, ProviderAppleMusic, ProviderWikipedia,
 		ProviderTheAudioDB, ProviderLastFM, ProviderDiscogs, ProviderOfficial,
-		ProviderNavidrome, ProviderMusicBrainz, ProviderLocalLibrary, ProviderManual:
+		ProviderNavidrome, ProviderMusicBrainz, ProviderAISummary, ProviderLocalLibrary, ProviderManual:
 		return true
 	default:
 		return false
@@ -205,6 +208,39 @@ type EffectiveBiography struct {
 	Manual      bool
 	Translated  bool
 	UpdatedAt   time.Time
+}
+
+type JobStatus string
+
+const (
+	JobQueued    JobStatus = "queued"
+	JobRunning   JobStatus = "running"
+	JobReady     JobStatus = "ready"
+	JobNoData    JobStatus = "no_data"
+	JobRetryable JobStatus = "retryable"
+)
+
+func (s JobStatus) valid() bool {
+	switch s {
+	case JobQueued, JobRunning, JobReady, JobNoData, JobRetryable:
+		return true
+	default:
+		return false
+	}
+}
+
+// JobState contains only bounded lifecycle metadata. Source and generated text
+// remain in candidates and never enter queue errors or logs.
+type JobState struct {
+	ArtistID     string
+	Status       JobStatus
+	InputVersion string
+	LastError    string
+	NextRetryAt  time.Time
+	RequestedAt  time.Time
+	StartedAt    time.Time
+	CompletedAt  time.Time
+	UpdatedAt    time.Time
 }
 
 func validateRequired(name, value string, maxBytes int) error {

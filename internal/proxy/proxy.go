@@ -23,6 +23,8 @@ type Server struct {
 	handler     http.Handler
 	cast        http.Handler // трансляция на колонки (poisqCast*); nil — выключена
 	biographies effectiveBiographyReader
+	bioJobs     biographyRequester
+	bioWait     time.Duration
 }
 
 // SetCast подключает эндпоинты трансляции. Вызывать до запуска HTTP-сервера.
@@ -31,6 +33,15 @@ func (s *Server) SetCast(h http.Handler) { s.cast = h }
 // SetBiographyReader подключает локальную выдачу проверенных биографий.
 // Вызывать до запуска HTTP-сервера.
 func (s *Server) SetBiographyReader(reader effectiveBiographyReader) { s.biographies = reader }
+
+func (s *Server) SetBiographyCoordinator(requester biographyRequester, wait time.Duration) {
+	s.bioJobs = requester
+	if wait >= 5*time.Second && wait <= 30*time.Second {
+		s.bioWait = wait
+	} else {
+		s.bioWait = 20 * time.Second
+	}
+}
 
 // NewServer создает новый экземпляр реверс-прокси сервера с оптимизированным пулом соединений и кэшем.
 func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionary, aliasMgr *search.AliasManager, enableDebugAPI bool) *Server {
@@ -69,7 +80,7 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 		if err := AdvertisePoisqExtension(resp); err != nil {
 			return err
 		}
-		enrichArtistInfoResponse(resp, srv.biographies)
+		enrichArtistInfoResponseOnDemand(resp, srv.biographies, srv.bioJobs, srv.bioWait)
 		if origin := resp.Request.Header.Get("Origin"); origin != "" {
 			setCORS(resp.Header, origin)
 		}

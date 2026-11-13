@@ -30,6 +30,24 @@ type fakeBiographyReader struct {
 	calls  []string
 }
 
+type fakeBiographyRequester struct {
+	calls []string
+	fn    func(string)
+}
+
+func (f *fakeBiographyRequester) Request(_ context.Context, artistID string, force bool) (<-chan struct{}, artistbio.JobState, error) {
+	if force {
+		return nil, artistbio.JobState{}, errors.New("unexpected force rebuild")
+	}
+	f.calls = append(f.calls, artistID)
+	if f.fn != nil {
+		f.fn(artistID)
+	}
+	done := make(chan struct{})
+	close(done)
+	return done, artistbio.JobState{ArtistID: artistID, Status: artistbio.JobReady}, nil
+}
+
 func (f *fakeBiographyReader) EffectiveBiography(ctx context.Context, artistID string) (artistbio.EffectiveBiography, bool, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, artistID)
@@ -212,6 +230,22 @@ func TestArtistInfoResponseRewritesHeaders(t *testing.T) {
 	out, _ := io.ReadAll(resp.Body)
 	if !bytes.Contains(out, []byte("Русское описание")) || resp.Header.Get("ETag") != "" || resp.Header.Get("Cache-Control") != "private" || resp.Header.Get("Set-Cookie") != "a=b" || resp.ContentLength != int64(len(out)) {
 		t.Fatalf("unexpected response headers/body: headers=%v body=%s", resp.Header, out)
+	}
+}
+
+func TestArtistInfoResponseTriggersAndRereadsDetachedBiography(t *testing.T) {
+	body := `{"subsonic-response":{"status":"ok","artistInfo2":{"biography":"English upstream biography about the artist and their recordings and concert career."}}}`
+	reader := &fakeBiographyReader{values: make(map[string]artistbio.EffectiveBiography)}
+	requester := &fakeBiographyRequester{fn: func(artistID string) {
+		reader.mu.Lock()
+		reader.values[artistID] = artistbio.EffectiveBiography{ArtistID: artistID, Text: "Проверенное русское описание исполнителя, его записей и концертной деятельности.", Source: artistbio.ProviderAISummary}
+		reader.mu.Unlock()
+	}}
+	resp := artistInfoResponse(t, body, "application/json")
+	enrichArtistInfoResponseOnDemand(resp, reader, requester, 5*time.Second)
+	out, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(out), "Проверенное русское описание") || len(requester.calls) != 1 || len(reader.calls) != 2 {
+		t.Fatalf("on-demand result was not delivered: body=%s requests=%v reads=%v", out, requester.calls, reader.calls)
 	}
 }
 

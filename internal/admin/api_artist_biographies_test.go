@@ -51,6 +51,18 @@ func biographyRequest(method, target, body string) *http.Request {
 	return req
 }
 
+type fakeBiographyCoordinator struct {
+	store *artistbio.Store
+	calls int
+}
+
+func (f *fakeBiographyCoordinator) Request(ctx context.Context, artistID string, force bool) (<-chan struct{}, artistbio.JobState, error) {
+	f.calls++
+	state, _, err := f.store.QueueJob(ctx, artistID, "", force, time.Now())
+	done := make(chan struct{})
+	return done, state, err
+}
+
 func TestArtistBiographyAPIListAndDetail(t *testing.T) {
 	server, store := biographyAPIServer(t)
 	list := httptest.NewRecorder()
@@ -222,6 +234,42 @@ func TestArtistBiographyAPIResetCachePreservesManualAndCSRF(t *testing.T) {
 	}
 	if _, found, err := store.Candidate(context.Background(), "kino", artistbio.ProviderWikipedia, "kino"); err != nil || found {
 		t.Fatalf("automatic candidate survived API reset: found=%v err=%v", found, err)
+	}
+}
+
+func TestArtistBiographyAPIRebuildSelectedArtist(t *testing.T) {
+	server, store := biographyAPIServer(t)
+	coordinator := &fakeBiographyCoordinator{store: store}
+	server.SetBiographyCoordinator(coordinator)
+	if err := store.PutIdentity(context.Background(), artistbio.ArtistIdentity{ArtistID: "kino", ArtistName: "Кино", Status: artistbio.ResolutionResolved, Confidence: 1}); err != nil {
+		t.Fatal(err)
+	}
+	manual := strings.Repeat("Российская музыкальная группа выпустила несколько альбомов и дала множество концертов. ", 2)
+	if err := store.SetManualOverride(context.Background(), artistbio.ManualOverride{ArtistID: "kino", Text: manual}); err != nil {
+		t.Fatal(err)
+	}
+
+	badOrigin := biographyRequest(http.MethodPost, "/api/v1/artist-biographies/rebuild", `{"artistId":"kino"}`)
+	badOrigin.Header.Set("Origin", "https://evil.example")
+	blocked := httptest.NewRecorder()
+	server.ServeHTTP(blocked, badOrigin)
+	if blocked.Code != http.StatusForbidden || coordinator.calls != 0 {
+		t.Fatalf("CSRF rebuild was not blocked: code=%d calls=%d", blocked.Code, coordinator.calls)
+	}
+
+	request := biographyRequest(http.MethodPost, "/api/v1/artist-biographies/rebuild", `{"artistId":"kino"}`)
+	request.Header.Set("Origin", "http://localhost:4535")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted || coordinator.calls != 1 || !strings.Contains(recorder.Body.String(), `"status":"queued"`) {
+		t.Fatalf("rebuild: code=%d calls=%d body=%s", recorder.Code, coordinator.calls, recorder.Body.String())
+	}
+	effective, found, err := store.EffectiveBiography(context.Background(), "kino")
+	if err != nil || !found || !effective.Manual || effective.Text != manual {
+		t.Fatalf("manual text changed by rebuild: %#v found=%v err=%v", effective, found, err)
+	}
+	if _, found, err := store.JobState(context.Background(), "other"); err != nil || found {
+		t.Fatalf("rebuild touched another artist: found=%v err=%v", found, err)
 	}
 }
 

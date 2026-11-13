@@ -1,9 +1,11 @@
 package ai
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestRankGroqModelsPrefersLargeChatAndSkipsAudio(t *testing.T) {
@@ -17,6 +19,17 @@ func TestRankGroqModelsPrefersLargeChatAndSkipsAudio(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got %v want %v", got, want)
 		}
+	}
+}
+
+func TestGroqRolePreferenceReordersAvailableModels(t *testing.T) {
+	client := &GroqChatClient{
+		models:       []string{"openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"},
+		modelsLoaded: time.Now(),
+	}
+	models := client.candidateModels(withModelPreference(context.Background(), "openai/gpt-oss-20b"), "unused")
+	if len(models) < 3 || models[0] != "openai/gpt-oss-20b" || models[1] != "openai/gpt-oss-120b" {
+		t.Fatalf("unexpected role order: %v", models)
 	}
 }
 

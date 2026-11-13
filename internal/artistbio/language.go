@@ -27,6 +27,15 @@ var belarusianFunctionWords = map[string]struct{}{
 	"гэты": {}, "гэтая": {}, "гурт": {}, "ўдзельнікі": {}, "альбомаў": {}, "беларусі": {},
 }
 
+var latinLanguageWords = map[string]map[string]struct{}{
+	"en": wordSet("the", "and", "was", "were", "formed", "released", "band", "artist", "albums", "members", "performed", "recorded", "music"),
+	"de": wordSet("der", "die", "das", "und", "wurde", "war", "band", "künstler", "alben", "mit", "gegründet", "veröffentlichte", "musik"),
+	"fr": wordSet("le", "la", "les", "et", "est", "était", "groupe", "artiste", "albums", "avec", "fondé", "musique"),
+	"es": wordSet("el", "la", "los", "las", "y", "fue", "grupo", "artista", "álbumes", "con", "fundado", "música"),
+	"it": wordSet("il", "lo", "la", "gli", "le", "e", "era", "gruppo", "artista", "album", "con", "fondato", "musica"),
+	"pl": wordSet("i", "w", "z", "na", "jest", "był", "była", "grupa", "artysta", "albumy", "muzyka", "założony"),
+}
+
 // LanguageAnalysis is a bounded, deterministic description of biography text.
 // Provider-declared language is intentionally not an input.
 type LanguageAnalysis struct {
@@ -126,9 +135,17 @@ func DetectBiographyLanguage(text string) LanguageAnalysis {
 		result.RussianShare = cyrShare
 		result.EvidenceCodes = []string{"lang:ru", "script:cyrillic"}
 	case latinShare >= 0.80:
-		result.Language = "en"
-		result.Confidence = 0.90
-		result.EvidenceCodes = []string{"lang:en", "script:latin"}
+		language, score, decisive := detectLatinLanguage(words)
+		if decisive {
+			result.Language = language
+			result.Confidence = clamp01(0.90 + 0.01*float64(minInt(score, 9)))
+			result.EvidenceCodes = []string{"lang:" + language, "script:latin"}
+		} else {
+			result.Language = "und"
+			result.Confidence = latinShare
+			result.RequiresAI = true
+			result.EvidenceCodes = []string{"lang:ambiguous", "script:latin"}
+		}
 	default:
 		result.Language = "und"
 		result.Confidence = clamp01(math.Max(cyrShare, latinShare))
@@ -190,9 +207,30 @@ func minInt(left, right int) int {
 
 func validBiographyLanguage(language string) bool {
 	switch language {
-	case "ru", "uk", "be", "en", "mixed", "und":
+	case "ru", "uk", "be", "en", "de", "fr", "es", "it", "pl", "mixed", "und":
 		return true
 	default:
 		return false
 	}
+}
+
+func wordSet(values ...string) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[value] = struct{}{}
+	}
+	return result
+}
+
+func detectLatinLanguage(words []string) (string, int, bool) {
+	bestLanguage, bestScore, secondScore := "", 0, 0
+	for language, vocabulary := range latinLanguageWords {
+		score := countLanguageWords(words, vocabulary)
+		if score > bestScore {
+			bestLanguage, secondScore, bestScore = language, bestScore, score
+		} else if score > secondScore {
+			secondScore = score
+		}
+	}
+	return bestLanguage, bestScore, bestScore >= 3 && bestScore > secondScore
 }

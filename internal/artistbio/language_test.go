@@ -34,6 +34,16 @@ func TestDetectBiographyLanguage(t *testing.T) {
 			language: "en", quality: true,
 		},
 		{
+			name:     "german",
+			text:     "Die Band wurde in Berlin gegründet und veröffentlichte mehrere Alben. Der Künstler arbeitete mit bekannten Musikern und spielte seine Musik auf großen Festivals.",
+			language: "de", quality: true,
+		},
+		{
+			name:     "french",
+			text:     "Le groupe a été fondé à Paris et les artistes ont enregistré plusieurs albums. La musique du groupe est présentée dans les festivals avec d'autres musiciens.",
+			language: "fr", quality: true,
+		},
+		{
 			name:     "mixed",
 			text:     "Российская группа выпустила новый studio album and later performed at several European festivals вместе с другими известными музыкантами.",
 			language: "mixed", quality: true, requiresAI: true,

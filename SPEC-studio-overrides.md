@@ -11,9 +11,10 @@ The module must let an authorized Studio user:
 - enter or replace a bounded Russian manual biography and optional provenance URL;
 - see clearly that manual text has priority over automatic selection;
 - delete the manual override and immediately return to the automatic result;
+- explicitly rebuild automatic information for one selected artist without resetting every artist;
 - leave every artist fully automatic when no manual override is set.
 
-The module must reuse `artistbio.Store.SetManualOverride` and `EffectiveBiography`. It does not generate text, call AI/providers, change candidate ranking, or require the user to fill anything in.
+The module must reuse `artistbio.Store.SetManualOverride` and `EffectiveBiography`. It does not generate text or call AI/providers inline; the per-artist rebuild action only invalidates state and enqueues the shared on-demand biography coordinator.
 
 ## Assumptions
 
@@ -106,6 +107,17 @@ Strict JSON body:
 
 Unsupported methods return 405 with a stable generic error. Database/internal errors never include biography text, filesystem paths, SQL, request bodies, or source URLs.
 
+### `POST /api/v1/artist-biographies/rebuild`
+
+Strict JSON body: `{"artistId":"navidrome-id"}`.
+
+- Require the existing trusted-origin/CSRF mutation policy and confirm the artist exists in Navidrome.
+- Atomically invalidate only that artist's automatic evidence/terminal state and retry cooldown.
+- Preserve its manual override and last valid automatic biography while the new detached job runs.
+- Enqueue through the shared bounded coordinator; concurrent clicks/requests join one job.
+- Return `202` with bounded state `queued`, `running`, `ready`, `no_data`, or `retryable`; make no provider/search/AI call in the handler.
+- Extend the existing detail response with job state, last successful collection time, and bounded last error class, never prompts or source bodies.
+
 ## Studio UX
 
 - Add one `Биографии` navigation tab using the existing tab/panel system.
@@ -115,6 +127,7 @@ Unsupported methods return 405 with a stable generic error. Database/internal er
 - The textarea begins with the current manual text when manual mode is active; otherwise it is empty and the automatic description remains visible as a read-only preview.
 - `Сохранить ручное описание` activates manual priority.
 - `Вернуться к автоматическому` requires a confirmation and clears only the override.
+- `Пересобрать описание` requires confirmation, rebuilds only the selected artist, and polls detail state without clearing the current preview.
 - Disable buttons during requests, prevent double submits, retain unsaved text on recoverable errors, and show existing toast notifications.
 - Display a short warning: manual text is optional, must be factual/Russian, and overrides automatic updates until reset.
 - Do not add an AI writing/generation button.
@@ -135,6 +148,7 @@ Required tests:
 - manual save/reset is transactionally safe under concurrent reads;
 - errors/logs do not contain biography text, URL, request body, DB path, SQL, or credentials;
 - existing Studio endpoints, reset behavior, delivery, validation, and proxy tests remain green.
+- per-artist rebuild is guarded, strict, idempotent under double click, preserves manual/last-valid text, invalidates no other artist, and enqueues one shared job;
 
 ## Boundaries
 

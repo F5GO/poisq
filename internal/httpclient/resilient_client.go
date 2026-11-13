@@ -81,6 +81,16 @@ func NewResilientClient(timeout time.Duration, maxConcurrent int, minInterval ti
 	}
 }
 
+// SetMaxResponseBytes tightens the response limit for small JSON APIs.
+// It must be called during construction, before the client is shared.
+func (rc *ResilientClient) SetMaxResponseBytes(limit int64) error {
+	if rc == nil || limit < 1024 || limit > 4*1024*1024 {
+		return fmt.Errorf("response limit must be between 1 KiB and 4 MiB")
+	}
+	rc.maxBytes = limit
+	return nil
+}
+
 // DoWithRetry выполняет запрос с проверкой Circuit Breaker, Rate Limiter и Smart Retry (Exponential Backoff + Jitter).
 func (rc *ResilientClient) DoWithRetry(ctx context.Context, buildReq func() (*http.Request, error)) ([]byte, int, http.Header, error) {
 	if !rc.breaker.Allow() {

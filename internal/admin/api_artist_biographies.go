@@ -35,11 +35,20 @@ type artistBiographyDetail struct {
 	ManualSource string               `json:"manualSourceUrl,omitempty"`
 	Effective    *artistBiographyView `json:"effective,omitempty"`
 	Automatic    *artistBiographyView `json:"automatic,omitempty"`
+	JobStatus    artistbio.JobStatus  `json:"jobStatus,omitempty"`
+	LastError    string               `json:"lastError,omitempty"`
+	NextRetryAt  time.Time            `json:"nextRetryAt,omitempty"`
 }
 
 // SetBiographyStore attaches the already constructed local store. It performs
 // no database read and must be called before serving requests.
 func (s *AdminServer) SetBiographyStore(store *artistbio.Store) { s.biographies = store }
+
+func (s *AdminServer) SetBiographyCoordinator(coordinator interface {
+	Request(context.Context, string, bool) (<-chan struct{}, artistbio.JobState, error)
+}) {
+	s.biographyJobs = coordinator
+}
 
 func (s *AdminServer) handleArtistBiographies(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -178,6 +187,43 @@ func (s *AdminServer) handleArtistBiographyReset(w http.ResponseWriter, r *http.
 	})
 }
 
+func (s *AdminServer) handleArtistBiographyRebuild(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.biographies == nil || s.biographyJobs == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "artist biography rebuild is unavailable")
+		return
+	}
+	var request struct {
+		ArtistID string `json:"artistId"`
+	}
+	if err := decodeStrictAdminJSON(w, r, &request); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	artist, found, ok := s.requireLibraryArtist(w, r.Context(), request.ArtistID)
+	if !ok {
+		return
+	}
+	if !found {
+		writeJSONError(w, http.StatusNotFound, "artist not found")
+		return
+	}
+	if err := s.ensureBiographyIdentity(r.Context(), artist); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to prepare artist biography")
+		return
+	}
+	_, state, err := s.biographyJobs.Request(r.Context(), artist.ID, true)
+	if err != nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "failed to queue artist biography rebuild")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"artistId": artist.ID, "status": state.Status})
+}
+
 func (s *AdminServer) requireLibraryArtist(w http.ResponseWriter, ctx context.Context, artistID string) (db.LibraryArtist, bool, bool) {
 	database, err := s.openNavDB()
 	if err != nil || database == nil {
@@ -206,6 +252,14 @@ func (s *AdminServer) ensureBiographyIdentity(ctx context.Context, artist db.Lib
 
 func (s *AdminServer) writeArtistBiographyDetail(w http.ResponseWriter, ctx context.Context, artist db.LibraryArtist) {
 	detail := artistBiographyDetail{ArtistID: artist.ID, ArtistName: artist.Name}
+	if state, found, err := s.biographies.JobState(ctx, artist.ID); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "failed to read artist biography")
+		return
+	} else if found {
+		detail.JobStatus = state.Status
+		detail.LastError = state.LastError
+		detail.NextRetryAt = state.NextRetryAt
+	}
 	if effective, found, err := s.biographies.EffectiveBiography(ctx, artist.ID); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to read artist biography")
 		return

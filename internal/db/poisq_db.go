@@ -191,6 +191,30 @@ func initPoisqSchema(sqliteDB *sql.DB) error {
 			REFERENCES artist_bio_candidates(id, artist_id) ON DELETE RESTRICT
 	);
 
+	CREATE TABLE IF NOT EXISTS artist_bio_jobs (
+		artist_id TEXT PRIMARY KEY REFERENCES artist_bio_identity(artist_id) ON DELETE CASCADE,
+		status TEXT NOT NULL DEFAULT 'queued',
+		input_version TEXT NOT NULL DEFAULT '',
+		last_error_code TEXT NOT NULL DEFAULT '',
+		next_retry_at INTEGER NOT NULL DEFAULT 0,
+		requested_at INTEGER NOT NULL DEFAULT 0,
+		started_at INTEGER NOT NULL DEFAULT 0,
+		completed_at INTEGER NOT NULL DEFAULT 0,
+		updated_at INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS idx_artist_bio_jobs_queue
+		ON artist_bio_jobs(status, next_retry_at, requested_at);
+
+	CREATE TABLE IF NOT EXISTS artist_bio_web_cache (
+		artist_id TEXT NOT NULL REFERENCES artist_bio_identity(artist_id) ON DELETE CASCADE,
+		query_version TEXT NOT NULL,
+		results_json TEXT NOT NULL DEFAULT '[]',
+		expires_at INTEGER NOT NULL DEFAULT 0,
+		updated_at INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY(artist_id, query_version)
+	);
+	CREATE INDEX IF NOT EXISTS idx_artist_bio_web_cache_expiry ON artist_bio_web_cache(expires_at);
+
 	-- Уверенность акустического выравнивания по строкам (для подсветки сомнительных строк в редакторе)
 	CREATE TABLE IF NOT EXISTS lrc_confidence (
 		track_id TEXT PRIMARY KEY,
@@ -226,7 +250,7 @@ func ResetDatabase(db *sql.DB, keepAPIKeys bool) error {
 	defer tx.Rollback()
 
 	tables := []string{
-		"artist_biographies", "artist_bio_candidates", "artist_bio_identity",
+		"artist_bio_jobs", "artist_bio_web_cache", "artist_biographies", "artist_bio_candidates", "artist_bio_identity",
 		"staging_changes", "tracks", "lyrics_jobs", "provider_cache", "lrc_confidence", "lrc_corrections",
 	}
 	if !keepAPIKeys {
