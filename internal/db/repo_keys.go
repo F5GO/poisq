@@ -95,6 +95,12 @@ func (r *KeyRepository) ListAll() ([]APIKeyRecord, error) {
 // AcquireLRUKey атомарно размораживает ключи с истекшим кулдауном и выбирает наиболее давно
 // использовавшийся активный ключ (алгоритм LRU), обновляя его last_used_at.
 func (r *KeyRepository) AcquireLRUKey(provider string, nowUnix int64) (*APIKeyRecord, error) {
+	return r.AcquireLRUKeyExcluding(provider, nowUnix, 0)
+}
+
+// AcquireLRUKeyExcluding выбирает активный ключ по LRU, отдавая предпочтение ключам,
+// отличным от excludeID (если в пуле есть другие активные ключи).
+func (r *KeyRepository) AcquireLRUKeyExcluding(provider string, nowUnix int64, excludeID int64) (*APIKeyRecord, error) {
 	// 1. Возвращаем в строй ключи, у которых истек минутный или дневной кулдаун
 	_, _ = r.db.Exec(`
 		UPDATE api_keys
@@ -103,16 +109,16 @@ func (r *KeyRepository) AcquireLRUKey(provider string, nowUnix int64) (*APIKeyRe
 		  AND cooldown_until > 0 AND cooldown_until <= ?
 	`, provider, nowUnix)
 
-	// 2. Выбираем активный ключ с минимальным last_used_at (Least Recently Used)
+	// 2. Выбираем активный ключ с минимальным last_used_at (Least Recently Used), избегая excludeID при наличии альтернатив
 	var k APIKeyRecord
 	err := r.db.QueryRow(`
 		SELECT id, provider, label, key_encrypted, key_mask, status, cooldown_until,
 		       last_used_at, success_count, error_count, last_error, created_at
 		FROM api_keys
 		WHERE provider = ? AND status = 'active'
-		ORDER BY last_used_at ASC, id ASC
+		ORDER BY CASE WHEN id = ? THEN 1 ELSE 0 END ASC, last_used_at ASC, id ASC
 		LIMIT 1
-	`, provider).Scan(
+	`, provider, excludeID).Scan(
 		&k.ID, &k.Provider, &k.Label, &k.KeyEncrypted, &k.KeyMask, &k.Status, &k.CooldownUntil,
 		&k.LastUsedAt, &k.SuccessCount, &k.ErrorCount, &k.LastError, &k.CreatedAt,
 	)
