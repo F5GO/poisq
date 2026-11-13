@@ -22,8 +22,9 @@ const (
 	tavilyKeyProvider      = "tavily"
 	maxSearchIdentityBytes = 2 << 10
 	maxSearchResponseBytes = 256 << 10
-	maxSearchResults       = 6
-	maxSearchSnippetRunes  = 500
+	tavilyFetchResults     = 10
+	maxSearchResults       = 8
+	maxSearchSnippetRunes  = 800
 )
 
 type ArtistSearchQuery struct {
@@ -169,7 +170,7 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 		MaxResults        int    `json:"max_results"`
 		IncludeAnswer     bool   `json:"include_answer"`
 		IncludeRawContent bool   `json:"include_raw_content"`
-	}{query, "basic", maxSearchResults, false, false})
+	}{query, "basic", tavilyFetchResults, false, false})
 	if err != nil {
 		return WebSearchReport{}, discoveryError("tavily_encode_failed", err)
 	}
@@ -242,26 +243,27 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 	if err := validateRequired("artist name", input.Name, maxArtistNameBytes); err != nil {
 		return "", "", err
 	}
-	parts := []string{strings.TrimSpace(input.Name), "music artist biography interview official"}
+	name := strings.Join(strings.Fields(input.Name), " ")
+	parts := []string{name, "music artist biography interview"}
+	var extra []string
 	appendBounded := func(values []string, limit int) {
 		for _, value := range values[:min(limit, len(values))] {
 			value = strings.Join(strings.Fields(value), " ")
 			if value != "" && len(value) <= 256 {
-				parts = append(parts, value)
+				extra = append(extra, value)
 			}
 		}
 	}
-	appendBounded(input.Aliases, 5)
-	appendBounded(input.ProviderIDs, 6)
-	appendBounded(input.Albums, 3)
-	appendBounded(input.Tracks, 5)
+	appendBounded(input.Aliases, 2)
+	appendBounded(input.Albums, 2)
+	if len(input.Albums) == 0 {
+		appendBounded(input.Tracks, 2)
+	}
 	if value := strings.TrimSpace(input.Country); value != "" && len(value) <= 128 {
-		parts = append(parts, value)
+		extra = append(extra, value)
 	}
-	if value := strings.TrimSpace(input.MusicBrainzID); value != "" && len(value) <= MaxProviderIDBytes {
-		parts = append(parts, "musicbrainz "+value)
-	}
-	sort.Strings(parts[2:])
+	sort.Strings(extra)
+	parts = append(parts, extra...)
 	query := strings.Join(parts, " ")
 	if len(query) > maxSearchIdentityBytes {
 		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
