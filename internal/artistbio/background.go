@@ -145,7 +145,8 @@ func (p *BackgroundProcessor) ProcessBatch(ctx context.Context, navDB *sql.DB) (
 			}
 			if resolution.Status != ResolutionResolved {
 				report.Uncertain++
-				logger.Debug("[BIO] artist_id=%q identity=uncertain confidence=%.2f ai_required=%t", artist.ID, resolution.Confidence, resolution.RequiresAI)
+				logger.Debug("[BIO] artist_id=%q identity=uncertain confidence=%.2f ai_required=%t evidence=%v contradictions=%v",
+					artist.ID, resolution.Confidence, resolution.RequiresAI, resolution.EvidenceCodes, resolution.ContradictionCodes)
 				continue
 			}
 			report.Resolved++
