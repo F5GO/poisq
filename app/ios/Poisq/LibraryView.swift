@@ -26,8 +26,9 @@ private enum LibrarySection: Hashable, CaseIterable {
 /// Медиатека: артисты, альбомы, песни, избранное.
 struct LibraryView: View {
     @Environment(AppModel.self) private var model
+    @Binding var path: NavigationPath
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List(LibrarySection.allCases.filter { section in
                 if model.offline { return section == .downloads }
                 // подкасты и радио — только если сервер их поддерживает
@@ -233,10 +234,7 @@ private struct SongsListView: View {
         let list = shown
         List {
             ForEach(Array(list.enumerated()), id: \.element.id) { index, song in
-                Button { model.player?.play(list, startAt: index) } label: {
-                    MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.displayArtist)
-                }
-                .buttonStyle(.plain)
+                PlayableSongRow(song: song) { model.player?.play(list, startAt: index) }
                 .songMenu(song)
                 .onAppear { if !needsAll, index >= list.count - 10 { Task { await loadMore() } } }
             }
@@ -284,6 +282,13 @@ private struct FavoritesView: View {
     @State private var results = SearchResults()
     @State private var loaded = false
 
+    private var favoriteSongs: [Song] {
+        guard let player = model.player else { return results.songs }
+        return results.songs.filter(player.isFavorite)
+    }
+
+    private var isEmpty: Bool { results.artists.isEmpty && results.albums.isEmpty && favoriteSongs.isEmpty }
+
     var body: some View {
         List {
             if !results.artists.isEmpty {
@@ -294,13 +299,11 @@ private struct FavoritesView: View {
                     ForEach(results.albums) { a in NavigationLink(value: a) { MediaRow(coverID: a.coverArt, title: a.name, subtitle: a.artist) }.albumMenu(a) }
                 }
             }
-            if !results.songs.isEmpty {
+            if !favoriteSongs.isEmpty {
                 Section("Songs") {
-                    ForEach(Array(results.songs.enumerated()), id: \.element.id) { i, s in
-                        Button { model.player?.play(results.songs, startAt: i) } label: {
-                            MediaRow(coverID: s.coverArt, title: s.title, subtitle: s.displayArtist)
-                        }
-                        .buttonStyle(.plain).songMenu(s)
+                    ForEach(Array(favoriteSongs.enumerated()), id: \.element.id) { i, s in
+                        PlayableSongRow(song: s) { model.player?.play(favoriteSongs, startAt: i) }
+                            .songMenu(s)
                     }
                 }
             }
@@ -308,12 +311,13 @@ private struct FavoritesView: View {
         .listStyle(.plain)
         .overlay {
             if !loaded { ProgressView() }
-            else if results.isEmpty { ContentUnavailableView("No Favorites", systemImage: "heart", description: Text("Tap the heart in the player to add songs here.")) }
+            else if isEmpty { ContentUnavailableView("No Favorites", systemImage: "heart", description: Text("Tap the heart in the player to add songs here.")) }
         }
         .navigationTitle("Favorites")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.contentKey) {
             results = (try? await model.client?.starred(musicFolderId: model.selectedLibraryID)) ?? SearchResults()
+            model.player?.synchronizeFavorites(results.songs)
             loaded = true
         }
     }

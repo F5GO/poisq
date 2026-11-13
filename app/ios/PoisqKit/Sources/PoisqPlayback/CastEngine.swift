@@ -49,11 +49,13 @@ public final class CastEngine: PlaybackEngine {
     private struct Start { var urls: [URL]; var seek: Int? }
     private var start: Start?
     private var adds: [URL]?                             // так же склеиваем добавления в конец
+    private var seekTarget: (position: Double, until: Date)? // MA сообщает новую позицию только после перезапуска: до тех пор счётчик держим сами
     private var expected: Int?                           // после запуска MA не сразу сообщает новый индекс: до тех пор опрос устарел
 
     public func play(_ url: URL) {
         guard Self.songID(url) != nil else { onError?(SubsonicError.invalidURL); return }
         basePosition = 0; baseTime = Date()
+        seekTarget = nil
         update(.loading)
         adds = nil                                     // очередь всё равно заменится
         if start == nil { send(failPlayback: true) { [weak self] in try await self?.sendStart() } }
@@ -113,6 +115,7 @@ public final class CastEngine: PlaybackEngine {
 
     public func seek(to seconds: Double) {
         basePosition = seconds; baseTime = Date()
+        seekTarget = (seconds, Date().addingTimeInterval(10))
         if start != nil { start?.seek = Int(seconds); return }
         send { [client, zone] in try await client.castControl(zone: zone, action: "seek", position: Int(seconds)) }
     }
@@ -132,7 +135,7 @@ public final class CastEngine: PlaybackEngine {
     public func stop() {
         poll?.cancel(); poll = nil
         items = []; index = -1; currentURL = nil; basePosition = 0
-        start = nil; adds = nil; expected = nil
+        start = nil; adds = nil; expected = nil; seekTarget = nil
         update(.idle)
         send { [client, zone] in
             try await client.castControl(zone: zone, action: "stop")
@@ -171,7 +174,12 @@ public final class CastEngine: PlaybackEngine {
     /// Состояние колонки → зеркало и события для Player.
     func apply(_ s: SubsonicClient.CastStatus) {
         if let e = expected { guard s.index == e else { return }; expected = nil }
-        basePosition = s.position; baseTime = Date()
+        if let t = seekTarget, abs(s.position - t.position) > 2, Date() < t.until {
+            // старая позиция до перезапуска — счётчик не откатываем
+        } else {
+            seekTarget = nil
+            basePosition = s.position; baseTime = Date()
+        }
         if s.index != index, items.indices.contains(s.index) {
             index = s.index
             currentURL = items[s.index]

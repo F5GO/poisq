@@ -11,20 +11,22 @@ final class NowPlayingBridge {
     private weak var player: Player?
     var artworkProvider: ((Song) async -> UIImage?)?
     private var artworkTask: Task<Void, Never>?
-    private var sessionActive = false
 
     init(player: Player) {
         self.player = player
         registerCommands()
+        // Категорию ставим сразу, без активации (чужой звук не прерывается): окно AirPlay показывает устройства
+        // по категории сессии, а его могут открыть до первого воспроизведения.
+        // longFormAudio — как в «Музыке»: без него приложению на AVAudioEngine (AudioStreaming) система не предлагает AirPlay 2.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio)
     }
 
     /// Без категории .playback звук глохнет при блокировке экрана и выключенном «беззвучном» режиме не работает.
+    /// Активируем каждый раз: пока звук идёт на колонку, телефон молчит, и iOS может выключить сессию, а окну AirPlay нужна активная.
     func activateSession() {
-        guard !sessionActive else { return }
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio)
             try AVAudioSession.sharedInstance().setActive(true)
-            sessionActive = true
         } catch {
             // Воспроизведение всё равно попробуем начать; без сессии звук может пропасть в фоне.
         }

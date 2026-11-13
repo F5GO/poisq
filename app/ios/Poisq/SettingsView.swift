@@ -3,6 +3,9 @@ import PoisqCore
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @Binding var path: NavigationPath
+    @State private var editingTabs = false
+    @State private var editingHome = false
     @State private var addingServer = false
     @State private var editingServer: ServerProfile?
     @State private var renamingFolder: MusicFolder?
@@ -11,7 +14,7 @@ struct SettingsView: View {
     @State private var confirmRemoveAll = false
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Form {
                 serversSection
                 if let s = model.activeServer {
@@ -25,9 +28,16 @@ struct SettingsView: View {
                 offlineSection
                 downloadsSection
                 cacheSection
+                Section("Appearance") {
+                    Button("Customize Home", systemImage: "slider.horizontal.3") { editingHome = true }
+                    Button("Customize Tab Bar", systemImage: "rectangle.bottomthird.inset.filled") { editingTabs = true }
+                }
                 if model.libraries.count > 1 { librariesSection }
             }
             .navigationTitle("Settings")
+            .musicDestinations()
+            .sheet(isPresented: $editingHome) { HomeEditView() }
+            .sheet(isPresented: $editingTabs) { TabBarEditView() }
             .sheet(isPresented: $addingServer) { SignInView(isSheet: true) }
             .sheet(item: $editingServer) { ServerEditView(server: $0) }
             .alert("Rename Library", isPresented: presented($renamingFolder)) {
@@ -89,10 +99,15 @@ struct SettingsView: View {
                 Text("By Track").tag(1)
                 Text("By Album").tag(2)
             }
+            Toggle("Continuous Playback", isOn: Binding(
+                get: { model.player?.autoplay ?? false },
+                set: { model.player?.autoplay = $0 }
+            ))
+            .disabled(model.player == nil)
             Toggle("Report Listening", isOn: Binding(get: { model.scrobbleEnabled }, set: { model.scrobbleEnabled = $0 }))
             Toggle("Continue on Other Devices", isOn: Binding(get: { model.syncQueueEnabled }, set: { model.syncQueueEnabled = $0 }))
         } header: { Text("Playback") } footer: {
-            Text("Lower quality uses less data. The cache saves songs in this quality too. Listening is reported to the server (history, play counts) and the queue is saved there so you can continue on another device. Sound Check evens out loudness using ReplayGain data from the server, if it has any.")
+            Text("When Continuous Playback is off, an album or playlist stops after its last track. Lower quality uses less data. The cache saves songs in this quality too. Listening is reported to the server (history, play counts) and the queue is saved there so you can continue on another device. Sound Check evens out loudness using ReplayGain data from the server, if it has any.")
         }
     }
 

@@ -15,8 +15,11 @@ private final class HomeModel {
     /// (Расширение poisq позже заменит это одним запросом.)
     func load(client: SubsonicClient?, library: String?, items: [HomeItem]) async {
         guard let client else { return }
-        let wanted = items.filter { $0.albumListType != nil }
-        let needsStarred = items.contains(.favoriteSongs) || items.contains(.favoriteArtists)
+        // Недавние и случайные альбомы нужны быстрым действиям, даже если их полки скрыты.
+        let requested = Set(items.filter { $0.albumListType != nil }).union([.recent, .random])
+        let wanted = HomeItem.allCases.filter { requested.contains($0) }
+        // Любимые треки всегда доступны как быстрое действие.
+        let needsStarred = true
         guard !wanted.isEmpty || needsStarred || items.contains(.playlists) else { albums = [:]; failed = false; return }
         isLoading = true
         defer { isLoading = false }
@@ -25,7 +28,7 @@ private final class HomeModel {
         async let st: SearchResults? = needsStarred ? try? await client.starred(musicFolderId: library) : nil
         let (gotPlaylists, gotStarred) = await (pl, st)
         playlists = gotPlaylists ?? []
-        favoriteSongs = Array((gotStarred?.songs ?? []).prefix(6))
+        favoriteSongs = gotStarred?.songs ?? []
         favoriteArtists = Array((gotStarred?.artists ?? []).prefix(20))
         guard !wanted.isEmpty else { albums = [:]; failed = false; return }
         var loaded: [HomeItem: [Album]] = [:]
@@ -44,12 +47,17 @@ private final class HomeModel {
     }
 }
 
+private enum HomeDestination: Hashable {
+    case downloads, queue
+}
+
 /// Заголовок — имя сервера. Справа — кнопка-аватар с меню; по нажатию на заголовок — выбор сервера и медиатеки.
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var home = HomeModel()
     @State private var editing = false
-    @State private var path = NavigationPath()
+    @State private var editingTabs = false
+    @Binding var path: NavigationPath
     @AppStorage("homeSongsMode") private var songsMode = false
 
     /// Меняется при смене сервера, медиатеки или набора видимых блоков.
@@ -62,8 +70,10 @@ struct HomeView: View {
                     header
                     statusBanner
                     if songsMode {
+                        ForEach(modeControls) { item in block(item) }
                         SongsFeed()
                     } else if model.offline {
+                        ForEach(modeControls) { item in block(item) }
                         offlineContent
                     } else {
                         ForEach(model.homeLayout.visible) { item in
@@ -82,10 +92,6 @@ struct HomeView: View {
                     }
                 }
                 .padding(.vertical, 8)
-                .animation(.smooth, value: model.player?.isActive)
-                .animation(.smooth, value: model.homeLayout.entries)
-                .animation(.smooth, value: model.offline)
-                .animation(.smooth, value: model.showBackOnline)
             }
             .overlay { if home.albums.isEmpty && home.isLoading && !songsMode { ProgressView() } }
             .refreshable { await reload() }
@@ -95,17 +101,15 @@ struct HomeView: View {
             .safeAreaBar(edge: .top, spacing: 0) { Color.clear.frame(height: 0) }
             .scrollEdgeEffectStyle(.soft, for: .top)
             .musicDestinations()
+            .navigationDestination(for: HomeDestination.self) { destination in
+                switch destination {
+                case .downloads: DownloadedView()
+                case .queue:
+                    if let player = model.player { QueueView(player: player) }
+                }
+            }
             .sheet(isPresented: $editing) { HomeEditView() }
-            .onChange(of: model.pendingAlbum) { _, album in
-                guard let album else { return }
-                path.append(album)
-                model.pendingAlbum = nil
-            }
-            .onChange(of: model.pendingArtist) { _, artist in
-                guard let artist else { return }
-                path.append(artist)
-                model.pendingArtist = nil
-            }
+            .sheet(isPresented: $editingTabs) { TabBarEditView() }
         }
     }
 
@@ -120,38 +124,124 @@ struct HomeView: View {
                 }
             }
             Spacer(minLength: 0)
-            HomeMenu(onEdit: { editing = true })
+            HomeMenu(onEdit: { editing = true }, onEditTabs: { editingTabs = true })
         }
         .padding(.horizontal, 20)
         .padding(.top, 4)
     }
 
     private func titleLabel(showsChevron: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Text(model.serverName).font(.largeTitle.bold()).lineLimit(1)
-                if showsChevron {
-                    Image(systemName: "chevron.down").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
-                }
-            }
-            if let library = model.libraryTitle {
-                Text(library).font(.subheadline).foregroundStyle(.secondary)
+        HStack(spacing: 6) {
+            Text(libraryName).font(.title2.weight(.semibold)).lineLimit(1)
+            if showsChevron {
+                Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             }
         }
         .contentShape(.rect)
     }
 
+    private var libraryName: String {
+        if let id = model.selectedLibraryID,
+           let selected = model.libraries.first(where: { $0.id == id }) {
+            return normalizedLibraryName(model.name(of: selected))
+        }
+        if model.libraries.count == 1, let only = model.libraries.first {
+            return normalizedLibraryName(model.name(of: only))
+        }
+        if model.libraries.count > 1 { return String(localized: "All Libraries") }
+        return model.serverName
+    }
+
+    private func normalizedLibraryName(_ name: String) -> String {
+        name.localizedCaseInsensitiveCompare("Music library") == .orderedSame ? model.serverName : name
+    }
+
+    @ViewBuilder private var quickActions: some View {
+        let actions = model.homeLayout.visibleQuickActions
+        if !actions.isEmpty {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: min(actions.count, 4)), spacing: 8) {
+                ForEach(actions) { action in
+                    quickAction(action)
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+
+    @ViewBuilder private func quickAction(_ action: HomeQuickAction) -> some View {
+        switch action {
+        case .shuffleAll:
+            QuickActionTile(title: action.title, systemImage: action.icon) { shuffleAll() }
+        case .randomAlbum:
+            QuickActionTile(title: action.title, systemImage: action.icon) { openRandomAlbum() }
+                .disabled(randomAlbum == nil)
+        case .favoriteSongs:
+            QuickActionTile(title: action.title, systemImage: action.icon) { playFavorites() }
+                .disabled(activeFavoriteSongs.isEmpty)
+        case .downloads:
+            QuickActionTile(title: action.title, systemImage: action.icon) {
+                path.append(HomeDestination.downloads)
+            }
+        }
+    }
+
+    private var randomAlbum: Album? {
+        if model.offline { return model.downloadedAlbums.randomElement() }
+        return home.albums[.random]?.randomElement()
+    }
+
+    private var activeFavoriteSongs: [Song] {
+        guard let player = model.player else { return home.favoriteSongs }
+        return home.favoriteSongs.filter(player.isFavorite)
+    }
+
+    private var modeControls: [HomeItem] {
+        model.homeLayout.visible.filter { [.quickActions, .pinned, .upNext].contains($0) }
+    }
+
+    private func shuffleAll() {
+        Task {
+            let songs: [Song]
+            if model.offline {
+                songs = Array(model.downloadedSongs.shuffled().prefix(50))
+            } else {
+                songs = (try? await model.client?.randomSongs(count: 50, musicFolderId: model.selectedLibraryID)) ?? []
+            }
+            guard !songs.isEmpty else { return }
+            model.player?.play(songs, shuffled: true)
+        }
+    }
+
+    private func openRandomAlbum() {
+        guard let album = randomAlbum else { return }
+        path.append(album)
+    }
+
+    private func playFavorites() {
+        let songs = activeFavoriteSongs
+        guard !songs.isEmpty else { return }
+        model.player?.play(songs, startAt: songs.indices.randomElement() ?? 0, shuffled: true)
+    }
+
     @ViewBuilder private func block(_ item: HomeItem) -> some View {
-        if item == .upNext {
-            if let player = model.player, player.isActive { UpNextSection(player: player) }
+        if item == .quickActions {
+            quickActions
         } else if item == .pinned {
-            PinnedShelf(pins: model.pins.pins)
+            QuickAccessGrid(pins: model.pins.pins, recent: home.albums[.recent] ?? [])
+        } else if item == .upNext {
+            if let player = model.player, player.current != nil {
+                ResumeQueueCard(player: player) { path.append(HomeDestination.queue) }
+            }
         } else if item == .playlists {
             if !home.playlists.isEmpty { PlaylistShelf(playlists: home.playlists) }
         } else if item == .favoriteSongs {
-            if !home.favoriteSongs.isEmpty { SongRowsSection(title: item.title, songs: home.favoriteSongs) }
+            if !activeFavoriteSongs.isEmpty { SongRowsSection(title: item.title, songs: Array(activeFavoriteSongs.prefix(6))) }
         } else if item == .favoriteArtists {
             if !home.favoriteArtists.isEmpty { ArtistShelf(artists: home.favoriteArtists) }
+        } else if item == .recent {
+            if let list = home.albums[.recent], !list.isEmpty {
+                RecentAlbumRows(albums: list)
+            }
         } else if let list = home.albums[item], !list.isEmpty {
             AlbumShelf(title: item.title, albums: list)
         }
@@ -185,7 +275,6 @@ struct HomeView: View {
 
     /// Режим «только загруженные»: то, что лежит на устройстве, без обращений к серверу.
     @ViewBuilder private var offlineContent: some View {
-        if let player = model.player, player.isActive { UpNextSection(player: player) }
         let albums = model.downloadedAlbums
         if albums.isEmpty {
             ContentUnavailableView("No Downloads", systemImage: "arrow.down.circle",
@@ -198,6 +287,7 @@ struct HomeView: View {
     private func reload() async {
         guard !model.offline else { return }
         await home.load(client: model.client, library: model.selectedLibraryID, items: model.homeLayout.visible)
+        model.player?.synchronizeFavorites(home.favoriteSongs)
     }
 }
 
@@ -205,17 +295,13 @@ struct HomeView: View {
 private struct HomeMenu: View {
     @Environment(AppModel.self) private var model
     let onEdit: () -> Void
+    let onEditTabs: () -> Void
 
     var body: some View {
         Menu {
-            @Bindable var m = model
-            Picker("Show", selection: $m.downloadedOnly) {
-                Text("All Songs").tag(false)
-                Text("Downloaded").tag(true)
-            }
-            .pickerStyle(.inline)
             Section {
                 Button("Customize Home", systemImage: "slider.horizontal.3", action: onEdit)
+                Button("Customize Tab Bar", systemImage: "rectangle.bottomthird.inset.filled", action: onEditTabs)
             }
             if model.hasSwitcher { SwitcherMenu() }
         } label: {
@@ -237,6 +323,34 @@ struct ServerAvatar: View {
             .foregroundStyle(.white)
             .frame(width: 36, height: 36)
             .background(LinearGradient(colors: [Self.blue, Self.pink], startPoint: .topLeading, endPoint: .bottomTrailing), in: .circle)
+    }
+}
+
+/// Компактное системное действие в верхней части главной.
+private struct QuickActionTile: View {
+    let title: LocalizedStringKey
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        VStack(spacing: 7) {
+            Button(action: action) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 19, weight: .semibold))
+                    .frame(width: 52, height: 52)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.roundedRectangle(radius: 16))
+            .accessibilityLabel(title)
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity, minHeight: 24, alignment: .top)
+        }
     }
 }
 
@@ -262,6 +376,75 @@ private struct AlbumShelf: View {
     }
 }
 
+/// Недавние альбомы — компактными строками, чтобы главная не состояла только из квадратных полок.
+private struct RecentAlbumRows: View {
+    @Environment(AppModel.self) private var model
+    let albums: [Album]
+    @State private var loadingAlbumID: String?
+    private var shown: [Album] { Array(albums.prefix(model.homeLayout.recentlyPlayedLimit)) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Recently Played").font(.title2.bold()).padding(.horizontal, 20)
+            VStack(spacing: 0) {
+                ForEach(Array(shown.enumerated()), id: \.element.id) { index, album in
+                    HStack(spacing: 12) {
+                        NavigationLink(value: album) {
+                            HStack(spacing: 12) {
+                                CoverArtView(id: album.coverArt, size: 58, radius: 10)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(album.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                                    Text(albumSubtitle(album)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .albumMenu(album)
+
+                        Button { play(album) } label: {
+                            if loadingAlbumID == album.id {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "play.fill").font(.subheadline.weight(.semibold))
+                            }
+                        }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .frame(width: 40, height: 40)
+                        .disabled(loadingAlbumID != nil)
+                        .accessibilityLabel("Play")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    if index < shown.count - 1 {
+                        Divider().padding(.leading, 82)
+                    }
+                }
+            }
+            .background(.regularMaterial, in: .rect(cornerRadius: 18))
+            .padding(.horizontal, 20)
+        }
+    }
+
+    private func albumSubtitle(_ album: Album) -> String {
+        let count = album.songCount.map { String(localized: "\($0) songs") }
+        return [album.artist, count].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    private func play(_ album: Album) {
+        guard loadingAlbumID == nil else { return }
+        loadingAlbumID = album.id
+        Task {
+            let local = model.downloadedSongs.filter { $0.albumId == album.id }.sorted { ($0.track ?? 0) < ($1.track ?? 0) }
+            let songs = model.offline ? local : ((try? await model.client?.album(id: album.id).songs) ?? local)
+            if !songs.isEmpty { model.player?.play(songs) }
+            loadingAlbumID = nil
+        }
+    }
+}
+
 struct AlbumCard: View {
     let album: Album
     var body: some View {
@@ -275,29 +458,77 @@ struct AlbumCard: View {
     }
 }
 
-/// Закреплённые альбомы и плейлисты.
-private struct PinnedShelf: View {
+/// Закреплённое дополняется недавно открытыми альбомами до четырёх элементов.
+private struct QuickAccessGrid: View {
+    @Environment(AppModel.self) private var model
     let pins: [Pin]
+    let recent: [Album]
+
+    private var limit: Int { model.homeLayout.quickAccessLimit }
+    private var visiblePins: [Pin] {
+        model.homeLayout.quickAccessShowsPins ? Array(pins.prefix(limit)) : []
+    }
+    private var recentFill: [Album] {
+        guard model.homeLayout.quickAccessShowsRecent else { return [] }
+        let pinnedAlbums = Set(visiblePins.compactMap { $0.album?.id })
+        let count = max(0, limit - visiblePins.count)
+        return Array(recent.lazy.filter { !pinnedAlbums.contains($0.id) }.prefix(count))
+    }
+
     var body: some View {
-        if !pins.isEmpty {
+        if !visiblePins.isEmpty || !recentFill.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Pinned").font(.title2.bold()).padding(.horizontal, 20)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: 14) {
-                        ForEach(pins) { pin in
-                            if let album = pin.album {
-                                NavigationLink(value: album) { AlbumCard(album: album) }.buttonStyle(.plain).albumMenu(album)
-                            } else if let playlist = pin.playlist {
-                                NavigationLink(value: playlist) { PlaylistCard(playlist: playlist) }.buttonStyle(.plain).playlistPinMenu(playlist)
+                Text("Quick Access").font(.title2.bold()).padding(.horizontal, 20)
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 10) {
+                    ForEach(visiblePins) { pin in
+                        if let album = pin.album {
+                            NavigationLink(value: album) {
+                                QuickAccessCard(coverID: album.coverArt, title: album.name, subtitle: album.artist)
                             }
+                            .buttonStyle(.plain)
+                            .albumMenu(album)
+                        } else if let playlist = pin.playlist {
+                            NavigationLink(value: playlist) {
+                                QuickAccessCard(coverID: playlist.coverArt, title: playlist.name, subtitle: String(localized: "Playlist"))
+                            }
+                            .buttonStyle(.plain)
+                            .playlistPinMenu(playlist)
                         }
                     }
-                    .scrollTargetLayout()
-                    .padding(.horizontal, 20)
+                    ForEach(recentFill) { album in
+                        NavigationLink(value: album) {
+                            QuickAccessCard(coverID: album.coverArt, title: album.name, subtitle: album.artist)
+                        }
+                        .buttonStyle(.plain)
+                        .albumMenu(album)
+                    }
                 }
-                .scrollTargetBehavior(.viewAligned)
+                .padding(.horizontal, 20)
             }
         }
+    }
+}
+
+private struct QuickAccessCard: View {
+    let coverID: String?
+    let title: String
+    let subtitle: String?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            CoverArtView(id: coverID, size: 50, radius: 9)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(7)
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+        .background(.regularMaterial, in: .rect(cornerRadius: 16))
+        .contentShape(.rect)
     }
 }
 
@@ -366,45 +597,64 @@ private struct SongRowsSection: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.title2.bold()).padding(.horizontal, 20)
             ForEach(Array(songs.enumerated()), id: \.element.id) { i, song in
-                Button { model.player?.play(songs, startAt: i) } label: {
-                    HStack(spacing: 12) {
-                        CoverArtView(id: song.coverArt, size: 48, radius: 8)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(song.title).lineLimit(1)
-                            Text(song.displayArtist ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 20)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
+                PlayableSongRow(song: song) { model.player?.play(songs, startAt: i) }
+                .padding(.horizontal, 20)
                 .songMenu(song)
             }
         }
     }
 }
 
-/// Ближайшие треки из очереди, как «Up Next» в Apple Music.
-private struct UpNextSection: View {
+/// Текущая сессия: системная карточка продолжения вместо дублирования нескольких строк очереди.
+private struct ResumeQueueCard: View {
     let player: Player
+    let openQueue: () -> Void
+
     var body: some View {
-        let upcoming = Array(player.queue.dropFirst().prefix(4))
-        if !upcoming.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Up Next").font(.title2.bold()).padding(.horizontal, 20)
-                ForEach(upcoming) { song in
-                    HStack(spacing: 12) {
-                        CoverArtView(id: song.coverArt, size: 48, radius: 8)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(song.title).lineLimit(1)
-                            Text(song.displayArtist ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+        if let song = player.current {
+            ZStack {
+                Button(action: openQueue) {
+                    Color.clear
+                        .frame(maxWidth: .infinity, minHeight: 76)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Queue")
+
+                HStack(spacing: 13) {
+                    HStack(spacing: 13) {
+                        CoverArtView(id: song.coverArt, size: 76, radius: 14)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(player.isPlaying ? String(localized: "Now Playing") : String(localized: "Continue"))
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.tint)
+                                .textCase(.uppercase)
+                            Text(song.title).font(.headline).lineLimit(1)
+                            if player.upcoming.isEmpty {
+                                Text(song.displayArtist ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            } else {
+                                Text("\(player.upcoming.count) songs").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
                         }
-                        Spacer()
+                        Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 20)
+                    .allowsHitTesting(false)
+
+                    Button { player.togglePlayPause() } label: {
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.title3.weight(.semibold))
+                            .contentTransition(.symbolEffect(.replace))
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.circle)
+                    .accessibilityLabel(player.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
                 }
             }
+            .padding(12)
+            .background(.regularMaterial, in: .rect(cornerRadius: 22))
+            .padding(.horizontal, 20)
+            .sensoryFeedback(.impact(weight: .light), trigger: player.isPlaying)
         }
     }
 }

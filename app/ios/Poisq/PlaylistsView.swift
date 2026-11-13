@@ -9,7 +9,7 @@ struct PlaylistsView: View {
     @State private var failed = false
     @State private var creating = false
     @State private var newName = ""
-    @State private var path = NavigationPath()
+    @Binding var path: NavigationPath
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -46,11 +46,6 @@ struct PlaylistsView: View {
             }
             .task(id: model.contentKey + "|\(model.playlistsVersion)") { await load() }
             .musicDestinations()
-            .onChange(of: model.pendingPlaylist, initial: true) { _, playlist in      // Spotlight, Siri
-                guard let playlist else { return }
-                path.append(playlist)
-                model.pendingPlaylist = nil
-            }
         }
     }
 
@@ -113,10 +108,7 @@ struct PlaylistView: View {
             .listRowSeparator(.hidden).listRowBackground(Color.clear)
 
             ForEach(Array(songs.enumerated()), id: \.offset) { index, song in
-                Button { model.player?.play(songs, startAt: index) } label: {
-                    MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.displayArtist)
-                }
-                .buttonStyle(.plain)
+                PlayableSongRow(song: song) { model.player?.play(songs, startAt: index) }
                 .songMenu(song)
             }
             .onDelete(perform: remove)

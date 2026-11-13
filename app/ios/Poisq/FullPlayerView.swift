@@ -51,7 +51,8 @@ struct FullPlayerView: View {
                 .safeAreaBar(edge: .top, spacing: 0) { topBar }
                 // Свёрнутый плеер лежит поверх списка, а не внутри него: пока список крутится по инерции,
                 // касание сразу попадает в кнопку, а не гасит прокрутку.
-                .contentMargins(.bottom, scrollY > pageHeight * 0.55 ? 76 : 0, for: .scrollContent)
+                // Отступ под свёрнутый плеер постоянный: если менять его посреди прокрутки к очереди, прокрутка сбивается и страница на миг отскакивает назад.
+                .contentMargins(.bottom, 76, for: .scrollContent)
                 .overlay(alignment: .bottom) {
                     if scrollY > pageHeight * 0.55 { miniBar(proxy: proxy).transition(.move(edge: .bottom).combined(with: .opacity)) }
                 }
@@ -298,20 +299,8 @@ struct FullPlayerView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(player.current?.title ?? "").font(.title3.bold()).lineLimit(1)
                 // Артист — переход на его страницу (для радио и подкастов это просто текст).
-                if !player.isRadio, !player.isSpoken, let song = player.current, song.artistId != nil {
-                    let label = Text(song.displayArtist ?? "").font(.title3).foregroundStyle(.secondary).lineLimit(1)
-                    // Несколько исполнителей — меню выбора, один — сразу его страница
-                    if let artists = song.artists, artists.count > 1 {
-                        Menu {
-                            ForEach(artists) { a in Button(a.name) { model.pendingArtist = a } }
-                        } label: { label }
-                        .menuStyle(.button).buttonStyle(.plain) // иначе Menu красит подпись в цвет акцента
-                        .accessibilityHint("Show Artist")
-                    } else {
-                        Button { model.showArtist(of: song) } label: { label }
-                            .buttonStyle(.plain)
-                            .accessibilityHint("Show Artist")
-                    }
+                if !player.isRadio, !player.isSpoken, let song = player.current, song.artistId != nil || song.artists?.isEmpty == false {
+                    SongArtistLinks(song: song, font: .title3)
                 } else {
                     Text((player.isRadio ? player.streamTitle : player.current?.displayArtist) ?? "").font(.title3).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -504,15 +493,24 @@ private struct QualityLine: View {
 private struct PlayerScrubber: View {
     let player: Player
     @State private var dragFraction: Double?
+    @State private var dragStart: Double?             // где был ползунок, когда палец его коснулся
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+        // Время показываем с точностью до секунды: на паузе обновляем раз в секунду (вдруг перемотали), при игре — дважды.
+        TimelineView(.animation(minimumInterval: player.isPlaying ? 0.5 : 1)) { _ in
             let duration = max(player.duration, 1)
             let fraction = dragFraction ?? min(max(player.progress / duration, 0), 1)
             VStack(spacing: 6) {
                 // Системный Slider: перемотка применяется, когда палец отпущен.
-                Slider(value: Binding(get: { fraction }, set: { dragFraction = $0 }), in: 0...1) { editing in
-                    if !editing, let f = dragFraction { player.seek(to: f * duration); dragFraction = nil }
+                // Перемотка — только если палец сдвинул ползунок. Системный ползунок на iPhone, стоя на краю (после перемотки в 0)
+                // и перерисовываясь от смены состояния колонки, сам шлёт пары «начало–конец» без касания; каждая принималась
+                // за жест, и колонка получала десятки перемоток подряд (лог сервера, вызов из этой строки).
+                Slider(value: Binding(get: { fraction }, set: { if dragStart != nil { dragFraction = $0 } }), in: 0...1) { editing in
+                    if editing { dragStart = fraction; return }
+                    guard let start = dragStart else { return }
+                    dragStart = nil
+                    if let f = dragFraction, abs(f - start) * duration >= 1 { player.seek(to: f * duration) }
+                    dragFraction = nil
                 }
                 .sliderThumbVisibility(.hidden)
                 HStack {
@@ -556,20 +554,13 @@ struct PlayerBackdrop: View {
     }
 }
 
-/// Кнопка выбора устройства (AirPlay, Bluetooth). `onOpen` — перед показом системного окна (окно колонок переключает звук на iPhone).
-struct RoutePicker: UIViewRepresentable {
-    var onOpen: (() -> Void)?
+/// Кнопка выбора устройства (AirPlay, Bluetooth).
+private struct RoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let v = AVRoutePickerView()
         v.tintColor = .label
         v.activeTintColor = .tintColor
-        v.delegate = context.coordinator
         return v
     }
-    func updateUIView(_ uiView: AVRoutePickerView, context: Context) { context.coordinator.onOpen = onOpen }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    final class Coordinator: NSObject, AVRoutePickerViewDelegate {
-        var onOpen: (() -> Void)?
-        func routePickerViewWillBeginPresentingRoutes(_ routePickerView: AVRoutePickerView) { onOpen?() }
-    }
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
 }

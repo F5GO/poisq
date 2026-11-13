@@ -6,7 +6,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "0.0.1"
     CURRENT_PROJECT_VERSION: "1"
 packages:
   PoisqKit: { path: PoisqKit }
@@ -26,6 +26,7 @@ targets:
       properties:
         UILaunchScreen: {}
         CFBundleDevelopmentRegion: en
+        CFBundleDisplayName: poisq
         CFBundleLocalizations: [en, ru]
         UIBackgroundModes: [audio]
         NSSupportsLiveActivities: true

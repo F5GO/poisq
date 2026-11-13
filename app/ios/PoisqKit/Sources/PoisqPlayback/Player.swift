@@ -18,9 +18,13 @@ public struct PlayerSnapshot: Codable, Sendable {
     public var repeatMode: RepeatMode
     public var endless: Bool
     public var savedAt: Date
-    public init(songs: [Song], position: Double, shuffleOn: Bool, repeatMode: RepeatMode, endless: Bool, savedAt: Date = Date()) {
+    /// Локальные изменения избранного перекрывают устаревшее поле `starred` в сохранённых Song.
+    public var favoriteOverrides: [String: Bool]?
+    public init(songs: [Song], position: Double, shuffleOn: Bool, repeatMode: RepeatMode, endless: Bool,
+                savedAt: Date = Date(), favoriteOverrides: [String: Bool]? = nil) {
         self.songs = songs; self.position = position; self.shuffleOn = shuffleOn
         self.repeatMode = repeatMode; self.endless = endless; self.savedAt = savedAt
+        self.favoriteOverrides = favoriteOverrides
     }
 }
 
@@ -36,6 +40,7 @@ public final class Player {
     public private(set) var repeatMode: RepeatMode = .off
     /// Идентификаторы избранных треков, с которыми мы работали в этой сессии.
     public private(set) var favoriteIDs: Set<String> = []
+    private var favoriteOverrides: [String: Bool] = [:]
     /// Качество стрима. Смена перестраивает очередь: текущий трек доиграет как есть, следующие пойдут в новом качестве.
     public var streamQuality: StreamQuality = .original {
         didSet { if oldValue != streamQuality, state == .active, !endless { replaceUpcoming(with: upcoming) } else if oldValue != streamQuality, endless, state == .active { Task { await rebuildUpcoming() } } }
@@ -137,6 +142,13 @@ public final class Player {
         engine.setMetadataHandler { [weak self] title in self?.streamTitle = title }
     }
 
+    /// Перед окном AirPlay: система показывает устройства только для активной аудиосессии.
+    public func activateAudioSession() {
+        #if os(iOS)
+        bridge?.activateSession()
+        #endif
+    }
+
     /// Меняет движок (телефон ↔ колонка). Очередь и место сохраняются, воспроизведение остаётся на паузе.
     public func useEngine(_ new: PlaybackEngine, casting: Bool) {
         let saved = snapshot()
@@ -175,7 +187,11 @@ public final class Player {
         engine.setReplayGain(Float(db))
     }
 
-    public func isFavorite(_ song: Song) -> Bool { favoriteIDs.contains(song.id) }
+    public func isFavorite(_ song: Song) -> Bool { favoriteOverrides[song.id] ?? favoriteIDs.contains(song.id) }
+    /// Сверяет локальное состояние со свежим списком сервера, не затирая ещё не отражённые в Song действия пользователя.
+    public func synchronizeFavorites(_ songs: [Song]) {
+        favoriteIDs.formUnion(songs.map(\.id))
+    }
     /// Оценки, выставленные в этой сессии (поверх того, что пришло с сервером).
     public private(set) var ratingOverrides: [String: Int] = [:]
     public func rating(of song: Song) -> Int { ratingOverrides[song.id] ?? song.userRating ?? 0 }
@@ -248,7 +264,8 @@ public final class Player {
         } else {
             list = Array(songs[index...])
         }
-        rebuild(list)
+        // Текущий трек публикуется сразу: карточки интерфейса не исчезают на время подготовки аудиодвижка.
+        rebuild(list, immediate: true)
     }
 
     // MARK: Подкасты и радио
@@ -427,7 +444,7 @@ public final class Player {
     public func snapshot() -> PlayerSnapshot? {
         guard state == .active, current != nil, !isRadio else { return nil }
         return PlayerSnapshot(songs: Array(queue.prefix(100)), position: progress, shuffleOn: shuffleOn,
-                              repeatMode: repeatMode, endless: endless)
+                              repeatMode: repeatMode, endless: endless, favoriteOverrides: favoriteOverrides)
     }
 
     /// Восстанавливает очередь на паузе: движок запустится при первом нажатии Play, с сохранённого места.
@@ -438,6 +455,7 @@ public final class Player {
         endless = snapshot.endless
         shuffleOn = snapshot.shuffleOn
         repeatMode = snapshot.repeatMode
+        favoriteOverrides = snapshot.favoriteOverrides ?? [:]
         queue = snapshot.songs
         current = first
         restoredPosition = snapshot.position
@@ -451,7 +469,7 @@ public final class Player {
         let position = restoredPosition ?? 0
         restoredPosition = nil
         pendingSeek = position > 1 ? position : nil
-        guard isCasting else { rebuild(queue); return }
+        guard isCasting else { rebuild(queue, immediate: true); return }
         // Колонка: место уходит вместе с командой запуска (песня сразу играет с него, без старта с нуля и перемотки),
         // а текущая песня видна сразу — иначе до ответа колонки карусель показывала бы следующую.
         rebuild(queue, immediate: true)
@@ -516,10 +534,17 @@ public final class Player {
     }
 
     public func toggleFavorite(_ song: Song) async {
-        let wanted = !isFavorite(song)
+        let old = isFavorite(song)
+        let wanted = !old
+        favoriteOverrides[song.id] = wanted
         if wanted { favoriteIDs.insert(song.id) } else { favoriteIDs.remove(song.id) }     // сразу, не дожидаясь сети
+        onSessionChange?()
         do { try await client.setStarred(wanted, songID: song.id) }
-        catch { if wanted { favoriteIDs.remove(song.id) } else { favoriteIDs.insert(song.id) } }
+        catch {
+            favoriteOverrides[song.id] = old
+            if old { favoriteIDs.insert(song.id) } else { favoriteIDs.remove(song.id) }
+            onSessionChange?()
+        }
     }
 
     /// Полная остановка и сброс (выход из аккаунта).

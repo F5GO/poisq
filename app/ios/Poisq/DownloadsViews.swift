@@ -86,10 +86,7 @@ struct DownloadedView: View {
             ForEach(groups, id: \.album) { group in
                 Section(group.album) {
                     ForEach(Array(group.songs.enumerated()), id: \.element.id) { index, song in
-                        Button { model.player?.play(group.songs, startAt: index) } label: {
-                            MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.displayArtist)
-                        }
-                        .buttonStyle(.plain)
+                        PlayableSongRow(song: song) { model.player?.play(group.songs, startAt: index) }
                         .swipeActions { Button("Remove", role: .destructive) { model.removeDownloads([song]) } }
                     }
                 }

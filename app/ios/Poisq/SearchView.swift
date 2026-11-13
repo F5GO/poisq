@@ -10,12 +10,13 @@ struct SearchView: View {
     @State private var results = SearchResults()
     @State private var state: LoadState = .idle
     @State private var recents = RecentSearches()
+    @Binding var path: NavigationPath
 
     private enum LoadState { case idle, loading, loaded, failed }
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             content
                 .navigationTitle("Search")
                 .searchable(text: $query, prompt: "Artists, albums, songs")
@@ -61,11 +62,11 @@ struct SearchView: View {
             if !results.songs.isEmpty {
                 Section("Songs") {
                     ForEach(Array(results.songs.enumerated()), id: \.element.id) { index, song in
-                        Button {
+                        PlayableSongRow(song: song) {
                             recents.add(trimmed)
                             model.player?.play(results.songs, startAt: index)
-                        } label: { MediaRow(coverID: song.coverArt, title: song.title, subtitle: song.displayArtist) }
-                        .buttonStyle(.plain).songMenu(song)
+                        }
+                        .songMenu(song)
                     }
                 }
             }
@@ -137,6 +138,72 @@ struct ArtistRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
+    }
+}
+
+/// Подпись исполнителя песни. Если исполнителей несколько, по нажатию открывается
+/// системное меню выбора — то же поведение, что у полноэкранного плеера.
+struct SongArtistLinks: View {
+    let song: Song
+    var font: Font = .subheadline
+    @Environment(AppModel.self) private var model
+
+    private var artists: [Artist] {
+        if let artists = song.artists, !artists.isEmpty { return artists }
+        if let id = song.artistId, let name = song.artist { return [Artist(id: id, name: name)] }
+        return []
+    }
+
+    var body: some View {
+        if artists.isEmpty {
+            Text(song.displayArtist ?? "").font(font).foregroundStyle(.secondary).lineLimit(1)
+        } else if artists.count > 1 {
+            Menu {
+                ForEach(artists) { artist in
+                    Button(artist.name) { model.pendingArtist = artist }
+                }
+            } label: {
+                label
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .accessibilityHint("Show Artist")
+        } else {
+            Button { model.pendingArtist = artists[0] } label: { label }
+                .buttonStyle(.plain)
+                .accessibilityHint("Show Artist")
+        }
+    }
+
+    private var label: some View {
+        Text(song.displayArtist ?? artists.map(\.name).joined(separator: " · "))
+            .font(font)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+}
+
+/// Строка песни: обложка и название запускают трек, подпись исполнителя открывает его или меню выбора.
+struct PlayableSongRow: View {
+    let song: Song
+    var highlighted = false
+    let play: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: play) { CoverArtView(id: song.coverArt, size: 48, radius: 8) }
+                .buttonStyle(.plain)
+            VStack(alignment: .leading, spacing: 2) {
+                Button(action: play) {
+                    Text(song.title).lineLimit(1).foregroundStyle(highlighted ? Color.accentColor : .primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                SongArtistLinks(song: song)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

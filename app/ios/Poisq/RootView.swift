@@ -2,6 +2,71 @@ import SwiftUI
 import UIKit
 import PoisqPlayback
 
+enum AppTab: String, CaseIterable, Codable, Identifiable {
+    case home, library, playlists, settings, search
+    var id: String { rawValue }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .home: "Home"
+        case .library: "Library"
+        case .playlists: "Playlists"
+        case .settings: "Settings"
+        case .search: "Search"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .home: "house.fill"
+        case .library: "square.stack.fill"
+        case .playlists: "music.note.list"
+        case .settings: "gearshape.fill"
+        case .search: "magnifyingglass"
+        }
+    }
+}
+
+/// Состав и порядок нижней панели. Главная остаётся обязательной, чтобы настройку всегда можно было открыть снова.
+@MainActor @Observable
+final class TabBarLayout {
+    private(set) var visible: [AppTab]
+    private static let key = "tabBarLayout"
+
+    init() {
+        let saved = UserDefaults.standard.stringArray(forKey: Self.key)?.compactMap(AppTab.init(rawValue:)) ?? []
+        let unique = saved.reduce(into: [AppTab]()) { if !$0.contains($1) { $0.append($1) } }
+        visible = unique.isEmpty ? AppTab.allCases : unique
+        if !visible.contains(.home) { visible.insert(.home, at: 0) }
+    }
+
+    var hidden: [AppTab] { AppTab.allCases.filter { !visible.contains($0) } }
+    var isDefault: Bool { visible == AppTab.allCases }
+
+    func move(from: IndexSet, to: Int) {
+        visible.move(fromOffsets: from, toOffset: to)
+        save()
+    }
+
+    func hide(at offsets: IndexSet) {
+        visible.remove(atOffsets: IndexSet(offsets.filter { visible[$0] != .home }))
+        save()
+    }
+
+    func add(_ tab: AppTab) {
+        guard !visible.contains(tab) else { return }
+        visible.append(tab)
+        save()
+    }
+
+    func reset() {
+        visible = AppTab.allCases
+        save()
+    }
+
+    private func save() { UserDefaults.standard.set(visible.map(\.rawValue), forKey: Self.key) }
+}
+
 struct RootView: View {
     @Environment(AppModel.self) private var model
 
@@ -9,8 +74,13 @@ struct RootView: View {
         if model.isSignedIn { mainTabs } else { SignInView(isSheet: false) }
     }
 
-    private enum AppTab: Hashable { case home, library, playlists, settings, search }
     @State private var tab = AppTab.home
+    @State private var tabLayout = TabBarLayout()
+    @State private var homePath = NavigationPath()
+    @State private var libraryPath = NavigationPath()
+    @State private var playlistsPath = NavigationPath()
+    @State private var settingsPath = NavigationPath()
+    @State private var searchPath = NavigationPath()
     @Environment(\.colorScheme) private var scheme
     @State private var showPlayer = false
     @Namespace private var playerZoom
@@ -25,12 +95,15 @@ struct RootView: View {
 
     private var mainTabs: some View {
         TabView(selection: $tab) {
-            Tab("Home", systemImage: "house.fill", value: AppTab.home) { HomeView() }
-            Tab("Library", systemImage: "square.stack.fill", value: AppTab.library) { LibraryView() }
-            Tab("Playlists", systemImage: "music.note.list", value: AppTab.playlists) { PlaylistsView() }
-            Tab("Settings", systemImage: "gearshape.fill", value: AppTab.settings) { SettingsView() }
-            Tab(value: AppTab.search, role: .search) { SearchView() }
+            ForEach(tabLayout.visible) { item in
+                if item == .search {
+                    Tab(value: item, role: .search) { tabContent(item) }
+                } else {
+                    Tab(item.title, systemImage: item.icon, value: item) { tabContent(item) }
+                }
+            }
         }
+        .environment(tabLayout)
         .tabBarMinimizeBehavior(.onScrollDown)
         .alert("Download Limit Reached", isPresented: Binding(get: { model.downloadLimitReached }, set: { model.downloadLimitReached = $0 })) {
             Button("OK", role: .cancel) {}
@@ -44,13 +117,25 @@ struct RootView: View {
             if phase == .background { model.saveSession() }
         }
         .onChange(of: model.pendingAlbum) { _, album in
-            if album != nil { tab = .home; showPlayer = false }
+            guard let album else { return }
+            path(for: tab).wrappedValue.append(album)
+            model.pendingAlbum = nil
+            showPlayer = false
         }
         .onChange(of: model.pendingArtist) { _, artist in
-            if artist != nil { tab = .home; showPlayer = false }
+            guard let artist else { return }
+            path(for: tab).wrappedValue.append(artist)
+            model.pendingArtist = nil
+            showPlayer = false
         }
         .onChange(of: model.pendingPlaylist) { _, playlist in
-            if playlist != nil { tab = .playlists; showPlayer = false }
+            guard let playlist else { return }
+            path(for: tab).wrappedValue.append(playlist)
+            model.pendingPlaylist = nil
+            showPlayer = false
+        }
+        .onChange(of: tabLayout.visible) { _, visible in
+            if !visible.contains(tab) { tab = visible.first ?? .home }
         }
         .onOpenURL { SystemIntegration.shared.open($0) }
         .onChange(of: model.openPlayerRequest) { if model.player?.isActive == true { showPlayer = true } }       // ссылки из виджетов: poisq://album/…
@@ -66,6 +151,64 @@ struct RootView: View {
             if let player = model.player { PlayerAccessory(player: player, scheme: scheme, onOpen: { showPlayer = true })
                     .matchedTransitionSource(id: "player", in: playerZoom) }
         }
+    }
+
+    @ViewBuilder private func tabContent(_ item: AppTab) -> some View {
+        switch item {
+        case .home: HomeView(path: $homePath)
+        case .library: LibraryView(path: $libraryPath)
+        case .playlists: PlaylistsView(path: $playlistsPath)
+        case .settings: SettingsView(path: $settingsPath)
+        case .search: SearchView(path: $searchPath)
+        }
+    }
+
+    private func path(for item: AppTab) -> Binding<NavigationPath> {
+        switch item {
+        case .home: $homePath
+        case .library: $libraryPath
+        case .playlists: $playlistsPath
+        case .settings: $settingsPath
+        case .search: $searchPath
+        }
+    }
+}
+
+/// Системный список настройки: строки можно переставить, удалить и вернуть кнопкой «+».
+struct TabBarEditView: View {
+    @Environment(TabBarLayout.self) private var layout
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Shown") {
+                    ForEach(layout.visible) { item in
+                        Label(item.title, systemImage: item.icon)
+                            .deleteDisabled(item == .home)
+                    }
+                    .onMove { layout.move(from: $0, to: $1) }
+                    .onDelete { layout.hide(at: $0) }
+                }
+                if !layout.hidden.isEmpty {
+                    Section("More Buttons") {
+                        ForEach(layout.hidden) { item in
+                            Button { withAnimation(.snappy) { layout.add(item) } } label: {
+                                Label(item.title, systemImage: "plus.circle.fill")
+                            }
+                        }
+                    }
+                }
+                if !layout.isDefault {
+                    Section { Button("Reset to Default", role: .destructive) { withAnimation { layout.reset() } } }
+                }
+            }
+            .environment(\.editMode, .constant(.active))
+            .navigationTitle("Customize Tab Bar")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done", systemImage: "checkmark") { dismiss() } } }
+        }
+        .presentationDetents([.large])
     }
 }
 

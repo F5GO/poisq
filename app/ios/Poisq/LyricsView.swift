@@ -35,6 +35,9 @@ struct LyricsPane: View {
     var fontSize: CGFloat = 26
     var blurInactive: Bool
     var onDark = false
+    /// Текущая строка и «ждём начала текста». Меняются только при смене строки, поэтому список перерисовывается редко.
+    @State private var active: Int?
+    @State private var intro = false
 
     var body: some View {
         Group {
@@ -57,10 +60,7 @@ struct LyricsPane: View {
 
     private func scroll(_ lyrics: Lyrics) -> some View {
         GeometryReader { geo in
-        TimelineView(.periodic(from: .now, by: 0.3)) { _ in
             let synced = lyrics.isSynced
-            let (active, intro) = position(lyrics, ms: Int(player.progress * 1000))
-            let target: Int? = intro ? Self.introID : active.map { lyrics.lines[$0].id }
             ScrollViewReader { proxy in
                 ScrollView(showsIndicators: false) {
                     // Как в Яндекс Музыке: текст по центру, текущая строка крупнее и ярче, соседние мельче и тусклее.
@@ -86,25 +86,40 @@ struct LyricsPane: View {
                     // Для караоке — более узкая колонка, чтобы строки переносились по 2–3 слова, как в Яндекс Музыке.
                     .padding(.horizontal, synced ? fontSize * 0.9 : 0)
                 }
-                .task {
+                .task(id: lyrics) {
+                    sync(lyrics)
                     // Сразу после появления список ещё не разложен — прокрутка к строке не сработает. Пробуем, пока он не готов, без анимации.
-                    guard let target else { return }
-                    for delay in [30, 120, 300] {
-                        try? await Task.sleep(for: .milliseconds(delay))
-                        proxy.scrollTo(target, anchor: .center)
+                    if let target = target(lyrics) {
+                        for delay in [30, 120, 300] {
+                            try? await Task.sleep(for: .milliseconds(delay))
+                            proxy.scrollTo(target, anchor: .center)
+                        }
+                    }
+                    // Позицию плеера опрашиваем сами: тело списка пересчитывается, только когда сменилась строка.
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(300))
+                        sync(lyrics)
                     }
                 }
-                .onChange(of: target) { _, new in
+                .onChange(of: target(lyrics)) { _, new in
                     if let new { withAnimation(.smooth) { proxy.scrollTo(new, anchor: .center) } }
                 }
             }
-        }
         }
         // Строки плавно уходят в прозрачность у верхнего и нижнего края.
         .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.1),
                                      .init(color: .black, location: 0.9), .init(color: .clear, location: 1)],
                              startPoint: .top, endPoint: .bottom))
     }
+
+    private func sync(_ lyrics: Lyrics) {
+        let (a, i) = position(lyrics, ms: Int(player.progress * 1000))
+        if a != active { active = a }
+        if i != intro { intro = i }
+    }
+
+    /// Текст из кеша подменяется сразу, а `active` ещё от прошлого трека — поэтому проверяем границу.
+    private func target(_ lyrics: Lyrics) -> Int? { intro ? Self.introID : active.flatMap { lyrics.lines.indices.contains($0) ? lyrics.lines[$0].id : nil } }
 
     /// Текущая строка и признак «ждём начала текста».
     private func position(_ lyrics: Lyrics, ms: Int) -> (active: Int?, intro: Bool) {
@@ -116,7 +131,8 @@ struct LyricsPane: View {
 
     /// Три точки ожидания: пульсируют по очереди; когда текст начался, плавно схлопываются.
     private func introDots(visible: Bool) -> some View {
-        TimelineView(.animation) { timeline in
+        // На паузе, когда точки скрыты: иначе таймлайн крутится с частотой экрана всё время, пока открыт текст.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !visible)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             HStack(spacing: fontSize * 0.5) {
                 ForEach(0..<3, id: \.self) { i in

@@ -6,6 +6,7 @@ struct AlbumView: View {
     let album: Album
     @Environment(AppModel.self) private var model
     @State private var songs: [Song] = []
+    @State private var detailedAlbum: Album?
     @State private var loaded = false
     @State private var failed = false
 
@@ -14,23 +15,25 @@ struct AlbumView: View {
             header
                 .listRowSeparator(.hidden).listRowBackground(Color.clear)
             ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
-                Button { model.player?.play(songs, startAt: index) } label: {
-                    HStack(spacing: 14) {
+                HStack(spacing: 14) {
+                    Button { model.player?.play(songs, startAt: index) } label: {
                         Text(song.track.map(String.init) ?? "").font(.subheadline.monospacedDigit())
                             .foregroundStyle(.secondary).frame(width: 24, alignment: .trailing)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(song.title).lineLimit(1)
-                            if let artist = song.displayArtist, song.artist != album.artist {
-                                Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                        }
-                        Spacer()
-                        if model.isDownloaded(song) { Image(systemName: "arrow.down.circle.fill").font(.footnote).foregroundStyle(.secondary) }
-                        Text(Self.duration(song.duration)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
                     }
-                    .contentShape(.rect)
+                    .buttonStyle(.plain)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Button { model.player?.play(songs, startAt: index) } label: {
+                            Text(song.title).lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                        if song.artist != album.artist || (song.artists?.count ?? 0) > 1 {
+                            SongArtistLinks(song: song, font: .caption)
+                        }
+                    }
+                    Spacer()
+                    if model.isDownloaded(song) { Image(systemName: "arrow.down.circle.fill").font(.footnote).foregroundStyle(.secondary) }
+                    Text(Self.duration(song.duration)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
                 .songMenu(song)
             }
             if failed {
@@ -49,7 +52,26 @@ struct AlbumView: View {
                 .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
             VStack(spacing: 4) {
                 Text(album.name).font(.title2.bold()).multilineTextAlignment(.center)
-                Text(album.artist ?? "").font(.title3).foregroundStyle(.tint)
+                if albumArtists.count > 1 {
+                    Menu {
+                        ForEach(albumArtists) { artist in
+                            Button(artist.name) { model.pendingArtist = artist }
+                        }
+                    } label: {
+                        artistLabel
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Show Artist")
+                } else if let artist = albumArtists.first {
+                    Button { model.pendingArtist = artist } label: {
+                        artistLabel
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Show Artist")
+                } else {
+                    Text(album.artist ?? "").font(.title3).foregroundStyle(.secondary)
+                }
                 Text(subtitle).font(.footnote).foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {
@@ -77,6 +99,32 @@ struct AlbumView: View {
         .padding(.vertical, 8)
     }
 
+    private var artistLabel: some View {
+        Text(album.artist ?? ListFormatter.localizedString(byJoining: albumArtists.map(\.name)))
+            .font(.title3)
+            .foregroundStyle(.tint)
+            .multilineTextAlignment(.center)
+    }
+
+    /// Сначала используем исполнителей самого альбома. Если сервер их не прислал,
+    /// собираем уникальных исполнителей из треков, не сводя их к общему artistId.
+    private var albumArtists: [Artist] {
+        let supplied = detailedAlbum?.artists ?? album.artists
+        if let supplied, !supplied.isEmpty { return supplied }
+
+        var seen = Set<String>()
+        let fromSongs = songs.flatMap { song -> [Artist] in
+            if let artists = song.artists, !artists.isEmpty { return artists }
+            if let id = song.artistId, let name = song.artist { return [Artist(id: id, name: name)] }
+            return []
+        }
+        let unique = fromSongs.filter { seen.insert($0.id).inserted }
+        if !unique.isEmpty { return unique }
+
+        if let id = album.artistId, let name = album.artist { return [Artist(id: id, name: name)] }
+        return []
+    }
+
     private var subtitle: String {
         var parts: [String] = []
         if let y = album.year { parts.append(String(y)) }
@@ -88,7 +136,15 @@ struct AlbumView: View {
     private func load() async {
         let local = model.downloadedSongs.filter { $0.albumId == album.id }.sorted { ($0.track ?? 0) < ($1.track ?? 0) }
         if model.offline { songs = local; loaded = true; return }       // офлайн-режим: только то, что на устройстве
-        do { songs = try await model.client?.album(id: album.id).songs ?? []; failed = false }
+        do {
+            if let result = try await model.client?.album(id: album.id) {
+                detailedAlbum = result.album
+                songs = result.songs
+            } else {
+                songs = []
+            }
+            failed = false
+        }
         catch { songs = local; failed = local.isEmpty }                       // нет сети — показываем загруженное
         loaded = true
     }
