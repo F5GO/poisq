@@ -128,15 +128,15 @@ func TestWebSearchCacheExpiresAndForceRebuildInvalidates(t *testing.T) {
 
 func TestRussianSearchQueryAdaptation(t *testing.T) {
 	ruByCatalog, _, err := buildArtistSearchQuery(ArtistSearchQuery{ArtistID: "1", Name: "Biicla", PreferRussian: true})
-	if err != nil || !strings.Contains(ruByCatalog, "музыкант биография интервью") {
+	if err != nil || !strings.Contains(ruByCatalog, "музыкант биография группа дискография") {
 		t.Fatalf("expected Russian query for PreferRussian, got %q err=%v", ruByCatalog, err)
 	}
 	ruByCyrillic, _, err := buildArtistSearchQuery(ArtistSearchQuery{ArtistID: "2", Name: "Кино"})
-	if err != nil || !strings.Contains(ruByCyrillic, "музыкант биография интервью") {
+	if err != nil || !strings.Contains(ruByCyrillic, "музыкант биография группа дискография") {
 		t.Fatalf("expected Russian query for Cyrillic name, got %q err=%v", ruByCyrillic, err)
 	}
 	enQuery, _, err := buildArtistSearchQuery(ArtistSearchQuery{ArtistID: "3", Name: "Daft Punk"})
-	if err != nil || !strings.Contains(enQuery, "music artist biography interview") {
+	if err != nil || !strings.Contains(enQuery, "music artist biography discography") {
 		t.Fatalf("expected English query, got %q err=%v", enQuery, err)
 	}
 }
@@ -164,7 +164,7 @@ func TestArtistBiographyQueryStaysBroadWithReleaseHint(t *testing.T) {
 		Name:     "4atty aka Tilla",
 		Tracks:   []string{"Юрфак"},
 	})
-	if err != nil || !strings.Contains(cyrillicTrackQuery, "музыкант биография интервью") {
+	if err != nil || !strings.Contains(cyrillicTrackQuery, "музыкант биография группа дискография") {
 		t.Fatalf("expected Russian query for artist with Cyrillic tracks, got %q err=%v", cyrillicTrackQuery, err)
 	}
 }

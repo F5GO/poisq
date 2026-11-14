@@ -348,12 +348,12 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 	}
 	name := strings.Join(strings.Fields(input.Name), " ")
 	searchName := name
-	if hasMixedScript(name) && !strings.Contains(name, `"`) {
+	if utf8.RuneCountInString(name) >= 2 && !strings.Contains(name, `"`) {
 		searchName = `"` + name + `"`
 	}
-	suffix := "music artist biography interview"
+	suffix := "music artist biography discography"
 	if isRussianSearchArtist(input) {
-		suffix = "музыкант биография интервью"
+		suffix = "музыкант биография группа дискография"
 	}
 	parts := []string{searchName, suffix}
 	var extra []string
@@ -383,7 +383,7 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
 	}
 	releaseHint := buildArtistReleaseQuery(input)
-	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v6:" + query + "|" + releaseHint}})
+	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v7:" + query + "|" + releaseHint}})
 	if err != nil {
 		return "", "", err
 	}
@@ -440,7 +440,7 @@ func buildArtistReleaseQuery(input ArtistSearchQuery) string {
 		suffix = "музыкант"
 	}
 	searchName := name
-	if hasMixedScript(name) && !strings.Contains(name, `"`) {
+	if utf8.RuneCountInString(name) >= 2 && !strings.Contains(name, `"`) {
 		searchName = `"` + name + `"`
 	}
 	query := strings.Join([]string{searchName, hint, suffix}, " ")
