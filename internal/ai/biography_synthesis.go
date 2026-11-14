@@ -141,7 +141,7 @@ func (b *BiographySynthesisAI) Collect(ctx context.Context, identityJSON json.Ra
 		if feedback := synthesisErrorFeedback(lastErr); feedback != "" {
 			prompt += " Previous response failed validation (" + feedback + "). Fix that issue strictly."
 		}
-		raw, generateErr := b.gen.GenerateText(withModelPreference(ctx, "qwen/qwen3.8-27b", "qwen"), prompt, string(payload), "application/json")
+		raw, generateErr := b.gen.GenerateText(withModelPreference(ctx, "openai/gpt-oss-120b", "qwen/qwen3.8-27b"), prompt, string(payload), "application/json")
 		if generateErr != nil {
 			return nil, &synthesisStageError{reason: "collector_llm_error", msg: "biography evidence collection failed"}
 		}

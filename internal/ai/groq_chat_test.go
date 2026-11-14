@@ -9,9 +9,9 @@ import (
 )
 
 func TestRankGroqModelsPrefersLargeChatAndSkipsAudio(t *testing.T) {
-	ids := []string{"whisper-large-v3", "llama-guard-4-12b", "playai-tts", "allam-2-7b", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "llama-3.3-70b-versatile", "mystery-model"}
+	ids := []string{"whisper-large-v3", "llama-guard-4-12b", "playai-tts", "allam-2-7b", "openai/gpt-oss-20b", "llama-3.1-8b-instant", "qwen/qwen3.8-27b", "openai/gpt-oss-120b", "llama-3.3-70b-versatile", "mystery-model"}
 	got := rankGroqModels(ids)
-	want := []string{"openai/gpt-oss-120b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mystery-model"}
+	want := []string{"openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
@@ -24,23 +24,27 @@ func TestRankGroqModelsPrefersLargeChatAndSkipsAudio(t *testing.T) {
 
 func TestGroqModelCooldownReordersExhaustedModel(t *testing.T) {
 	client := &GroqChatClient{
-		models:       []string{"openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"},
+		models:       []string{"openai/gpt-oss-120b", "qwen/qwen3.8-27b"},
 		modelsLoaded: time.Now(),
 	}
 	client.recordModelRateLimit("key-8", "openai/gpt-oss-120b", errors.New("rate_limit_exceeded on tokens per day (TPD)"))
 	models := client.candidateModels(withModelPreference(context.Background(), "openai/gpt-oss-120b"), "key-8")
-	if len(models) != 3 || models[0] != "qwen/qwen3.8-27b" || models[2] != "openai/gpt-oss-120b" {
-		t.Fatalf("expected cooled-down 120b to move behind ready models, got %v", models)
+	if len(models) != 1 || models[0] != "qwen/qwen3.8-27b" {
+		t.Fatalf("expected cooled-down 120b to be skipped on key-8 leaving only qwen, got %v", models)
+	}
+	client.recordModelRateLimit("key-8", "qwen/qwen3.8-27b", errors.New("rate_limit_exceeded on output tokens per minute (OTPM)"))
+	if rem := client.candidateModels(context.Background(), "key-8"); len(rem) != 0 {
+		t.Fatalf("expected empty candidate list when all allowed models on key-8 are rate-limited, got %v", rem)
 	}
 }
 
 func TestGroqRolePreferenceReordersAvailableModels(t *testing.T) {
 	client := &GroqChatClient{
-		models:       []string{"openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"},
+		models:       []string{"openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"},
 		modelsLoaded: time.Now(),
 	}
-	models := client.candidateModels(withModelPreference(context.Background(), "openai/gpt-oss-20b"), "unused")
-	if len(models) < 3 || models[0] != "openai/gpt-oss-20b" || models[1] != "openai/gpt-oss-120b" {
+	models := client.candidateModels(withModelPreference(context.Background(), "qwen/qwen3.8-27b"), "unused")
+	if len(models) < 2 || models[0] != "qwen/qwen3.8-27b" || models[1] != "openai/gpt-oss-120b" {
 		t.Fatalf("unexpected role order: %v", models)
 	}
 }
