@@ -168,3 +168,25 @@ func TestArtistBiographyQueryStaysBroadWithReleaseHint(t *testing.T) {
 		t.Fatalf("expected Russian query for artist with Cyrillic tracks, got %q err=%v", cyrillicTrackQuery, err)
 	}
 }
+
+func TestMixedScriptArtistFiltersHomonymResults(t *testing.T) {
+	input := ArtistSearchQuery{
+		ArtistID:           "simptom",
+		Name:               "Sимптом",
+		IncludeReleaseHint: true,
+		Albums:             []string{"STYLE IN MC"},
+		Tracks:             []string{"Юрфак"},
+	}
+	query, _, err := buildArtistSearchQuery(input)
+	if err != nil || !strings.Contains(query, `"Sимптом"`) {
+		t.Fatalf("expected quoted mixed-script artist name in query, got %q err=%v", query, err)
+	}
+	filtered := filterResultsForArtist(input, []WebSearchResult{
+		{ID: "1", Title: "Группа Симптом — биография", Domain: "other.example", Snippet: "Рок-группа Симптом была основана в другом городе."},
+		{ID: "2", Title: "Sимптом (Гребз)", Domain: "genius.com", Snippet: "Sимптом — участник коллектива Grebz, записавший альбом."},
+		{ID: "3", Title: "STYLE IN MC", Domain: "music.example", Snippet: "Совместный релиз с участием 4atty aka Tilla и других."},
+	})
+	if len(filtered) != 2 || filtered[0].ID != "2" || filtered[1].ID != "3" {
+		t.Fatalf("expected only exact Sимптом or matching release results, got %#v", filtered)
+	}
+}

@@ -178,14 +178,19 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 	if releaseQuery := buildArtistReleaseQuery(input); releaseQuery != "" && releaseQuery != query && ctx.Err() == nil {
 		relResults, _, _, relErr := s.searchTavilyOnce(ctx, leased.PlainKey, releaseQuery, "basic", "tavily-rel", 0)
 		if relErr == nil && len(relResults) > 0 {
-			results = mergeSearchResults(results, relResults, maxSearchResults)
+			if hasMixedScript(input.Name) {
+				results = mergeSearchResults(relResults, results, maxSearchResults)
+			} else {
+				results = mergeSearchResults(results, relResults, maxSearchResults)
+			}
 		}
 	}
+	results = filterResultsForArtist(input, results)
 	if !hasEnoughSearchResults(results) && ctx.Err() == nil {
 		fallbackQuery := buildArtistFallbackQuery(input, query)
 		advResults, _, _, advErr := s.searchTavilyOnce(ctx, leased.PlainKey, fallbackQuery, "advanced", "tavily-adv", 3)
 		if advErr == nil && len(advResults) > 0 {
-			results = mergeSearchResults(advResults, results, maxSearchResults)
+			results = mergeSearchResults(filterResultsForArtist(input, advResults), results, maxSearchResults)
 		}
 	}
 	s.keys.ReportSuccess(leased.ID)
@@ -342,11 +347,15 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		return "", "", err
 	}
 	name := strings.Join(strings.Fields(input.Name), " ")
+	searchName := name
+	if hasMixedScript(name) && !strings.Contains(name, `"`) {
+		searchName = `"` + name + `"`
+	}
 	suffix := "music artist biography interview"
 	if isRussianSearchArtist(input) {
 		suffix = "музыкант биография интервью"
 	}
-	parts := []string{name, suffix}
+	parts := []string{searchName, suffix}
 	var extra []string
 	appendBounded := func(values []string, limit int) {
 		for _, value := range values[:min(limit, len(values))] {
@@ -374,7 +383,7 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
 	}
 	releaseHint := buildArtistReleaseQuery(input)
-	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v5:" + query + "|" + releaseHint}})
+	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v6:" + query + "|" + releaseHint}})
 	if err != nil {
 		return "", "", err
 	}
@@ -418,11 +427,65 @@ func buildArtistReleaseQuery(input ArtistSearchQuery) string {
 	if isRussianSearchArtist(input) {
 		suffix = "музыкант"
 	}
-	query := strings.Join([]string{name, hint, suffix}, " ")
+	searchName := name
+	if hasMixedScript(name) && !strings.Contains(name, `"`) {
+		searchName = `"` + name + `"`
+	}
+	query := strings.Join([]string{searchName, hint, suffix}, " ")
 	if len(query) > maxSearchIdentityBytes {
 		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
 	}
 	return query
+}
+
+func hasMixedScript(value string) bool {
+	hasLatin, hasCyrillic := false, false
+	for _, r := range value {
+		switch {
+		case unicode.In(r, unicode.Latin):
+			hasLatin = true
+		case unicode.In(r, unicode.Cyrillic):
+			hasCyrillic = true
+		}
+		if hasLatin && hasCyrillic {
+			return true
+		}
+	}
+	return false
+}
+
+func filterResultsForArtist(input ArtistSearchQuery, results []WebSearchResult) []WebSearchResult {
+	if !hasMixedScript(input.Name) || len(results) == 0 {
+		return results
+	}
+	exactName := strings.ToLower(strings.Join(strings.Fields(input.Name), " "))
+	filtered := make([]WebSearchResult, 0, len(results))
+	for _, r := range results {
+		combined := strings.ToLower(r.Title + " " + r.Snippet)
+		if exactName != "" && strings.Contains(combined, exactName) {
+			filtered = append(filtered, r)
+			continue
+		}
+		matchedRelease := false
+		for _, album := range input.Albums {
+			if a := strings.ToLower(strings.TrimSpace(album)); a != "" && strings.Contains(combined, a) {
+				matchedRelease = true
+				break
+			}
+		}
+		if !matchedRelease {
+			for _, track := range input.Tracks {
+				if tr := strings.ToLower(strings.TrimSpace(track)); tr != "" && strings.Contains(combined, tr) {
+					matchedRelease = true
+					break
+				}
+			}
+		}
+		if matchedRelease {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
 }
 
 func safePublicEvidenceURL(raw string) (string, string, bool) {
