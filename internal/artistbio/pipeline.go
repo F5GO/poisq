@@ -70,6 +70,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 		return p.retryable(ctx, artist.ID, "identity_unavailable", err)
 	}
 	if resolution.Status != ResolutionResolved {
+		logger.Debug("[BIO] artist_id=%q artist=%q stage=identity_unresolved status=%s confidence=%.2f albums=%d tracks=%d", artist.ID, artist.Name, resolution.Status, resolution.Confidence, len(identityContext.Albums), len(identityContext.Tracks))
 		return p.store.CompleteNoData(ctx, artist.ID, "identity-unresolved", time.Now())
 	}
 	identityContext.MusicBrainzID = resolution.MusicBrainzID

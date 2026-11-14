@@ -136,7 +136,93 @@ func (r *TrackRepository) ArtistIdentityContext(ctx context.Context, artistName 
 		result.Years = append(result.Years, year)
 	}
 	sort.Ints(result.Years)
+	if len(result.Albums) == 0 && len(result.Tracks) == 0 {
+		return r.collaborativeIdentityContext(ctx, artistName, albumLimit, trackLimit)
+	}
 	return result, nil
+}
+
+func (r *TrackRepository) collaborativeIdentityContext(ctx context.Context, artistName string, albumLimit, trackLimit int) (ArtistIdentityContext, error) {
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(artistName)
+	pattern := "%" + escaped + "%"
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT artist, album_artist, album, title, year
+		FROM tracks
+		WHERE artist LIKE ? ESCAPE '\' OR album_artist LIKE ? ESCAPE '\'
+		ORDER BY year, track_number, title
+		LIMIT 200`, pattern, pattern)
+	if err != nil {
+		return ArtistIdentityContext{}, fmt.Errorf("чтение совместного контекста исполнителя: %w", err)
+	}
+	defer rows.Close()
+
+	result := ArtistIdentityContext{
+		Albums: make([]ArtistIdentityRelease, 0, albumLimit),
+		Tracks: make([]string, 0, trackLimit),
+	}
+	seenAlbums := make(map[string]struct{}, albumLimit)
+	seenTracks := make(map[string]struct{}, trackLimit)
+	years := make(map[int]struct{})
+	for rows.Next() {
+		var artist, albumArtist, album, title string
+		var year int
+		if err := rows.Scan(&artist, &albumArtist, &album, &title, &year); err != nil {
+			return ArtistIdentityContext{}, fmt.Errorf("разбор совместного контекста исполнителя: %w", err)
+		}
+		if !containsArtistToken(artist, artistName) && !containsArtistToken(albumArtist, artistName) {
+			continue
+		}
+		if album != "" && len(result.Albums) < albumLimit {
+			if _, ok := seenAlbums[album]; !ok {
+				seenAlbums[album] = struct{}{}
+				result.Albums = append(result.Albums, ArtistIdentityRelease{Title: album, Year: year})
+			}
+		}
+		if title != "" && len(result.Tracks) < trackLimit {
+			if _, ok := seenTracks[title]; !ok {
+				seenTracks[title] = struct{}{}
+				result.Tracks = append(result.Tracks, title)
+			}
+		}
+		if year > 0 {
+			years[year] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return ArtistIdentityContext{}, fmt.Errorf("чтение строк совместного контекста исполнителя: %w", err)
+	}
+	result.Years = make([]int, 0, len(years))
+	for year := range years {
+		result.Years = append(result.Years, year)
+	}
+	sort.Ints(result.Years)
+	return result, nil
+}
+
+var artistCreditReplacer = strings.NewReplacer(
+	" feat. ", "\x00",
+	" ft. ", "\x00",
+	" featuring ", "\x00",
+	" with ", "\x00",
+	"•", "\x00",
+	",", "\x00",
+	";", "\x00",
+	"&", "\x00",
+	"/", "\x00",
+	"×", "\x00",
+)
+
+func containsArtistToken(credit, target string) bool {
+	if strings.EqualFold(strings.TrimSpace(credit), target) {
+		return true
+	}
+	normalized := artistCreditReplacer.Replace(credit)
+	for _, part := range strings.Split(normalized, "\x00") {
+		if strings.EqualFold(strings.TrimSpace(part), target) {
+			return true
+		}
+	}
+	return false
 }
 
 // UpsertTrack добавляет или обновляет базовые метаданные трека (не затирая уже найденные тексты).
