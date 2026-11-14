@@ -374,7 +374,7 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
 	}
 	releaseHint := buildArtistReleaseQuery(input)
-	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v4:" + query + "|" + releaseHint}})
+	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v5:" + query + "|" + releaseHint}})
 	if err != nil {
 		return "", "", err
 	}
