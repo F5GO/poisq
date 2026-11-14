@@ -548,10 +548,15 @@ func validateBiographySummary(summary BiographySummary, allowed map[string]strin
 		for _, id := range sentence.SourceIDs {
 			origin, ok := allowed[id]
 			if !ok {
+				validIDs := make([]string, 0, len(allowed))
+				for validID := range allowed {
+					validIDs = append(validIDs, validID)
+				}
+				sort.Strings(validIDs)
 				return &synthesisStageError{
 					reason:   "summary_edit_invented_source",
 					msg:      "biography summary invented source id",
-					feedback: "use only exact source ids supplied in the evidence array",
+					feedback: fmt.Sprintf("unknown source_id %q; use ONLY exact source_ids from: [%s]", id, strings.Join(validIDs, ", ")),
 				}
 			}
 			if _, duplicate := local[id]; duplicate {
