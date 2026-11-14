@@ -159,4 +159,12 @@ func TestArtistBiographyQueryStaysBroadWithReleaseHint(t *testing.T) {
 	if !strings.Contains(relQuery, "Izhevski") || !strings.Contains(relQuery, "Лучший город на земле") {
 		t.Fatalf("expected secondary release query to include artist and track, got %q", relQuery)
 	}
+	cyrillicTrackQuery, _, err := buildArtistSearchQuery(ArtistSearchQuery{
+		ArtistID: "4atty",
+		Name:     "4atty aka Tilla",
+		Tracks:   []string{"Юрфак"},
+	})
+	if err != nil || !strings.Contains(cyrillicTrackQuery, "музыкант биография интервью") {
+		t.Fatalf("expected Russian query for artist with Cyrillic tracks, got %q err=%v", cyrillicTrackQuery, err)
+	}
 }

@@ -317,6 +317,20 @@ func isRussianSearchArtist(input ArtistSearchQuery) bool {
 			}
 		}
 	}
+	for _, album := range input.Albums {
+		for _, r := range album {
+			if unicode.In(r, unicode.Cyrillic) {
+				return true
+			}
+		}
+	}
+	for _, track := range input.Tracks {
+		for _, r := range track {
+			if unicode.In(r, unicode.Cyrillic) {
+				return true
+			}
+		}
+	}
 	return false
 }
 
@@ -360,7 +374,7 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
 	}
 	releaseHint := buildArtistReleaseQuery(input)
-	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v3:" + query + "|" + releaseHint}})
+	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v4:" + query + "|" + releaseHint}})
 	if err != nil {
 		return "", "", err
 	}
