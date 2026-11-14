@@ -439,3 +439,31 @@ func TestBiographyVerifierDeduplicatesSharedEvidence(t *testing.T) {
 		t.Fatalf("expected evidence ID once in evidence list and 5 times in sentence source_ids, got inputs=%d count=%d", len(gen.inputs), strings.Count(gen.inputs[0], "catalog:wikipedia:1"))
 	}
 }
+
+func TestFilterGroundedSummaryRecoversDroppedOpeningSentence(t *testing.T) {
+	s1 := "Talemates — электронный проект, основанный в 2019 году."
+	s2 := "В дискографии коллектива представлен трек и совместный релиз."
+	s3 := "Музыканты выпускали композиции на профильных электронных площадках."
+	summary := BiographySummary{
+		Summary: s1 + " " + s2 + " " + s3,
+		Sentences: []SummarySentence{
+			{ID: 1, Text: s1, SourceIDs: []string{"web:fact-1"}},
+			{ID: 2, Text: s2, SourceIDs: []string{"web:fact-2"}},
+			{ID: 3, Text: s3, SourceIDs: []string{"web:fact-2"}},
+		},
+		UsedSourceIDs: []string{"web:fact-1", "web:fact-2"},
+	}
+	evidence := []SynthesisEvidence{
+		{ID: "web:fact-1", Origin: "origin1.example", Language: "ru", Text: s1},
+		{ID: "web:fact-2", Origin: "origin2.example", Language: "ru", Text: s2 + " " + s3},
+	}
+	verification := SynthesisVerification{
+		Grounded: false,
+		Verdicts: []string{"not_grounded", "grounded", "grounded"},
+		Scores:   []float64{0.90, 0.95, 0.95},
+	}
+	filtered, ok := FilterGroundedSummary(summary, verification, evidence, "Talemates")
+	if !ok || len(filtered.Sentences) != 2 || !strings.HasPrefix(filtered.Summary, "Talemates: ") {
+		t.Fatalf("expected opening sentence drop to preserve artist name and second origin, got ok=%v filtered=%#v", ok, filtered)
+	}
+}

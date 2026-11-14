@@ -189,6 +189,7 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 		return false, nil
 	}
 	var summary ai.BiographySummary
+	var fallbackSummary *ai.BiographySummary
 	baseEditCtx := ai.WithEditorArtistName(ctx, artist.Name)
 	editCtx := baseEditCtx
 	for attempt := 0; attempt < 2; attempt++ {
@@ -201,6 +202,10 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 		}
 		logPipelineStage(artist.ID, artist.Name, "summary_edit", stageStarted, synthesisErr)
 		if editErr != nil {
+			if fallbackSummary != nil {
+				summary = *fallbackSummary
+				break
+			}
 			return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
 		}
 		stageStarted = time.Now()
@@ -213,15 +218,22 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 		}
 		logPipelineStage(artist.ID, artist.Name, "summary_verify", stageStarted, synthesisErr)
 		if verifyErr != nil {
+			if fallbackSummary != nil {
+				summary = *fallbackSummary
+				break
+			}
 			return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
 		}
 		if verification.Grounded {
 			break
 		}
+		if filtered, ok := ai.FilterGroundedSummary(summary, verification, evidence, artist.Name); ok {
+			fallbackSummary = &filtered
+		}
 		if attempt == 1 {
-			if filtered, ok := ai.FilterGroundedSummary(summary, verification, evidence, artist.Name); ok {
-				logger.Debug("[BIO] artist_id=%q summary_filtered_grounded_sentences=%d/%d", artist.ID, len(filtered.Sentences), len(summary.Sentences))
-				summary = filtered
+			if fallbackSummary != nil {
+				logger.Debug("[BIO] artist_id=%q summary_filtered_grounded_sentences=%d/%d", artist.ID, len(fallbackSummary.Sentences), len(summary.Sentences))
+				summary = *fallbackSummary
 				break
 			}
 			return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
