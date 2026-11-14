@@ -33,26 +33,58 @@ type ArtistGrammarProfile struct {
 
 // InferArtistGrammarProfile анализирует имя артиста и карточки фактов (на русском и английском языках),
 // определяя, является ли артист сольным исполнителем, дуэтом или группой, а для сольного исполнителя — его пол.
+// При определении пола игнорирует упоминания сторонних продюсеров/коллабораторов (например, «в альбоме продюсера Biicla»).
 func InferArtistGrammarProfile(artistName string, evidence []SynthesisEvidence) ArtistGrammarProfile {
-	var combined strings.Builder
-	for _, item := range evidence {
-		if combined.Len() > 0 {
-			combined.WriteByte(' ')
+	var allBuilder strings.Builder
+	var primaryBuilder strings.Builder
+	lowerArtist := strings.ToLower(strings.TrimSpace(artistName))
+
+	for idx, item := range evidence {
+		txt := strings.TrimSpace(item.Text)
+		if txt == "" {
+			continue
 		}
-		combined.WriteString(item.Text)
+		if allBuilder.Len() > 0 {
+			allBuilder.WriteByte(' ')
+		}
+		allBuilder.WriteString(txt)
+
+		// Первичные предложения о самом артисте (а не о сторонних продюсерах/коллабораторах в фитах)
+		for _, clause := range splitProfileClauses(txt) {
+			lowerClause := strings.ToLower(strings.TrimSpace(clause))
+			if lowerClause == "" {
+				continue
+			}
+			if isCollaboratorSubClause(lowerClause, lowerArtist) {
+				continue
+			}
+			if idx == 0 || lowerArtist == "" || strings.Contains(lowerClause, lowerArtist) || startsWithSubjectPronounOrRole(lowerClause) {
+				if primaryBuilder.Len() > 0 {
+					primaryBuilder.WriteByte(' ')
+				}
+				primaryBuilder.WriteString(lowerClause)
+			}
+		}
 	}
-	text := strings.ToLower(combined.String())
-	if text == "" {
+
+	fullText := strings.ToLower(allBuilder.String())
+	if fullText == "" {
 		return ArtistGrammarProfile{}
 	}
-
-	tokens := tokenizeProfileWords(text)
-	tokenCounts := make(map[string]int, len(tokens))
-	for _, tok := range tokens {
-		tokenCounts[tok]++
+	primaryText := primaryBuilder.String()
+	if primaryText == "" {
+		primaryText = fullText
 	}
 
-	// Сначала нейтрализуем конструкции «участник группы», «солистка группы», «member of the band»,
+	// Явные маркеры, которые Collector ставит для целевого артиста
+	if strings.Contains(fullText, "female solo artist") || strings.Contains(fullText, "female singer") || strings.Contains(fullText, "female rapper") || strings.Contains(fullText, "female musician") || strings.Contains(fullText, "певица") || strings.Contains(fullText, "исполнительница") || strings.Contains(fullText, "автор-исполнительница") {
+		return ArtistGrammarProfile{Kind: ArtistEntitySolo, Gender: ArtistGenderFemale}
+	}
+	if strings.Contains(fullText, "musical duo") || strings.Contains(fullText, "electronic duo") || strings.Contains(fullText, "hip-hop duo") || strings.Contains(fullText, "pop duo") || strings.Contains(fullText, "музыкальный дуэт") || strings.Contains(fullText, "электронный дуэт") {
+		return ArtistGrammarProfile{Kind: ArtistEntityDuo}
+	}
+
+	// Нейтрализуем конструкции «участник группы», «солистка группы», «member of the band»,
 	// которые указывают на сольного артиста, состоящего в группе, а не на саму группу.
 	soloMemberPhrases := []string{
 		"участник группы", "участница группы", "участник коллектива", "участница коллектива",
@@ -63,7 +95,7 @@ func InferArtistGrammarProfile(artistName string, evidence []SynthesisEvidence) 
 		"former member of", "frontman of", "frontwoman of", "lead singer of", "vocalist of",
 	}
 	soloPhraseHits := 0
-	cleanedForGroup := text
+	cleanedForGroup := primaryText
 	for _, phrase := range soloMemberPhrases {
 		if count := strings.Count(cleanedForGroup, phrase); count > 0 {
 			soloPhraseHits += count
@@ -79,9 +111,6 @@ func InferArtistGrammarProfile(artistName string, evidence []SynthesisEvidence) 
 	duoScore := countWordHits(groupCounts,
 		"дуэт", "дуэта", "дуэту", "дуэтом", "duo",
 	) * 3
-	if strings.Contains(cleanedForGroup, "electronic duo") || strings.Contains(cleanedForGroup, "musical duo") || strings.Contains(cleanedForGroup, "музыкальный дуэт") || strings.Contains(cleanedForGroup, "электронный дуэт") {
-		duoScore += 4
-	}
 
 	groupScore := countWordHits(groupCounts,
 		"группа", "группы", "группе", "группу", "группой",
@@ -102,47 +131,43 @@ func InferArtistGrammarProfile(artistName string, evidence []SynthesisEvidence) 
 		}
 	}
 
-	femalePersonalScore := countWordHits(tokenCounts,
+	primaryTokens := tokenizeProfileWords(primaryText)
+	primaryCounts := make(map[string]int, len(primaryTokens))
+	for _, tok := range primaryTokens {
+		primaryCounts[tok]++
+	}
+
+	femalePersonalScore := countWordHits(primaryCounts,
 		"певица", "певицы", "певице", "певицу", "певицей",
 		"исполнительница", "исполнительницы", "исполнительнице", "исполнительницу",
 		"вокалистка", "солистка", "участница", "актриса", "автор-исполнительница",
 		"родилась", "выросла", "урождённая", "урожденная", "известная",
-		"she", "her", "hers", "herself", "frontwoman", "actress", "songstress",
+		"she", "her", "hers", "herself", "frontwoman", "actress", "songstress", "female",
 	) * 3
-	for _, phrase := range []string{
-		"сольная певица", "российская певица", "украинская певица", "американская певица",
-		"поп-певица", "сольная исполнительница", "female singer", "female rapper", "female artist",
-	} {
-		if strings.Contains(text, phrase) {
-			femalePersonalScore += 4
-		}
-	}
+	femalePersonalScore += countFemaleGivenNames(primaryCounts) * 4
 
-	malePersonalScore := countWordHits(tokenCounts,
+	// В мужские маркеры включаем только однозначно мужские формы (без слов общего рода
+	// вроде «продюсер», «диджей», «музыкант», которые могут относиться к женщине или к коллаборатору).
+	malePersonalScore := countWordHits(primaryCounts,
 		"певец", "певца", "певцу", "певцом",
 		"рэпер", "рэпера", "рэперу", "рэпером",
-		"вокалист", "солист", "фронтмен", "участник",
-		"диджей", "диджея", "битмейкер", "продюсер", "продюсера", "саунд-продюсер",
+		"вокалист", "солист", "фронтмен",
 		"родился", "вырос", "известный",
-		"выпустил", "записал", "начал", "основал", "получил", "стал", "представил", "выступил",
-		"он", "его", "ему", "им",
-		"he", "his", "him", "himself", "frontman", "rapper",
-	)*2 + soloPhraseHits*3
-	for _, phrase := range []string{
-		"сольный исполнитель", "хип-хоп-исполнитель", "рэп-исполнитель", "электронный музыкант",
-		"диджей и продюсер", "dj and producer", "male singer",
-	} {
-		if strings.Contains(text, phrase) {
-			malePersonalScore += 4
-		}
-	}
+		"he", "his", "him", "himself", "frontman", "male",
+	)*3 + soloPhraseHits*2
+	malePersonalScore += countMaleGivenNames(primaryCounts) * 4
 
-	// Если есть личные женские маркеры, учитываем также женские глаголы прошедшего времени
 	if femalePersonalScore > 0 {
-		femaleVerbHits := countWordHits(tokenCounts,
+		femaleVerbHits := countWordHits(primaryCounts,
 			"выпустила", "записала", "начала", "основала", "получила", "стала", "представила", "выступила", "она", "её", "ее",
 		)
 		femalePersonalScore += femaleVerbHits * 2
+	}
+	if malePersonalScore > 0 {
+		maleVerbHits := countWordHits(primaryCounts,
+			"выпустил", "записал", "начал", "основал", "получил", "стал", "представил", "выступил", "он",
+		)
+		malePersonalScore += maleVerbHits * 2
 	}
 
 	soloScore := max(femalePersonalScore, malePersonalScore)
@@ -162,7 +187,58 @@ func InferArtistGrammarProfile(artistName string, evidence []SynthesisEvidence) 
 	if groupScore >= 2 && soloScore == 0 {
 		return ArtistGrammarProfile{Kind: ArtistEntityGroup}
 	}
+	if strings.Contains(primaryText, "solo artist") || strings.Contains(primaryText, "сольный") || strings.Contains(primaryText, "сольная") {
+		return ArtistGrammarProfile{Kind: ArtistEntitySolo, Gender: ArtistGenderUnknown}
+	}
 	return ArtistGrammarProfile{}
+}
+
+func splitProfileClauses(text string) []string {
+	return strings.FieldsFunc(text, func(r rune) bool {
+		return r == '.' || r == ';' || r == '\n'
+	})
+}
+
+func isCollaboratorSubClause(lowerClause, lowerArtist string) bool {
+	for _, marker := range []string{
+		"в рамках сотрудничества с", "совместно с продюсером", "в альбоме продюсера",
+		"принял участие в альбоме", "приняла участие в альбоме", "featured on", "produced by",
+	} {
+		if strings.Contains(lowerClause, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func startsWithSubjectPronounOrRole(lowerClause string) bool {
+	for _, prefix := range []string{
+		"он ", "она ", "они ", "he ", "she ", "they ", "певица ", "певец ", "рэпер ",
+		"исполнительница ", "исполнитель ", "группа ", "дуэт ", "коллектив ", "родилась ", "родился ",
+	} {
+		if strings.HasPrefix(lowerClause, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func countFemaleGivenNames(counts map[string]int) int {
+	return countWordHits(counts,
+		"анна", "марина", "ева", "ольга", "елена", "наталья", "юлия", "дарья",
+		"полина", "ксения", "светлана", "татьяна", "екатерина", "алина", "диана",
+		"кристина", "валерия", "вера", "надежда", "софия", "анастасия", "виктория",
+		"яна", "ирина", "мария", "александра", "аника",
+	)
+}
+
+func countMaleGivenNames(counts map[string]int) int {
+	return countWordHits(counts,
+		"илья", "юрий", "алексей", "александр", "дмитрий", "максим", "сергей",
+		"андрей", "михаил", "иван", "артём", "артем", "никита", "владимир",
+		"павел", "евгений", "денис", "роман", "кирилл", "антон", "игорь", "олег",
+		"константин", "вячеслав", "тимур", "глеб", "василий", "фёдор", "федор",
+	)
 }
 
 // FormatGrammarPromptDirective возвращает строгую инструкцию для системного промпта редактора биографий.
@@ -175,21 +251,32 @@ func FormatGrammarPromptDirective(profile ArtistGrammarProfile) string {
 	case ArtistEntitySolo:
 		switch profile.Gender {
 		case ArtistGenderFemale:
-			return " Artist grammar profile: SOLO FEMALE ARTIST (сольная исполнительница / певица, женский пол). Use strictly Russian feminine grammatical gender for the artist and all past-tense verbs/participles (певица, исполнительница, родилась, выпустила, записала, начала, основала, получила, стала, она, её). NEVER use masculine gender (певец, исполнитель, родился, выпустил, записал, начал, он) and NEVER call her a musical group/band."
+			return " Artist grammar profile: SOLO FEMALE ARTIST (сольная певица / исполнительница, женский пол). Use strictly Russian feminine grammatical gender for the artist and all past-tense verbs/participles (певица, исполнительница, родилась, выпустила, записала, начала, основала, приняла участие, она, её). NEVER use masculine gender (певец, исполнитель, родился, выпустил, записал, начал, принял участие, он), NEVER write English loanwords like «solo-artist», and NEVER call her a musical group/band."
 		case ArtistGenderMale:
-			return " Artist grammar profile: SOLO MALE ARTIST (сольный исполнитель, мужской пол). Use strictly Russian masculine grammatical gender for the artist and all past-tense verbs/participles (исполнитель, музыкант, рэпер, певец, диджей, продюсер, родился, выпустил, записал, начал, основал, получил, стал, он, его). NEVER use feminine gender (певица, исполнительница, родилась, выпустила, она) and NEVER call him a musical group/band."
+			return " Artist grammar profile: SOLO MALE ARTIST (сольный исполнитель, мужской пол). Use strictly Russian masculine grammatical gender for the artist and all past-tense verbs/participles (исполнитель, музыкант, рэпер, певец, диджей, продюсер, родился, выпустил, записал, начал, основал, принял участие, он, его). NEVER use feminine gender (певица, исполнительница, родилась, выпустила, она), NEVER write English loanwords like «solo-artist», and NEVER call him a musical group/band."
+		default:
+			return " Artist grammar profile: SOLO ARTIST. Carefully determine whether this solo artist is female or male from their real name, pronouns, and context (e.g. ANIKV / Анна Пурцен is female -> «певица, родилась, выпустила, приняла участие, она»; male artist -> «исполнитель, родился, выпустил, он»), use consistent Russian grammatical gender throughout, and NEVER write English terms like «solo-artist»."
 		}
+	default:
+		return " Carefully determine whether the artist is a solo female artist («певица, исполнительница, родилась, выпустила, она»), solo male artist («исполнитель, рэпер, музыкант, родился, выпустил, он»), musical duo («дуэт»), or group/band («группа, коллектив») and keep Russian grammatical gender and number 100% consistent. NEVER write English terms like «solo-artist»."
 	}
-	return ""
 }
 
 // ValidateSummaryGrammarProfile проверяет сгенерированный русский текст биографии на соответствие
-// определённому полу и формату артиста (сольный исполнитель / дуэт / группа).
+// определённому полу и формату артиста (сольный исполнитель / дуэт / группа), а также отсутствие «solo-artist».
 func ValidateSummaryGrammarProfile(summary string, profile ArtistGrammarProfile) error {
+	lower := strings.ToLower(summary)
+	if strings.Contains(lower, "solo-artist") || strings.Contains(lower, "solo artist") {
+		return &synthesisStageError{
+			reason:   "summary_edit_grammar_mismatch",
+			msg:      "biography summary contains untranslated solo-artist term",
+			feedback: "replace English «solo-artist» with natural Russian («певица / сольная исполнительница» for female or «сольный исполнитель / музыкант / певец» for male)",
+		}
+	}
 	if profile.Kind == ArtistEntityUnknown {
 		return nil
 	}
-	tokens := tokenizeProfileWords(strings.ToLower(summary))
+	tokens := tokenizeProfileWords(lower)
 	counts := make(map[string]int, len(tokens))
 	for _, tok := range tokens {
 		counts[tok]++
@@ -200,12 +287,12 @@ func ValidateSummaryGrammarProfile(summary string, profile ArtistGrammarProfile)
 		if profile.Gender == ArtistGenderFemale {
 			malePersonMarkers := countWordHits(counts,
 				"певец", "певца", "певцу", "певцом", "вокалист", "солист", "фронтмен",
-				"родился", "вырос", "известный",
+				"родился", "вырос", "принял",
 			)
 			femaleMarkers := countWordHits(counts,
 				"певица", "певицы", "певице", "певицу", "певицей",
 				"исполнительница", "исполнительницы", "вокалистка", "солистка", "участница", "актриса",
-				"родилась", "выросла", "известная",
+				"родилась", "выросла", "известная", "приняла",
 				"выпустила", "записала", "начала", "основала", "получила", "стала", "представила", "выступила", "она",
 			)
 			maleVerbs := countWordHits(counts,
@@ -215,14 +302,14 @@ func ValidateSummaryGrammarProfile(summary string, profile ArtistGrammarProfile)
 				return &synthesisStageError{
 					reason:   "summary_edit_grammar_mismatch",
 					msg:      "biography summary grammatical gender mismatch",
-					feedback: "artist is a SOLO FEMALE artist; rewrite strictly in Russian feminine grammatical gender (певица, исполнительница, родилась, выпустила, записала, начала, она) without masculine forms",
+					feedback: "artist is a SOLO FEMALE artist; rewrite strictly in Russian feminine grammatical gender (певица, исполнительница, родилась, выпустила, записала, начала, приняла участие, она) without masculine forms",
 				}
 			}
 		} else if profile.Gender == ArtistGenderMale {
 			femalePersonMarkers := countWordHits(counts,
 				"певица", "певицы", "певице", "певицу", "певицей",
 				"исполнительница", "исполнительницы", "вокалистка", "солистка", "актриса",
-				"родилась", "выросла", "урождённая", "урожденная", "известная",
+				"родилась", "выросла", "урождённая", "урожденная", "известная", "приняла",
 			)
 			if femalePersonMarkers > 0 {
 				return &synthesisStageError{

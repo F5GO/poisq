@@ -40,6 +40,24 @@ func TestInferArtistGrammarProfile(t *testing.T) {
 	if duoProfile.Kind != ArtistEntityDuo {
 		t.Fatalf("expected duo profile for Talemates, got %#v", duoProfile)
 	}
+
+	// ANIKV: dry RateYourMusic card without pronouns + collaborator card mentioning male producer Biicla
+	// must NOT misclassify ANIKV as male; and when real name Анна or певица is present, must classify as female.
+	anikvNeutral := InferArtistGrammarProfile("ANIKV", []SynthesisEvidence{
+		{ID: "1", Origin: "rateyourmusic.com", Language: "en", Text: "ANIKV is a solo artist from Moscow, born April 29, 1995, genres Alternative R&B and Pop Rap."},
+		{ID: "2", Origin: "the-flow.ru", Language: "ru", Text: "В рамках сотрудничества с продюсером Biicla приняла участие в альбоме совместно с Feduk и DJ Stonik1917."},
+	})
+	if anikvNeutral.Gender == ArtistGenderMale {
+		t.Fatalf("expected ANIKV with male collaborator Biicla NOT to be misclassified as male, got %#v", anikvNeutral)
+	}
+
+	anikvFemale := InferArtistGrammarProfile("ANIKV", []SynthesisEvidence{
+		{ID: "1", Origin: "rateyourmusic.com", Language: "en", Text: "ANIKV (Анна Пурцен) is a solo artist from Moscow, born April 29, 1995, genres Alternative R&B and Pop Rap."},
+		{ID: "2", Origin: "the-flow.ru", Language: "ru", Text: "В рамках сотрудничества с продюсером Biicla приняла участие в альбоме совместно с Feduk и DJ Stonik1917."},
+	})
+	if anikvFemale.Kind != ArtistEntitySolo || anikvFemale.Gender != ArtistGenderFemale {
+		t.Fatalf("expected ANIKV with Анна Пурцен to be solo female, got %#v", anikvFemale)
+	}
 }
 
 func TestBiographyEditorRetriesWrongGenderAndEntityKind(t *testing.T) {
