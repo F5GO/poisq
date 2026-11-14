@@ -353,7 +353,7 @@ func (p *SynthesisPipeline) retryable(ctx context.Context, artistID, code string
 	if ctx.Err() != nil {
 		updateCtx = context.Background()
 	}
-	if stateErr := p.store.MarkJobRetryable(updateCtx, artistID, code, time.Now().Add(time.Hour), time.Now()); stateErr != nil {
+	if stateErr := p.store.MarkJobRetryable(updateCtx, artistID, code, time.Now().Add(2*time.Minute), time.Now()); stateErr != nil {
 		return stateErr
 	}
 	return cause

@@ -150,6 +150,41 @@ func (g *GroqChatClient) candidateModels(ctx context.Context, apiKey string) []s
 	return g.orderByModelCooldown(apiKey, out)
 }
 
+func isDailyRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "per day") || strings.Contains(low, "daily") ||
+		strings.Contains(low, "(tpd)") || strings.Contains(low, "(rpd)")
+}
+
+func parseGroqRetryDelay(err error) time.Duration {
+	if err == nil {
+		return 10 * time.Second
+	}
+	msg := err.Error()
+	low := strings.ToLower(msg)
+	if idx := strings.Index(low, "try again in "); idx >= 0 {
+		rest := strings.TrimSpace(msg[idx+len("try again in "):])
+		if end := strings.IndexAny(rest, " \t\r\n,;)"); end > 0 {
+			rest = rest[:end]
+		}
+		rest = strings.TrimRight(rest, ".")
+		if d, parseErr := time.ParseDuration(rest); parseErr == nil && d > 0 {
+			d += 1500 * time.Millisecond
+			if d < 2*time.Second {
+				d = 2 * time.Second
+			}
+			if d > 30*time.Second {
+				d = 30 * time.Second
+			}
+			return d
+		}
+	}
+	return 12 * time.Second
+}
+
 func (g *GroqChatClient) orderByModelCooldown(apiKey string, models []string) []string {
 	if len(models) == 0 || apiKey == "" {
 		return models
@@ -174,9 +209,8 @@ func (g *GroqChatClient) recordModelRateLimit(apiKey, model string, err error) {
 	if apiKey == "" || model == "" || err == nil {
 		return
 	}
-	low := strings.ToLower(err.Error())
-	ttl := 15 * time.Second
-	if strings.Contains(low, "per day") || strings.Contains(low, "daily") || strings.Contains(low, "(tpd)") {
+	ttl := parseGroqRetryDelay(err)
+	if isDailyRateLimitError(err) {
 		ttl = 30 * time.Minute
 	}
 	g.mu.Lock()
@@ -184,6 +218,21 @@ func (g *GroqChatClient) recordModelRateLimit(apiKey, model string, err error) {
 		g.modelCooldown = make(map[string]time.Time)
 	}
 	g.modelCooldown[apiKey+"|"+model] = time.Now().Add(ttl)
+	g.mu.Unlock()
+}
+
+func (g *GroqChatClient) clearMinuteModelCooldowns(apiKey string) {
+	if apiKey == "" {
+		return
+	}
+	prefix := apiKey + "|"
+	cutoff := time.Now().Add(2 * time.Minute)
+	g.mu.Lock()
+	for k, until := range g.modelCooldown {
+		if strings.HasPrefix(k, prefix) && until.Before(cutoff) {
+			delete(g.modelCooldown, k)
+		}
+	}
 	g.mu.Unlock()
 }
 
@@ -252,18 +301,26 @@ type groqChatResponse struct {
 func (g *GroqChatClient) GenerateText(ctx context.Context, systemPrompt, userPrompt, responseMimeType string) (string, error) {
 	const maxKeySwitches = 4
 	var lastErr error
+	var forceKey *keypool.LeasedKey
 
 	for attempt := 1; attempt <= maxKeySwitches; attempt++ {
-		g.mu.Lock()
-		excludeID := g.lastKeyID
-		g.mu.Unlock()
+		var leased *keypool.LeasedKey
+		var err error
+		if forceKey != nil {
+			leased = forceKey
+			forceKey = nil
+		} else {
+			g.mu.Lock()
+			excludeID := g.lastKeyID
+			g.mu.Unlock()
 
-		leased, err := g.keyPool.AcquireExcluding("groq", excludeID)
-		if err != nil {
-			if lastErr != nil {
-				return "", fmt.Errorf("%w (последняя ошибка Groq: %v)", err, lastErr)
+			leased, err = g.keyPool.AcquireExcluding("groq", excludeID)
+			if err != nil {
+				if lastErr != nil {
+					return "", fmt.Errorf("%w (последняя ошибка Groq: %v)", err, lastErr)
+				}
+				return "", err
 			}
-			return "", err
 		}
 
 		g.mu.Lock()
@@ -283,11 +340,32 @@ func (g *GroqChatClient) GenerateText(ctx context.Context, systemPrompt, userPro
 
 		switch {
 		case status == http.StatusTooManyRequests || strings.Contains(low, "rate_limit"):
-			if strings.Contains(low, "per day") || strings.Contains(low, "daily") {
+			if isDailyRateLimitError(err) {
 				g.keyPool.ReportDailyQuotaExhausted(leased.ID, err.Error())
-			} else {
-				g.keyPool.ReportRateLimit429(leased.ID, err.Error())
+				continue
 			}
+			// Проверяем, есть ли в пуле другой активный ключ Groq.
+			if nextKey, nextErr := g.keyPool.AcquireExcluding("groq", leased.ID); nextErr == nil && nextKey != nil && nextKey.ID != leased.ID {
+				g.keyPool.ReportRateLimit429(leased.ID, err.Error())
+				forceKey = nextKey
+				continue
+			}
+			// Если это единственный доступный ключ (или остальные уже в кулдауне) — ждём окно минутного лимита и повторяем.
+			if attempt < maxKeySwitches {
+				waitDur := parseGroqRetryDelay(err)
+				logger.Info("[GROQ-LLM] Минутный лимит токенов (ключ #%d), ожидание %s перед повтором (%d/%d)...", leased.ID, waitDur.Round(100*time.Millisecond), attempt, maxKeySwitches)
+				timer := time.NewTimer(waitDur)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return "", ctx.Err()
+				case <-timer.C:
+				}
+				g.clearMinuteModelCooldowns(leased.PlainKey)
+				forceKey = leased
+				continue
+			}
+			g.keyPool.ReportRateLimit429(leased.ID, err.Error())
 			continue
 		case status == http.StatusBadRequest && strings.Contains(low, "json_validate_failed"):
 			continue
@@ -320,10 +398,39 @@ func shouldTryNextGroqModel(status int, err error, mime string) bool {
 		(status == http.StatusBadRequest && strings.Contains(strings.ToLower(mime), "json"))
 }
 
+func (g *GroqChatClient) describeCooldownError(apiKey string) error {
+	prefix := apiKey + "|"
+	now := time.Now()
+	var shortestMinute time.Duration
+	hasDaily := false
+	g.mu.Lock()
+	for k, until := range g.modelCooldown {
+		if !strings.HasPrefix(k, prefix) || !now.Before(until) {
+			continue
+		}
+		rem := until.Sub(now)
+		if rem < 2*time.Minute {
+			if shortestMinute == 0 || rem < shortestMinute {
+				shortestMinute = rem
+			}
+		} else {
+			hasDaily = true
+		}
+	}
+	g.mu.Unlock()
+	if shortestMinute > 0 {
+		return fmt.Errorf("rate_limit_exceeded: модельный минутный лимит, try again in %s", shortestMinute.Round(100*time.Millisecond))
+	}
+	if hasDaily {
+		return fmt.Errorf("rate_limit_exceeded: tokens per day (TPD) exhausted on all allowed models")
+	}
+	return fmt.Errorf("rate_limit_exceeded: подходящие модели Groq на данном ключе находятся в лимите")
+}
+
 func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, mime string) (string, int, error) {
 	candidates := g.candidateModels(ctx, apiKey)
 	if len(candidates) == 0 {
-		return "", http.StatusTooManyRequests, fmt.Errorf("rate_limit_exceeded: подходящие модели Groq на данном ключе находятся в лимите")
+		return "", http.StatusTooManyRequests, g.describeCooldownError(apiKey)
 	}
 	var lastStatus int
 	var lastErr error
@@ -404,8 +511,8 @@ func extractGroqAPIError(body []byte) string {
 		parts = append(parts, typ)
 	}
 	if msg := strings.TrimSpace(parsed.Error.Message); msg != "" {
-		if len(msg) > 200 {
-			msg = msg[:200]
+		if len(msg) > 360 {
+			msg = msg[:360]
 		}
 		parts = append(parts, msg)
 	}

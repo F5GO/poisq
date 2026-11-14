@@ -94,3 +94,19 @@ func TestExtractGroqAPIError(t *testing.T) {
 		t.Fatal("expected empty string for non-JSON body")
 	}
 }
+
+func TestParseGroqRetryDelayAndDailyLimit(t *testing.T) {
+	otpmErr := errors.New("Groq LLM HTTP 429 (qwen/qwen3.8-27b): rate_limit_exceeded: tokens: Rate limit reached for model `qwen/qwen3.8-27b` in organization `org_1` service tier `on_demand` on output tokens per minute (OTPM): Limit 1000, Used 766, Requested 359. Please try again in 7.5s.")
+	if isDailyRateLimitError(otpmErr) {
+		t.Fatal("OTPM minute limit must not be classified as daily limit")
+	}
+	delay := parseGroqRetryDelay(otpmErr)
+	if delay != 9*time.Second {
+		t.Fatalf("expected 9s retry delay (7.5s + 1.5s margin), got %s", delay)
+	}
+
+	tpdErr := errors.New("Groq LLM HTTP 429 (openai/gpt-oss-120b): rate_limit_exceeded: tokens: Rate limit reached on tokens per day (TPD): Limit 200000, Used 199095")
+	if !isDailyRateLimitError(tpdErr) {
+		t.Fatal("TPD limit must be classified as daily limit")
+	}
+}

@@ -386,6 +386,7 @@ func (b *BiographySynthesisAI) Edit(ctx context.Context, evidence []SynthesisEvi
 	grammarProfile := InferArtistGrammarProfile(artistName, evidence)
 	grammarDirective := FormatGrammarPromptDirective(grammarProfile)
 	var lastErr error
+	var grammarFallback *BiographySummary
 	for attempt := 0; attempt < 2; attempt++ {
 		prompt := editorSystemPrompt
 		if artistName != "" {
@@ -402,6 +403,9 @@ func (b *BiographySynthesisAI) Edit(ctx context.Context, evidence []SynthesisEvi
 		}
 		raw, genErr := b.gen.GenerateText(withModelPreference(ctx, "openai/gpt-oss-120b", "gpt-oss-120b"), prompt, string(payload), "application/json")
 		if genErr != nil {
+			if grammarFallback != nil {
+				return *grammarFallback, nil
+			}
 			return BiographySummary{}, &synthesisStageError{reason: "summary_edit_llm_error", msg: "biography summary editing failed"}
 		}
 		if len(raw) > maxSynthesisOutput {
@@ -428,12 +432,6 @@ func (b *BiographySynthesisAI) Edit(ctx context.Context, evidence []SynthesisEvi
 			lastErr = err
 			continue
 		}
-		if artistName != "" && attempt == 0 {
-			if err := ValidateSummaryGrammarProfile(output.Summary, grammarProfile); err != nil {
-				lastErr = err
-				continue
-			}
-		}
 		if err := validateSummaryArtistName(output.Summary, artistName); err != nil {
 			if attempt == 1 && ctxFeedback != "" && len(output.Sentences) > 0 && strings.TrimSpace(artistName) != "" {
 				output.Sentences[0].Text = strings.TrimSpace(artistName) + ": " + output.Sentences[0].Text
@@ -443,7 +441,18 @@ func (b *BiographySynthesisAI) Edit(ctx context.Context, evidence []SynthesisEvi
 				continue
 			}
 		}
+		if artistName != "" && attempt == 0 {
+			if err := ValidateSummaryGrammarProfile(output.Summary, grammarProfile); err != nil {
+				saved := output
+				grammarFallback = &saved
+				lastErr = err
+				continue
+			}
+		}
 		return output, nil
+	}
+	if grammarFallback != nil {
+		return *grammarFallback, nil
 	}
 	return BiographySummary{}, lastErr
 }

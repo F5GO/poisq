@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/F5GO/poisq/internal/db"
+	"github.com/F5GO/poisq/internal/logger"
 )
 
 const defaultBiographyQueueSize = 100
@@ -23,6 +24,8 @@ type Coordinator struct {
 	queue         chan db.LibraryArtist
 	jobTimeout    time.Duration
 	startInterval time.Duration
+	maxJobRetries int
+	retryDelay    time.Duration
 
 	mu      sync.Mutex
 	waiters map[string]chan struct{}
@@ -34,8 +37,9 @@ func NewCoordinator(store *Store, openNavDB func() (*sql.DB, error), pipeline ar
 	}
 	coordinator := &Coordinator{
 		store: store, openNavDB: openNavDB, pipeline: pipeline,
-		queue: make(chan db.LibraryArtist, defaultBiographyQueueSize), jobTimeout: 90 * time.Second,
-		startInterval: 20 * time.Second, waiters: make(map[string]chan struct{}),
+		queue: make(chan db.LibraryArtist, defaultBiographyQueueSize), jobTimeout: 150 * time.Second,
+		startInterval: 20 * time.Second, maxJobRetries: 2, retryDelay: 15 * time.Second,
+		waiters: make(map[string]chan struct{}),
 	}
 	if _, err := store.RecoverStaleJobs(context.Background(), time.Now(), time.Now()); err != nil {
 		return nil, err
@@ -107,9 +111,24 @@ func (c *Coordinator) run(ctx context.Context) {
 				}
 			}
 			lastStart = time.Now()
-			jobCtx, cancel := context.WithTimeout(ctx, c.jobTimeout)
-			_ = c.pipeline.Run(jobCtx, artist)
-			cancel()
+			for attempt := 0; attempt <= c.maxJobRetries; attempt++ {
+				jobCtx, cancel := context.WithTimeout(ctx, c.jobTimeout)
+				err := c.pipeline.Run(jobCtx, artist)
+				cancel()
+				if err == nil || attempt == c.maxJobRetries || ctx.Err() != nil {
+					break
+				}
+				logger.Info("[BIO] artist_id=%q artist=%q retry=%d/%d after=%s error=%v", artist.ID, artist.Name, attempt+1, c.maxJobRetries, c.retryDelay, err)
+				retryTimer := time.NewTimer(c.retryDelay)
+				select {
+				case <-ctx.Done():
+					retryTimer.Stop()
+					c.finish(artist.ID)
+					return
+				case <-retryTimer.C:
+				}
+				lastStart = time.Now()
+			}
 			c.finish(artist.ID)
 		}
 	}
