@@ -312,6 +312,7 @@ func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity Ide
 	}
 	cards, err := p.ai.Collect(ctx, identityJSON, inputs)
 	if err != nil {
+		logger.Debug("[BIO] artist_id=%q collector_error=%v", identity.ArtistID, err)
 		return nil, synthesisStageFailure("collector_failed", err)
 	}
 	output := make([]ai.SynthesisEvidence, 0, len(cards))

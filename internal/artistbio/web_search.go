@@ -167,7 +167,7 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 	if err != nil || leased == nil || strings.TrimSpace(leased.PlainKey) == "" {
 		return WebSearchReport{}, discoveryError("tavily_key_unavailable", err)
 	}
-	results, status, headers, err := s.searchTavilyOnce(ctx, leased.PlainKey, query, "basic", 0)
+	results, status, headers, err := s.searchTavilyOnce(ctx, leased.PlainKey, query, "basic", "tavily", 0)
 	if err != nil {
 		if ctx.Err() != nil {
 			return WebSearchReport{}, discoveryError("tavily_timeout", ctx.Err())
@@ -176,13 +176,13 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 		return WebSearchReport{}, err
 	}
 	if releaseQuery := buildArtistReleaseQuery(input); releaseQuery != "" && releaseQuery != query && ctx.Err() == nil {
-		relResults, _, _, relErr := s.searchTavilyOnce(ctx, leased.PlainKey, releaseQuery, "basic", 0)
+		relResults, _, _, relErr := s.searchTavilyOnce(ctx, leased.PlainKey, releaseQuery, "basic", "tavily-rel", 0)
 		if relErr == nil && len(relResults) > 0 {
 			results = mergeSearchResults(results, relResults, maxSearchResults)
 		}
 	}
 	if !hasEnoughSearchResults(results) && ctx.Err() == nil {
-		advResults, _, _, advErr := s.searchTavilyOnce(ctx, leased.PlainKey, query, "advanced", 3)
+		advResults, _, _, advErr := s.searchTavilyOnce(ctx, leased.PlainKey, query, "advanced", "tavily-adv", 3)
 		if advErr == nil && len(advResults) > 0 {
 			results = mergeSearchResults(advResults, results, maxSearchResults)
 		}
@@ -191,7 +191,7 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 	return WebSearchReport{QueryVersion: version, Results: results}, nil
 }
 
-func (s *TavilySearch) searchTavilyOnce(ctx context.Context, apiKey, query, depth string, chunksPerSource int) ([]WebSearchResult, int, http.Header, error) {
+func (s *TavilySearch) searchTavilyOnce(ctx context.Context, apiKey, query, depth, prefix string, chunksPerSource int) ([]WebSearchResult, int, http.Header, error) {
 	payload, err := json.Marshal(struct {
 		Query             string `json:"query"`
 		SearchDepth       string `json:"search_depth"`
@@ -231,9 +231,11 @@ func (s *TavilySearch) searchTavilyOnce(ctx context.Context, apiKey, query, dept
 	}
 	results := make([]WebSearchResult, 0, min(maxSearchResults, len(response.Results)))
 	seen := make(map[string]struct{}, maxSearchResults)
-	prefix := "tavily"
-	if depth == "advanced" {
-		prefix = "tavily-adv"
+	if prefix == "" {
+		prefix = "tavily"
+		if depth == "advanced" {
+			prefix = "tavily-adv"
+		}
 	}
 	for index, result := range response.Results {
 		if len(results) >= maxSearchResults {
