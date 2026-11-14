@@ -219,6 +219,11 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 			break
 		}
 		if attempt == 1 {
+			if filtered, ok := ai.FilterGroundedSummary(summary, verification, evidence, artist.Name); ok {
+				logger.Debug("[BIO] artist_id=%q summary_filtered_grounded_sentences=%d/%d", artist.ID, len(filtered.Sentences), len(summary.Sentences))
+				summary = filtered
+				break
+			}
 			return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
 		}
 		editCtx = ai.WithEditorFeedback(baseEditCtx, buildVerificationRetryFeedback(summary, verification))
@@ -252,13 +257,17 @@ func buildVerificationRetryFeedback(summary ai.BiographySummary, verification ai
 			score = verification.Scores[index]
 		}
 		if verdict != "grounded" || score < 0.90 {
-			rejected = append(rejected, fmt.Sprintf("#%d (%s %.2f)", sentence.ID, verdict, score))
+			text := strings.TrimSpace(sentence.Text)
+			if len([]rune(text)) > 160 {
+				text = string([]rune(text)[:160]) + "..."
+			}
+			rejected = append(rejected, fmt.Sprintf("#%d (%s %.2f, cited [%s]): %q", sentence.ID, verdict, score, strings.Join(sentence.SourceIDs, ", "), text))
 		}
 	}
 	if len(rejected) == 0 {
 		return "Previous draft failed factual verification. Rewrite using ONLY literal, explicitly stated facts from the supplied evidence and drop any inferred claims."
 	}
-	return "Previous draft failed factual verification on sentence(s) " + strings.Join(rejected, ", ") + ". Remove or rewrite those unsupported claims using ONLY literal facts explicitly stated in the supplied evidence, while keeping at least 150 characters and citing >= 2 distinct origins."
+	return "Previous draft failed factual verification on: " + strings.Join(rejected, "; ") + ". For each rejected sentence, either add ALL missing source_ids from evidence that support every claim in it, or rewrite/drop unsupported parts using ONLY literal facts explicitly stated in the cited evidence, keeping at least 150 characters and citing >= 2 distinct origins."
 }
 
 func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity IdentityContext, resolution IdentityResolution, preferRussian, includeReleaseHint bool) ([]ai.SynthesisEvidence, error) {

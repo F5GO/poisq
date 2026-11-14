@@ -370,3 +370,43 @@ func TestBiographyEditorRejectsTransliteratedArtistName(t *testing.T) {
 		t.Fatalf("expected transliterated name to trigger retry and preserve Izhevski, got calls=%d err=%v summary=%q", gen.calls, err, res.Summary)
 	}
 }
+
+func TestFilterGroundedSummaryRetainsVerifiedSentences(t *testing.T) {
+	s1 := "Неподтверждённое вступительное предложение с лишним фактом, не указанным в источниках."
+	s2 := "Izhevski — московский электронный музыкант и диджей, резидент лейбла All Day I Dream, известный мелодичным органическим хаус-звучанием."
+	s3 := "Он выступал в клубе Propaganda и сотрудничал с продюсером Gorje Hewek над серией релизов Road Movie."
+	summary := BiographySummary{
+		Summary: s1 + " " + s2 + " " + s3,
+		Sentences: []SummarySentence{
+			{ID: 1, Text: s1, SourceIDs: []string{"web:fact-1"}},
+			{ID: 2, Text: s2, SourceIDs: []string{"web:fact-1"}},
+			{ID: 3, Text: s3, SourceIDs: []string{"web:fact-2"}},
+		},
+		UsedSourceIDs: []string{"web:fact-1", "web:fact-2"},
+	}
+	evidence := []SynthesisEvidence{
+		{ID: "web:fact-1", Origin: "origin1.example", Language: "ru", Text: s2},
+		{ID: "web:fact-2", Origin: "origin2.example", Language: "ru", Text: s3},
+	}
+	verification := SynthesisVerification{
+		Grounded: false,
+		Verdicts: []string{"not_grounded", "grounded", "grounded"},
+		Scores:   []float64{0.85, 0.94, 0.92},
+	}
+	filtered, ok := FilterGroundedSummary(summary, verification, evidence, "Izhevski")
+	if !ok || len(filtered.Sentences) != 2 || filtered.Sentences[0].ID != 1 || filtered.Sentences[1].ID != 2 {
+		t.Fatalf("expected grounded sentences to be retained and reindexed, got ok=%v filtered=%#v", ok, filtered)
+	}
+	if filtered.Summary != s2+" "+s3 {
+		t.Fatalf("unexpected filtered summary: %q", filtered.Summary)
+	}
+	// If remaining grounded sentences only cover 1 origin, FilterGroundedSummary must reject.
+	singleOriginVerification := SynthesisVerification{
+		Grounded: false,
+		Verdicts: []string{"not_grounded", "grounded", "not_grounded"},
+		Scores:   []float64{0.85, 0.94, 0.92},
+	}
+	if _, ok := FilterGroundedSummary(summary, singleOriginVerification, evidence, "Izhevski"); ok {
+		t.Fatal("expected FilterGroundedSummary to reject single-origin remainder")
+	}
+}
