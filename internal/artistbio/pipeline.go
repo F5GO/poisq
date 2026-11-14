@@ -71,6 +71,26 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	}
 	if resolution.Status != ResolutionResolved {
 		logger.Debug("[BIO] artist_id=%q artist=%q stage=identity_unresolved status=%s confidence=%.2f albums=%d tracks=%d", artist.ID, artist.Name, resolution.Status, resolution.Confidence, len(identityContext.Albums), len(identityContext.Tracks))
+		if p.search != nil && (len(identityContext.Albums) > 0 || len(identityContext.Tracks) > 0) {
+			stageStarted = time.Now()
+			web, webErr := p.collectWebEvidence(ctx, identityContext, resolution, false, true)
+			logPipelineStage(artist.ID, artist.Name, "web_discovery", stageStarted, webErr)
+			if len(web) > 0 {
+				evidence := boundSynthesisEvidence(web, maxSynthesisEvidenceItems)
+				version := "identity-unresolved-web"
+				if computed, versionErr := synthesisEvidenceVersion(version, evidence); versionErr == nil {
+					version = computed
+				}
+				if committed, synthErr := p.synthesizeAndStore(ctx, artist, version, evidence); synthErr != nil {
+					return synthErr
+				} else if committed {
+					return nil
+				}
+			}
+			if webErr != nil {
+				return p.retryable(ctx, artist.ID, "search_unavailable", webErr)
+			}
+		}
 		return p.store.CompleteNoData(ctx, artist.ID, "identity-unresolved", time.Now())
 	}
 	identityContext.MusicBrainzID = resolution.MusicBrainzID
@@ -97,7 +117,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	var discoveryErr error
 	if !prepared.Sufficient && p.search != nil {
 		stageStarted = time.Now()
-		if web, webErr := p.collectWebEvidence(ctx, identityContext, resolution, hasRussianCatalogEvidence(prepared.Items)); len(web) > 0 {
+		if web, webErr := p.collectWebEvidence(ctx, identityContext, resolution, hasRussianCatalogEvidence(prepared.Items), false); len(web) > 0 {
 			evidence = append(evidence, web...)
 		} else {
 			discoveryErr = webErr
@@ -110,42 +130,10 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 		version = computed
 	}
 
-	var synthesisErr error
-	if countEvidenceOrigins(evidence) >= 2 {
-		stageStarted = time.Now()
-		summary, editErr := p.ai.Edit(ctx, evidence)
-		if editErr != nil {
-			synthesisErr = synthesisStageFailure("summary_edit_failed", editErr)
-		}
-		logPipelineStage(artist.ID, artist.Name, "summary_edit", stageStarted, synthesisErr)
-		if editErr == nil {
-			stageStarted = time.Now()
-			verification, verifyErr := p.ai.Verify(ctx, summary, evidence)
-			if verifyErr != nil {
-				synthesisErr = synthesisStageFailure("summary_verify_failed", verifyErr)
-			} else if !verification.Grounded {
-				logger.Debug("[BIO] artist_id=%q verifier_verdicts=%s", artist.ID, formatVerificationSummary(verification))
-				synthesisErr = discoveryError("summary_not_grounded", fmt.Errorf("summary verification rejected"))
-			}
-			logPipelineStage(artist.ID, artist.Name, "summary_verify", stageStarted, synthesisErr)
-			if verifyErr == nil && verification.Grounded {
-				finalText := summary.Summary + "\n\n" + synthesisDisclosure(summary.UsedSourceIDs, evidence)
-				proof, _ := json.Marshal(struct {
-					Version   string                `json:"version"`
-					Sources   []string              `json:"sources"`
-					Sentences []ai.SummarySentence  `json:"sentences"`
-					Evidence  []storedSummarySource `json:"evidence"`
-				}{version, summary.UsedSourceIDs, summary.Sentences, storedSummarySources(summary.UsedSourceIDs, evidence)})
-				_, err = p.store.CommitAISummary(ctx, artist.ID, version, finalText, string(proof), time.Now())
-				if err != nil {
-					return p.retryable(ctx, artist.ID, "summary_store_failed", err)
-				}
-				return nil
-			}
-		}
-	}
-	if synthesisErr != nil {
-		return p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
+	if committed, synthErr := p.synthesizeAndStore(ctx, artist, version, evidence); synthErr != nil {
+		return synthErr
+	} else if committed {
+		return nil
 	}
 	if _, found, readErr := p.store.AutomaticCandidate(ctx, artist.ID); readErr != nil {
 		return p.retryable(ctx, artist.ID, "selection_unavailable", readErr)
@@ -192,13 +180,53 @@ func hasRussianCatalogEvidence(items []EvidenceItem) bool {
 	return false
 }
 
-func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity IdentityContext, resolution IdentityResolution, preferRussian bool) ([]ai.SynthesisEvidence, error) {
+func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.LibraryArtist, version string, evidence []ai.SynthesisEvidence) (bool, error) {
+	if countEvidenceOrigins(evidence) < 2 {
+		return false, nil
+	}
+	var synthesisErr error
+	stageStarted := time.Now()
+	summary, editErr := p.ai.Edit(ctx, evidence)
+	if editErr != nil {
+		synthesisErr = synthesisStageFailure("summary_edit_failed", editErr)
+	}
+	logPipelineStage(artist.ID, artist.Name, "summary_edit", stageStarted, synthesisErr)
+	if editErr != nil {
+		return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
+	}
+	stageStarted = time.Now()
+	verification, verifyErr := p.ai.Verify(ctx, summary, evidence)
+	if verifyErr != nil {
+		synthesisErr = synthesisStageFailure("summary_verify_failed", verifyErr)
+	} else if !verification.Grounded {
+		logger.Debug("[BIO] artist_id=%q verifier_verdicts=%s", artist.ID, formatVerificationSummary(verification))
+		synthesisErr = discoveryError("summary_not_grounded", fmt.Errorf("summary verification rejected"))
+	}
+	logPipelineStage(artist.ID, artist.Name, "summary_verify", stageStarted, synthesisErr)
+	if synthesisErr != nil {
+		return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
+	}
+	finalText := summary.Summary + "\n\n" + synthesisDisclosure(summary.UsedSourceIDs, evidence)
+	proof, _ := json.Marshal(struct {
+		Version   string                `json:"version"`
+		Sources   []string              `json:"sources"`
+		Sentences []ai.SummarySentence  `json:"sentences"`
+		Evidence  []storedSummarySource `json:"evidence"`
+	}{version, summary.UsedSourceIDs, summary.Sentences, storedSummarySources(summary.UsedSourceIDs, evidence)})
+	if _, err := p.store.CommitAISummary(ctx, artist.ID, version, finalText, string(proof), time.Now()); err != nil {
+		return false, p.retryable(ctx, artist.ID, "summary_store_failed", err)
+	}
+	return true, nil
+}
+
+func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity IdentityContext, resolution IdentityResolution, preferRussian, includeReleaseHint bool) ([]ai.SynthesisEvidence, error) {
 	albums := make([]string, 0, min(3, len(identity.Albums)))
 	for _, album := range identity.Albums[:min(3, len(identity.Albums))] {
 		albums = append(albums, album.Title)
 	}
 	searchInput := ArtistSearchQuery{
-		ArtistID: identity.ArtistID, Name: identity.Name, PreferRussian: preferRussian,
+		ArtistID: identity.ArtistID, Name: identity.Name,
+		PreferRussian: preferRussian, IncludeReleaseHint: includeReleaseHint,
 		MusicBrainzID: resolution.MusicBrainzID,
 		ProviderIDs:   []string{string(resolution.Provider) + ":" + resolution.ProviderArtistID},
 		Albums:        albums, Tracks: identity.Tracks[:min(5, len(identity.Tracks))],
@@ -228,11 +256,13 @@ func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity Ide
 		return nil, err
 	}
 	identityJSON, _ := json.Marshal(struct {
-		Name          string `json:"name"`
-		MusicBrainzID string `json:"musicbrainzId,omitempty"`
-		Provider      string `json:"provider"`
-		ProviderID    string `json:"providerId"`
-	}{identity.Name, resolution.MusicBrainzID, string(resolution.Provider), resolution.ProviderArtistID})
+		Name          string   `json:"name"`
+		MusicBrainzID string   `json:"musicbrainzId,omitempty"`
+		Provider      string   `json:"provider,omitempty"`
+		ProviderID    string   `json:"providerId,omitempty"`
+		Albums        []string `json:"albums,omitempty"`
+		Tracks        []string `json:"tracks,omitempty"`
+	}{identity.Name, resolution.MusicBrainzID, string(resolution.Provider), resolution.ProviderArtistID, albums, identity.Tracks[:min(5, len(identity.Tracks))]})
 	inputs := make([]ai.SearchEvidenceInput, 0, len(report.Results))
 	byID := make(map[string]WebSearchResult, len(report.Results))
 	for _, result := range report.Results {

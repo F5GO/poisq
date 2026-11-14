@@ -29,15 +29,16 @@ const (
 )
 
 type ArtistSearchQuery struct {
-	ArtistID      string
-	Name          string
-	Aliases       []string
-	Country       string
-	PreferRussian bool
-	MusicBrainzID string
-	ProviderIDs   []string
-	Albums        []string
-	Tracks        []string
+	ArtistID           string
+	Name               string
+	Aliases            []string
+	Country            string
+	PreferRussian      bool
+	IncludeReleaseHint bool
+	MusicBrainzID      string
+	ProviderIDs        []string
+	Albums             []string
+	Tracks             []string
 }
 
 type WebSearchResult struct {
@@ -337,9 +338,9 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		sort.Strings(aliases)
 		appendBounded(aliases, 1)
 	}
-	if utf8.RuneCountInString(name) <= 5 {
+	if input.IncludeReleaseHint || utf8.RuneCountInString(name) <= 5 {
 		appendBounded(input.Albums, 1)
-		if len(input.Albums) == 0 {
+		if len(input.Albums) == 0 || input.IncludeReleaseHint {
 			appendBounded(input.Tracks, 1)
 		}
 	}
