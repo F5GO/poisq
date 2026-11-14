@@ -1,0 +1,58 @@
+// Package ai — модульные тесты определения пола и типа артиста (сольный исполнитель, дуэт, группа)
+// и проверки грамматического согласования в русском тексте биографии.
+package ai
+
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+func TestInferArtistGrammarProfile(t *testing.T) {
+	femaleProfile := InferArtistGrammarProfile("МакSим", []SynthesisEvidence{
+		{ID: "1", Origin: "wikipedia", Language: "ru", Text: "МакSим (Марина Абросимова) — российская певица, автор-исполнительница и музыкальный продюсер. Родилась в Казани и выпустила дебютный альбом «Трудный возраст»."},
+		{ID: "2", Origin: "en.example", Language: "en", Text: "She released her second studio album and won multiple music awards."},
+	})
+	if femaleProfile.Kind != ArtistEntitySolo || femaleProfile.Gender != ArtistGenderFemale {
+		t.Fatalf("expected solo female profile for МакSим, got %#v", femaleProfile)
+	}
+
+	maleBandMemberProfile := InferArtistGrammarProfile("4atty aka Tilla", []SynthesisEvidence{
+		{ID: "1", Origin: "genius.com", Language: "ru", Text: "Илья Капустин (4atty aka Tilla) — украинский рэпер, родился в Киеве, участник группы «Грибы» и основатель коллектива «7 мостов»."},
+		{ID: "2", Origin: "last.fm", Language: "en", Text: "He started his career in 2005 and released several hip-hop albums."},
+	})
+	if maleBandMemberProfile.Kind != ArtistEntitySolo || maleBandMemberProfile.Gender != ArtistGenderMale {
+		t.Fatalf("expected solo male profile for band member 4atty aka Tilla, got %#v", maleBandMemberProfile)
+	}
+
+	groupProfile := InferArtistGrammarProfile("Мертвые Дельфины", []SynthesisEvidence{
+		{ID: "1", Origin: "wikipedia", Language: "ru", Text: "«Мертвые Дельфины» — российская альтернативная рок-группа, основана в 1996 году. Участники записали альбом «Одуванчики для канареек»."},
+		{ID: "2", Origin: "musicbrainz", Language: "en", Text: "Russian rock band formed in Chechnya, they released multiple studio albums."},
+	})
+	if groupProfile.Kind != ArtistEntityGroup {
+		t.Fatalf("expected group profile for Мертвые Дельфины, got %#v", groupProfile)
+	}
+
+	duoProfile := InferArtistGrammarProfile("Talemates", []SynthesisEvidence{
+		{ID: "1", Origin: "bandcamp.com", Language: "en", Text: "Talemates is an electronic musical duo producing melodic house tracks."},
+		{ID: "2", Origin: "soundcloud.com", Language: "ru", Text: "Электронный дуэт выпустил совместный релиз и ремиксы."},
+	})
+	if duoProfile.Kind != ArtistEntityDuo {
+		t.Fatalf("expected duo profile for Talemates, got %#v", duoProfile)
+	}
+}
+
+func TestBiographyEditorRetriesWrongGenderAndEntityKind(t *testing.T) {
+	wrongMaleForFemale := `{"summary":"МакSим — известный российский певец и музыкант, который родился в Казани и начал сольную карьеру в начале двухтысячных годов. Он выпустил успешный дебютный альбом «Трудный возраст» и записал ряд популярных синглов.","sentences":[{"id":1,"text":"МакSим — известный российский певец и музыкант, который родился в Казани и начал сольную карьеру в начале двухтысячных годов.","source_ids":["web:1"]},{"id":2,"text":"Он выпустил успешный дебютный альбом «Трудный возраст» и записал ряд популярных синглов.","source_ids":["web:2"]}],"used_source_ids":["web:1","web:2"]}`
+	correctFemale := `{"summary":"МакSим — российская певица и автор-исполнительница, которая родилась в Казани и начала сольную карьеру в начале двухтысячных годов. Она выпустила успешный дебютный альбом «Трудный возраст» и записала ряд популярных синглов.","sentences":[{"id":1,"text":"МакSим — российская певица и автор-исполнительница, которая родилась в Казани и начала сольную карьеру в начале двухтысячных годов.","source_ids":["web:1"]},{"id":2,"text":"Она выпустила успешный дебютный альбом «Трудный возраст» и записала ряд популярных синглов.","source_ids":["web:2"]}],"used_source_ids":["web:1","web:2"]}`
+
+	gen := &synthesisSequenceGenerator{responses: []string{wrongMaleForFemale, correctFemale}}
+	ctx := WithEditorArtistName(context.Background(), "МакSим")
+	res, err := NewBiographySynthesisAI(gen).Edit(ctx, []SynthesisEvidence{
+		{ID: "web:1", Origin: "one.example", Language: "ru", Text: "МакSим — российская певица, родилась в Казани и начала карьеру в начале 2000-х."},
+		{ID: "web:2", Origin: "two.example", Language: "en", Text: "She released her debut album Trudny Vozrast and recorded hit singles."},
+	})
+	if err != nil || gen.calls != 2 || !strings.Contains(res.Summary, "российская певица") {
+		t.Fatalf("expected editor to retry masculine text for female artist, got calls=%d err=%v summary=%q", gen.calls, err, res.Summary)
+	}
+}
