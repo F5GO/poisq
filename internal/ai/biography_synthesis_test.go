@@ -335,3 +335,38 @@ func TestBiographyEditorRejectsEnglishSentenceInMixedSummary(t *testing.T) {
 		t.Fatalf("expected English sentence to trigger retry and translate to Russian, got calls=%d err=%v summary=%q", gen.calls, err, res.Summary)
 	}
 }
+
+func TestBiographyEditorNormalizesWhitespaceMismatch(t *testing.T) {
+	s1 := "МакSим — российская поп-певица, автор песен и музыкальный продюсер, получившая широкую известность в середине 2000-х годов."
+	s2 := "Её дебютный альбом «Трудный возраст» стал одним из самых продаваемых релизов десятилетия в России."
+	raw, _ := json.Marshal(BiographySummary{
+		Summary: s1 + "\n\n  " + s2,
+		Sentences: []SummarySentence{
+			{ID: 1, Text: s1, SourceIDs: []string{"catalog:wikipedia:1"}},
+			{ID: 2, Text: s2, SourceIDs: []string{"catalog:yandex_music:2"}},
+		},
+		UsedSourceIDs: []string{"catalog:wikipedia:1", "catalog:yandex_music:2"},
+	})
+	gen := &synthesisSequenceGenerator{responses: []string{string(raw)}}
+	res, err := NewBiographySynthesisAI(gen).Edit(context.Background(), []SynthesisEvidence{
+		{ID: "catalog:wikipedia:1", Origin: "wikipedia", Language: "ru", Text: s1},
+		{ID: "catalog:yandex_music:2", Origin: "yandex_music", Language: "ru", Text: s2},
+	})
+	if err != nil || gen.calls != 1 || res.Summary != s1+" "+s2 {
+		t.Fatalf("expected whitespace-only mismatch to normalize cleanly in 1 call, got calls=%d err=%v summary=%q", gen.calls, err, res.Summary)
+	}
+}
+
+func TestBiographyEditorRejectsTransliteratedArtistName(t *testing.T) {
+	transliterated := `{"summary":"Ижевски — московский диджей и продюсер, специализирующийся на органическом хаусе и сотрудничающий с лейблом All Day I Dream. Он начал резиденцию на Deep Mix Moscow Radio в 2005 году и выступал в клубе Propaganda.","sentences":[{"id":1,"text":"Ижевски — московский диджей и продюсер, специализирующийся на органическом хаусе и сотрудничающий с лейблом All Day I Dream.","source_ids":["web:fact-1"]},{"id":2,"text":"Он начал резиденцию на Deep Mix Moscow Radio в 2005 году и выступал в клубе Propaganda.","source_ids":["web:fact-2"]}],"used_source_ids":["web:fact-1","web:fact-2"]}`
+	fixed := `{"summary":"Izhevski — московский диджей и продюсер, специализирующийся на органическом хаусе и сотрудничающий с лейблом All Day I Dream. Он начал резиденцию на Deep Mix Moscow Radio в 2005 году и выступал в клубе Propaganda.","sentences":[{"id":1,"text":"Izhevski — московский диджей и продюсер, специализирующийся на органическом хаусе и сотрудничающий с лейблом All Day I Dream.","source_ids":["web:fact-1"]},{"id":2,"text":"Он начал резиденцию на Deep Mix Moscow Radio в 2005 году и выступал в клубе Propaganda.","source_ids":["web:fact-2"]}],"used_source_ids":["web:fact-1","web:fact-2"]}`
+	gen := &synthesisSequenceGenerator{responses: []string{transliterated, fixed}}
+	ctx := WithEditorArtistName(context.Background(), "Izhevski")
+	res, err := NewBiographySynthesisAI(gen).Edit(ctx, []SynthesisEvidence{
+		{ID: "web:fact-1", Origin: "example.com", Language: "en", Text: "Izhevski is a Moscow-based DJ and producer on All Day I Dream."},
+		{ID: "web:fact-2", Origin: "other.com", Language: "en", Text: "He held a residency at Deep Mix Moscow Radio since 2005 and played at Propaganda."},
+	})
+	if err != nil || gen.calls != 2 || !strings.Contains(res.Summary, "Izhevski") {
+		t.Fatalf("expected transliterated name to trigger retry and preserve Izhevski, got calls=%d err=%v summary=%q", gen.calls, err, res.Summary)
+	}
+}

@@ -189,7 +189,8 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 		return false, nil
 	}
 	var summary ai.BiographySummary
-	editCtx := ctx
+	baseEditCtx := ai.WithEditorArtistName(ctx, artist.Name)
+	editCtx := baseEditCtx
 	for attempt := 0; attempt < 2; attempt++ {
 		var synthesisErr error
 		stageStarted := time.Now()
@@ -220,7 +221,7 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 		if attempt == 1 {
 			return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
 		}
-		editCtx = ai.WithEditorFeedback(ctx, buildVerificationRetryFeedback(summary, verification))
+		editCtx = ai.WithEditorFeedback(baseEditCtx, buildVerificationRetryFeedback(summary, verification))
 	}
 	finalText := summary.Summary + "\n\n" + synthesisDisclosure(summary.UsedSourceIDs, evidence)
 	proof, _ := json.Marshal(struct {
