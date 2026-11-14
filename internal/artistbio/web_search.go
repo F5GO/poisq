@@ -395,10 +395,22 @@ func buildArtistFallbackQuery(input ArtistSearchQuery, primaryQuery string) stri
 	if name == "" {
 		return primaryQuery
 	}
-	fallback := name + " DJ producer musician bandcamp soundcloud discography"
-	if isRussianSearchArtist(input) {
-		fallback = name + " музыкант исполнитель дискография треки релизы"
+	hint := ""
+	if len(input.Albums) > 0 {
+		hint = strings.Join(strings.Fields(input.Albums[0]), " ")
+	} else if len(input.Tracks) > 0 {
+		hint = strings.Join(strings.Fields(input.Tracks[0]), " ")
 	}
+	suffix := "DJ producer musician bandcamp soundcloud discography"
+	if isRussianSearchArtist(input) {
+		suffix = "музыкант исполнитель дискография треки релизы"
+	}
+	parts := []string{name}
+	if hint != "" && len(hint) <= 128 {
+		parts = append(parts, hint)
+	}
+	parts = append(parts, suffix)
+	fallback := strings.Join(parts, " ")
 	if len(fallback) > maxSearchIdentityBytes {
 		return truncateUTF8Bytes(fallback, maxSearchIdentityBytes)
 	}
