@@ -9,7 +9,7 @@ import (
 )
 
 func TestRankGroqModelsPrefersLargeChatAndSkipsAudio(t *testing.T) {
-	ids := []string{"whisper-large-v3", "llama-guard-4-12b", "playai-tts", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "llama-3.3-70b-versatile", "mystery-model"}
+	ids := []string{"whisper-large-v3", "llama-guard-4-12b", "playai-tts", "allam-2-7b", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "llama-3.3-70b-versatile", "mystery-model"}
 	got := rankGroqModels(ids)
 	want := []string{"openai/gpt-oss-120b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mystery-model"}
 	if len(got) != len(want) {
@@ -19,6 +19,18 @@ func TestRankGroqModelsPrefersLargeChatAndSkipsAudio(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got %v want %v", got, want)
 		}
+	}
+}
+
+func TestGroqModelCooldownReordersExhaustedModel(t *testing.T) {
+	client := &GroqChatClient{
+		models:       []string{"openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"},
+		modelsLoaded: time.Now(),
+	}
+	client.recordModelRateLimit("key-8", "openai/gpt-oss-120b", errors.New("rate_limit_exceeded on tokens per day (TPD)"))
+	models := client.candidateModels(withModelPreference(context.Background(), "openai/gpt-oss-120b"), "key-8")
+	if len(models) != 3 || models[0] != "qwen/qwen3.8-27b" || models[2] != "openai/gpt-oss-120b" {
+		t.Fatalf("expected cooled-down 120b to move behind ready models, got %v", models)
 	}
 }
 

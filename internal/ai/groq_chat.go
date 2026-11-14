@@ -33,7 +33,7 @@ var groqModelPreference = []string{
 	"gpt-oss-120b", "llama-3.3-70b", "llama-4-maverick", "llama-4-scout", "qwen", "kimi", "gpt-oss-20b", "llama-3.1-70b", "llama-3.1-8b",
 }
 
-var groqModelExclude = []string{"whisper", "guard", "tts", "playai", "orpheus", "embed", "distil", "compound", "prompt-guard", "safeguard"}
+var groqModelExclude = []string{"whisper", "guard", "tts", "playai", "orpheus", "embed", "distil", "compound", "prompt-guard", "safeguard", "allam", "arabic", "canopylabs"}
 
 const (
 	guessGroqChatModel         = "llama-3.3-70b-versatile"
@@ -43,13 +43,14 @@ const (
 
 // GroqChatClient — клиент текстовой модели Groq.
 type GroqChatClient struct {
-	keyPool      *keypool.Manager
-	client       *http.Client
-	pinnedModel  string // из GROQ_LLM_MODEL
-	mu           sync.Mutex
-	models       []string // отранжированные доступные модели
-	modelsLoaded time.Time
-	lastKeyID    int64
+	keyPool       *keypool.Manager
+	client        *http.Client
+	pinnedModel   string // из GROQ_LLM_MODEL
+	mu            sync.Mutex
+	models        []string // отранжированные доступные модели
+	modelsLoaded  time.Time
+	lastKeyID     int64
+	modelCooldown map[string]time.Time
 }
 
 // NewGroqChatClient создаёт клиент. Ключи берутся из пула провайдера "groq".
@@ -141,7 +142,49 @@ func (g *GroqChatClient) candidateModels(ctx context.Context, apiKey string) []s
 	if len(out) > 4 {
 		out = out[:4]
 	}
-	return out
+	return g.orderByModelCooldown(apiKey, out)
+}
+
+func (g *GroqChatClient) orderByModelCooldown(apiKey string, models []string) []string {
+	if len(models) <= 1 || apiKey == "" {
+		return models
+	}
+	now := time.Now()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.modelCooldown) == 0 {
+		return models
+	}
+	ready := make([]string, 0, len(models))
+	cooled := make([]string, 0, len(models))
+	for _, m := range models {
+		if until, ok := g.modelCooldown[apiKey+"|"+m]; ok && now.Before(until) {
+			cooled = append(cooled, m)
+		} else {
+			ready = append(ready, m)
+		}
+	}
+	if len(ready) == 0 {
+		return models
+	}
+	return append(ready, cooled...)
+}
+
+func (g *GroqChatClient) recordModelRateLimit(apiKey, model string, err error) {
+	if apiKey == "" || model == "" || err == nil {
+		return
+	}
+	low := strings.ToLower(err.Error())
+	ttl := 15 * time.Second
+	if strings.Contains(low, "per day") || strings.Contains(low, "daily") || strings.Contains(low, "(tpd)") {
+		ttl = 30 * time.Minute
+	}
+	g.mu.Lock()
+	if g.modelCooldown == nil {
+		g.modelCooldown = make(map[string]time.Time)
+	}
+	g.modelCooldown[apiKey+"|"+model] = time.Now().Add(ttl)
+	g.mu.Unlock()
 }
 
 func (g *GroqChatClient) listModels(ctx context.Context, apiKey string) ([]string, error) {
@@ -246,6 +289,8 @@ func (g *GroqChatClient) GenerateText(ctx context.Context, systemPrompt, userPro
 				g.keyPool.ReportRateLimit429(leased.ID, err.Error())
 			}
 			continue
+		case status == http.StatusBadRequest && strings.Contains(low, "json_validate_failed"):
+			continue
 		case status == http.StatusUnauthorized || status == http.StatusForbidden:
 			g.keyPool.ReportInvalid(leased.ID, status, err.Error())
 			continue
@@ -278,6 +323,7 @@ func shouldTryNextGroqModel(status int, err error, mime string) bool {
 func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, mime string) (string, int, error) {
 	var lastStatus int
 	var lastErr error
+	var rateLimitErr error
 	for i, model := range g.candidateModels(ctx, apiKey) {
 		out, status, err := g.callOnce(ctx, model, apiKey, system, user, mime)
 		if err == nil {
@@ -287,6 +333,12 @@ func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, m
 			return out, status, nil
 		}
 		lastStatus, lastErr = status, err
+		if status == http.StatusTooManyRequests {
+			g.recordModelRateLimit(apiKey, model, err)
+			if rateLimitErr == nil {
+				rateLimitErr = err
+			}
+		}
 		if !shouldTryNextGroqModel(status, err, mime) {
 			return "", status, err
 		}
@@ -297,6 +349,9 @@ func (g *GroqChatClient) callModels(ctx context.Context, apiKey, system, user, m
 			g.modelsLoaded = time.Time{}
 			g.mu.Unlock()
 		}
+	}
+	if rateLimitErr != nil && lastStatus == http.StatusBadRequest {
+		return "", http.StatusTooManyRequests, rateLimitErr
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("нет доступных моделей Groq")
@@ -354,6 +409,14 @@ func extractGroqAPIError(body []byte) string {
 }
 
 func (g *GroqChatClient) callOnce(ctx context.Context, model, apiKey, system, user, mime string) (string, int, error) {
+	out, status, err := g.doCallOnce(ctx, model, apiKey, system, user, mime)
+	if err != nil && status == http.StatusBadRequest && strings.Contains(strings.ToLower(mime), "json") && strings.Contains(strings.ToLower(err.Error()), "json_validate_failed") {
+		return g.doCallOnce(ctx, model, apiKey, system+" Return strictly one valid JSON object without markdown fences or extra text.", user, "text/plain")
+	}
+	return out, status, err
+}
+
+func (g *GroqChatClient) doCallOnce(ctx context.Context, model, apiKey, system, user, mime string) (string, int, error) {
 	reqBody := buildGroqChatRequest(model, system, user, mime)
 	b, err := json.Marshal(reqBody)
 	if err != nil {

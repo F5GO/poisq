@@ -495,11 +495,15 @@ func hasMixedScript(value string) bool {
 	return false
 }
 
+func normalizeSearchMatchText(value string) string {
+	return strings.ReplaceAll(strings.ToLower(value), "ё", "е")
+}
+
 func filterResultsForArtist(input ArtistSearchQuery, results []WebSearchResult) []WebSearchResult {
 	if len(results) == 0 {
 		return results
 	}
-	exactName := strings.ToLower(strings.Join(strings.Fields(input.Name), " "))
+	exactName := normalizeSearchMatchText(strings.Join(strings.Fields(input.Name), " "))
 	mixed := hasMixedScript(input.Name)
 	words := strings.Fields(exactName)
 	if !mixed && utf8.RuneCountInString(exactName) < 3 {
@@ -525,7 +529,7 @@ func filterResultsForArtist(input ArtistSearchQuery, results []WebSearchResult) 
 		return nil
 	}
 	for _, r := range results {
-		combined := strings.ToLower(r.Title + " " + r.Snippet + " " + r.URL)
+		combined := normalizeSearchMatchText(r.Title + " " + r.Snippet + " " + r.URL)
 		if strings.Contains(combined, leadToken) {
 			filtered = append(filtered, r)
 		}
@@ -534,22 +538,22 @@ func filterResultsForArtist(input ArtistSearchQuery, results []WebSearchResult) 
 }
 
 func resultMatchesArtist(input ArtistSearchQuery, exactName string, r WebSearchResult) bool {
-	combined := strings.ToLower(r.Title + " " + r.Snippet + " " + r.URL)
+	combined := normalizeSearchMatchText(r.Title + " " + r.Snippet + " " + r.URL)
 	if exactName != "" && strings.Contains(combined, exactName) {
 		return true
 	}
 	for _, alias := range input.Aliases {
-		if al := strings.ToLower(strings.TrimSpace(alias)); al != "" && strings.Contains(combined, al) {
+		if al := normalizeSearchMatchText(strings.TrimSpace(alias)); al != "" && strings.Contains(combined, al) {
 			return true
 		}
 	}
 	for _, album := range input.Albums {
-		if a := strings.ToLower(strings.TrimSpace(album)); a != "" && strings.Contains(combined, a) {
+		if a := normalizeSearchMatchText(strings.TrimSpace(album)); a != "" && strings.Contains(combined, a) {
 			return true
 		}
 	}
 	for _, track := range input.Tracks {
-		if tr := strings.ToLower(strings.TrimSpace(track)); tr != "" && strings.Contains(combined, tr) {
+		if tr := normalizeSearchMatchText(strings.TrimSpace(track)); tr != "" && strings.Contains(combined, tr) {
 			return true
 		}
 	}
