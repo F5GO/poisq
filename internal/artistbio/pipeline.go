@@ -121,7 +121,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	var discoveryErr error
 	if !prepared.Sufficient && p.search != nil {
 		stageStarted = time.Now()
-		if web, webErr := p.collectWebEvidence(ctx, identityContext, resolution, hasRussianCatalogEvidence(prepared.Items), false); len(web) > 0 {
+		if web, webErr := p.collectWebEvidence(ctx, identityContext, resolution, hasRussianCatalogEvidence(prepared.Items), true); len(web) > 0 {
 			evidence = append(evidence, web...)
 		} else {
 			discoveryErr = webErr
