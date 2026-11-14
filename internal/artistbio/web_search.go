@@ -182,7 +182,8 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 		}
 	}
 	if !hasEnoughSearchResults(results) && ctx.Err() == nil {
-		advResults, _, _, advErr := s.searchTavilyOnce(ctx, leased.PlainKey, query, "advanced", "tavily-adv", 3)
+		fallbackQuery := buildArtistFallbackQuery(input, query)
+		advResults, _, _, advErr := s.searchTavilyOnce(ctx, leased.PlainKey, fallbackQuery, "advanced", "tavily-adv", 3)
 		if advErr == nil && len(advResults) > 0 {
 			results = mergeSearchResults(advResults, results, maxSearchResults)
 		}
@@ -359,11 +360,26 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
 	}
 	releaseHint := buildArtistReleaseQuery(input)
-	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v2:" + query + "|" + releaseHint}})
+	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v3:" + query + "|" + releaseHint}})
 	if err != nil {
 		return "", "", err
 	}
 	return query, version, nil
+}
+
+func buildArtistFallbackQuery(input ArtistSearchQuery, primaryQuery string) string {
+	name := strings.Join(strings.Fields(input.Name), " ")
+	if name == "" {
+		return primaryQuery
+	}
+	fallback := name + " DJ producer musician bandcamp soundcloud discography"
+	if isRussianSearchArtist(input) {
+		fallback = name + " музыкант исполнитель дискография треки релизы"
+	}
+	if len(fallback) > maxSearchIdentityBytes {
+		return truncateUTF8Bytes(fallback, maxSearchIdentityBytes)
+	}
+	return fallback
 }
 
 func buildArtistReleaseQuery(input ArtistSearchQuery) string {
