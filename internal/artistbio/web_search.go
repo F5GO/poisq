@@ -357,7 +357,7 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 	}
 	name := strings.Join(strings.Fields(input.Name), " ")
 	searchName := name
-	if utf8.RuneCountInString(name) >= 2 && !strings.Contains(name, `"`) {
+	if hasMixedScript(name) && !strings.Contains(name, `"`) {
 		searchName = `"` + name + `"`
 	}
 	suffix := "music artist biography discography"
@@ -392,7 +392,7 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
 	}
 	releaseHint := buildArtistReleaseQuery(input)
-	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v8:" + query + "|" + releaseHint}})
+	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v9:" + query + "|" + releaseHint}})
 	if err != nil {
 		return "", "", err
 	}
@@ -405,7 +405,7 @@ func buildArtistFallbackQuery(input ArtistSearchQuery, primaryQuery string) stri
 		return primaryQuery
 	}
 	searchName := name
-	if utf8.RuneCountInString(name) >= 2 && !strings.Contains(name, `"`) {
+	if hasMixedScript(name) && !strings.Contains(name, `"`) {
 		searchName = `"` + name + `"`
 	}
 	hint := ""
@@ -436,7 +436,7 @@ func buildRussianFallbackQuery(input ArtistSearchQuery) string {
 		return ""
 	}
 	searchName := name
-	if utf8.RuneCountInString(name) >= 2 && !strings.Contains(name, `"`) {
+	if hasMixedScript(name) && !strings.Contains(name, `"`) {
 		searchName = `"` + name + `"`
 	}
 	query := searchName + " музыкант биография"
@@ -502,7 +502,7 @@ func filterResultsForArtist(input ArtistSearchQuery, results []WebSearchResult) 
 	exactName := strings.ToLower(strings.Join(strings.Fields(input.Name), " "))
 	mixed := hasMixedScript(input.Name)
 	words := strings.Fields(exactName)
-	if !mixed && len(words) < 2 {
+	if !mixed && utf8.RuneCountInString(exactName) < 3 {
 		return results
 	}
 	filtered := make([]WebSearchResult, 0, len(results))
@@ -514,10 +514,6 @@ func filterResultsForArtist(input ArtistSearchQuery, results []WebSearchResult) 
 	if mixed || len(filtered) > 0 {
 		return filtered
 	}
-	// Multi-word name returned zero exact/release matches: retain results only if
-	// they mention at least the leading distinctive token (>= 4 runes) so pure
-	// single-word homonym noise (e.g. "Tilla" company profiles for "4atty aka Tilla")
-	// triggers fallback search instead of passing as sufficient results.
 	leadToken := ""
 	for _, w := range words {
 		if utf8.RuneCountInString(w) >= 4 && w != "aka" && w != "feat" && w != "band" {
@@ -529,7 +525,7 @@ func filterResultsForArtist(input ArtistSearchQuery, results []WebSearchResult) 
 		return nil
 	}
 	for _, r := range results {
-		combined := strings.ToLower(r.Title + " " + r.Snippet)
+		combined := strings.ToLower(r.Title + " " + r.Snippet + " " + r.URL)
 		if strings.Contains(combined, leadToken) {
 			filtered = append(filtered, r)
 		}
@@ -538,9 +534,14 @@ func filterResultsForArtist(input ArtistSearchQuery, results []WebSearchResult) 
 }
 
 func resultMatchesArtist(input ArtistSearchQuery, exactName string, r WebSearchResult) bool {
-	combined := strings.ToLower(r.Title + " " + r.Snippet)
+	combined := strings.ToLower(r.Title + " " + r.Snippet + " " + r.URL)
 	if exactName != "" && strings.Contains(combined, exactName) {
 		return true
+	}
+	for _, alias := range input.Aliases {
+		if al := strings.ToLower(strings.TrimSpace(alias)); al != "" && strings.Contains(combined, al) {
+			return true
+		}
 	}
 	for _, album := range input.Albums {
 		if a := strings.ToLower(strings.TrimSpace(album)); a != "" && strings.Contains(combined, a) {

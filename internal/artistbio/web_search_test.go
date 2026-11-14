@@ -210,4 +210,17 @@ func TestMultiWordArtistFiltersHomonymNoise(t *testing.T) {
 	if got := filterResultsForArtist(input, mixed); len(got) != 1 || got[0].ID != "3" {
 		t.Fatalf("expected exact artist match to survive, got %#v", got)
 	}
+
+	biiclaInput := ArtistSearchQuery{
+		ArtistID: "biicla",
+		Name:     "Biicla",
+		Albums:   []string{"No Place"},
+	}
+	biiclaNoise := []WebSearchResult{
+		{ID: "1", Title: "Музыкант David Crosby. Биография", Domain: "ru.musichearts.fm", Snippet: "Биография американского музыканта."},
+		{ID: "2", Title: "Кравченко, Алексей (музыкант)", Domain: "ru.wikipedia.org", Snippet: "Российский актёр и музыкант."},
+	}
+	if got := filterResultsForArtist(biiclaInput, biiclaNoise); len(got) != 0 {
+		t.Fatalf("expected unrelated generic musician pages to be filtered out for Biicla, got %#v", got)
+	}
 }
