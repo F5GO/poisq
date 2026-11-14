@@ -58,6 +58,15 @@ func TestInferArtistGrammarProfile(t *testing.T) {
 	if anikvFemale.Kind != ArtistEntitySolo || anikvFemale.Gender != ArtistGenderFemale {
 		t.Fatalf("expected ANIKV with Анна Пурцен to be solo female, got %#v", anikvFemale)
 	}
+
+	cleanedNicD := CleanAwkwardGrammarPhrases("Nic D — мужской сольный исполнитель‑рэпер, который начал выпускать треки.")
+	if strings.Contains(cleanedNicD, "мужской") {
+		t.Fatalf("expected awkward 'мужской' to be removed from Nic D summary, got %q", cleanedNicD)
+	}
+	cleanedBiicla := CleanAwkwardGrammarPhrases("Biicla — мужской сольный исполнитель и электронный музыкант из России.")
+	if cleanedBiicla != "Biicla — электронный музыкант из России." {
+		t.Fatalf("expected awkward 'мужской сольный исполнитель и ' to be cleaned for Biicla, got %q", cleanedBiicla)
+	}
 }
 
 func TestBiographyEditorRetriesWrongGenderAndEntityKind(t *testing.T) {

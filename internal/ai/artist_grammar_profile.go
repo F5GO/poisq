@@ -251,15 +251,47 @@ func FormatGrammarPromptDirective(profile ArtistGrammarProfile) string {
 	case ArtistEntitySolo:
 		switch profile.Gender {
 		case ArtistGenderFemale:
-			return " Artist grammar profile: SOLO FEMALE ARTIST (сольная певица / исполнительница, женский пол). Use strictly Russian feminine grammatical gender for the artist and all past-tense verbs/participles (певица, исполнительница, родилась, выпустила, записала, начала, основала, приняла участие, она, её). NEVER use masculine gender (певец, исполнитель, родился, выпустил, записал, начал, принял участие, он), NEVER write English loanwords like «solo-artist», and NEVER call her a musical group/band."
+			return " Artist grammar profile: solo female artist. Express gender naturally through Russian feminine nouns and past-tense verbs (певица, исполнительница, автор-исполнительница, родилась, выпустила, записала, начала, основала, приняла участие, она, её). NEVER write awkward literal translations like «женская певица», «женская сольная исполнительница», or «solo-artist», NEVER use masculine forms (певец, родился, выпустил, он), and NEVER call her a group/band."
 		case ArtistGenderMale:
-			return " Artist grammar profile: SOLO MALE ARTIST (сольный исполнитель, мужской пол). Use strictly Russian masculine grammatical gender for the artist and all past-tense verbs/participles (исполнитель, музыкант, рэпер, певец, диджей, продюсер, родился, выпустил, записал, начал, основал, принял участие, он, его). NEVER use feminine gender (певица, исполнительница, родилась, выпустила, она), NEVER write English loanwords like «solo-artist», and NEVER call him a musical group/band."
+			return " Artist grammar profile: solo male artist. Express gender naturally through Russian masculine nouns and past-tense verbs (рэпер, певец, электронный музыкант, саунд-продюсер, диджей, исполнитель, родился, выпустил, записал, начал, основал, принял участие, он, его). NEVER write awkward literal translations like «мужской сольный исполнитель», «мужской исполнитель», «мужской музыкант», or «solo-artist», NEVER use feminine forms (певица, родилась, выпустила, она), and NEVER call him a group/band."
 		default:
-			return " Artist grammar profile: SOLO ARTIST. Carefully determine whether this solo artist is female or male from their real name, pronouns, and context (e.g. ANIKV / Анна Пурцен is female -> «певица, родилась, выпустила, приняла участие, она»; male artist -> «исполнитель, родился, выпустил, он»), use consistent Russian grammatical gender throughout, and NEVER write English terms like «solo-artist»."
+			return " Artist grammar profile: solo artist. Determine whether this solo artist is female («певица, исполнительница, родилась, выпустила, она») or male («рэпер, певец, музыкант, продюсер, родился, выпустил, он») from their real name, pronouns, and context, keep Russian grammatical gender consistent throughout, and NEVER write awkward phrases like «мужской сольный исполнитель», «женская исполнительница», or «solo-artist»."
 		}
 	default:
-		return " Carefully determine whether the artist is a solo female artist («певица, исполнительница, родилась, выпустила, она»), solo male artist («исполнитель, рэпер, музыкант, родился, выпустил, он»), musical duo («дуэт»), or group/band («группа, коллектив») and keep Russian grammatical gender and number 100% consistent. NEVER write English terms like «solo-artist»."
+		return " Determine whether the artist is a solo female artist («певица, исполнительница, родилась, выпустила, она»), solo male artist («рэпер, певец, музыкант, родился, выпустил, он»), musical duo («дуэт»), or group/band («группа, коллектив») and keep Russian grammatical gender and number 100% consistent. NEVER write awkward literal translations like «мужской сольный исполнитель», «женская исполнительница», or «solo-artist»."
 	}
+}
+
+// CleanAwkwardGrammarPhrases убирает неестественные кальки вроде «мужской сольный исполнитель» из русского текста.
+func CleanAwkwardGrammarPhrases(text string) string {
+	replacements := []struct {
+		old string
+		new string
+	}{
+		{"мужской сольный исполнитель-рэпер", "рэпер и сольный исполнитель"},
+		{"мужской сольный исполнитель‑рэпер", "рэпер и сольный исполнитель"},
+		{"Мужской сольный исполнитель-рэпер", "Рэпер и сольный исполнитель"},
+		{"Мужской сольный исполнитель‑рэпер", "Рэпер и сольный исполнитель"},
+		{"мужской сольный исполнитель и ", ""},
+		{"Мужской сольный исполнитель и ", ""},
+		{"мужской сольный исполнитель, ", "сольный исполнитель, "},
+		{"мужской сольный исполнитель ", "сольный исполнитель "},
+		{"мужской сольный исполнитель", "сольный исполнитель"},
+		{"Мужской сольный исполнитель", "Сольный исполнитель"},
+		{"мужской исполнитель и ", ""},
+		{"мужской исполнитель", "исполнитель"},
+		{"женская сольная исполнительница и ", "певица и "},
+		{"женская сольная исполнительница", "певица и исполнительница"},
+		{"женская исполнительница", "исполнительница"},
+		{"женская певица", "певица"},
+	}
+	out := text
+	for _, pair := range replacements {
+		if strings.Contains(out, pair.old) {
+			out = strings.ReplaceAll(out, pair.old, pair.new)
+		}
+	}
+	return normalizeBiographySpaces(out)
 }
 
 // ValidateSummaryGrammarProfile проверяет сгенерированный русский текст биографии на соответствие
