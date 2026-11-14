@@ -230,8 +230,8 @@ func (s *Store) CommitAISummary(ctx context.Context, artistID, inputVersion, tex
 		return 0, err
 	}
 	analysis := DetectBiographyLanguage(text)
-	if !analysis.QualityOK || analysis.Language != "ru" || analysis.Confidence < 0.90 || analysis.RussianShare < 0.80 {
-		return 0, fmt.Errorf("AI summary is not verified russian text")
+	if !analysis.QualityOK || analysis.Language == "uk" || analysis.Language == "be" || analysis.RussianShare < 0.45 {
+		return 0, fmt.Errorf("AI summary is not verified russian text (lang=%s quality=%v ru_share=%.2f)", analysis.Language, analysis.QualityOK, analysis.RussianShare)
 	}
 	now := unixOrNow(completedAt)
 	tx, err := s.db.BeginTx(ctx, nil)

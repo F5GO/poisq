@@ -59,6 +59,10 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 		return err
 	}
 	defer func() {
+		if err != nil {
+			logger.Debug("[BIO] artist_id=%q artist=%q pipeline_duration=%s outcome=%s error=%v", artist.ID, artist.Name, time.Since(started).Round(time.Millisecond), pipelineOutcome(err), err)
+			return
+		}
 		logger.Debug("[BIO] artist_id=%q artist=%q pipeline_duration=%s outcome=%s", artist.ID, artist.Name, time.Since(started).Round(time.Millisecond), pipelineOutcome(err))
 	}()
 
@@ -184,27 +188,39 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 	if countEvidenceOrigins(evidence) < 2 {
 		return false, nil
 	}
-	var synthesisErr error
-	stageStarted := time.Now()
-	summary, editErr := p.ai.Edit(ctx, evidence)
-	if editErr != nil {
-		synthesisErr = synthesisStageFailure("summary_edit_failed", editErr)
-	}
-	logPipelineStage(artist.ID, artist.Name, "summary_edit", stageStarted, synthesisErr)
-	if editErr != nil {
-		return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
-	}
-	stageStarted = time.Now()
-	verification, verifyErr := p.ai.Verify(ctx, summary, evidence)
-	if verifyErr != nil {
-		synthesisErr = synthesisStageFailure("summary_verify_failed", verifyErr)
-	} else if !verification.Grounded {
-		logger.Debug("[BIO] artist_id=%q verifier_verdicts=%s", artist.ID, formatVerificationSummary(verification))
-		synthesisErr = discoveryError("summary_not_grounded", fmt.Errorf("summary verification rejected"))
-	}
-	logPipelineStage(artist.ID, artist.Name, "summary_verify", stageStarted, synthesisErr)
-	if synthesisErr != nil {
-		return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
+	var summary ai.BiographySummary
+	editCtx := ctx
+	for attempt := 0; attempt < 2; attempt++ {
+		var synthesisErr error
+		stageStarted := time.Now()
+		var editErr error
+		summary, editErr = p.ai.Edit(editCtx, evidence)
+		if editErr != nil {
+			synthesisErr = synthesisStageFailure("summary_edit_failed", editErr)
+		}
+		logPipelineStage(artist.ID, artist.Name, "summary_edit", stageStarted, synthesisErr)
+		if editErr != nil {
+			return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
+		}
+		stageStarted = time.Now()
+		verification, verifyErr := p.ai.Verify(ctx, summary, evidence)
+		if verifyErr != nil {
+			synthesisErr = synthesisStageFailure("summary_verify_failed", verifyErr)
+		} else if !verification.Grounded {
+			logger.Debug("[BIO] artist_id=%q verifier_verdicts=%s", artist.ID, formatVerificationSummary(verification))
+			synthesisErr = discoveryError("summary_not_grounded", fmt.Errorf("summary verification rejected"))
+		}
+		logPipelineStage(artist.ID, artist.Name, "summary_verify", stageStarted, synthesisErr)
+		if verifyErr != nil {
+			return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
+		}
+		if verification.Grounded {
+			break
+		}
+		if attempt == 1 {
+			return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
+		}
+		editCtx = ai.WithEditorFeedback(ctx, buildVerificationRetryFeedback(summary, verification))
 	}
 	finalText := summary.Summary + "\n\n" + synthesisDisclosure(summary.UsedSourceIDs, evidence)
 	proof, _ := json.Marshal(struct {
@@ -213,10 +229,35 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 		Sentences []ai.SummarySentence  `json:"sentences"`
 		Evidence  []storedSummarySource `json:"evidence"`
 	}{version, summary.UsedSourceIDs, summary.Sentences, storedSummarySources(summary.UsedSourceIDs, evidence)})
-	if _, err := p.store.CommitAISummary(ctx, artist.ID, version, finalText, string(proof), time.Now()); err != nil {
-		return false, p.retryable(ctx, artist.ID, "summary_store_failed", err)
+	stageStarted := time.Now()
+	_, storeErr := p.store.CommitAISummary(ctx, artist.ID, version, finalText, string(proof), time.Now())
+	logPipelineStage(artist.ID, artist.Name, "summary_store", stageStarted, storeErr)
+	if storeErr != nil {
+		logger.Debug("[BIO] artist_id=%q summary_store_error=%v", artist.ID, storeErr)
+		return false, p.retryable(ctx, artist.ID, "summary_store_failed", storeErr)
 	}
 	return true, nil
+}
+
+func buildVerificationRetryFeedback(summary ai.BiographySummary, verification ai.SynthesisVerification) string {
+	var rejected []string
+	for index, sentence := range summary.Sentences {
+		verdict := ""
+		if index < len(verification.Verdicts) {
+			verdict = verification.Verdicts[index]
+		}
+		score := 0.0
+		if index < len(verification.Scores) {
+			score = verification.Scores[index]
+		}
+		if verdict != "grounded" || score < 0.90 {
+			rejected = append(rejected, fmt.Sprintf("#%d (%s %.2f)", sentence.ID, verdict, score))
+		}
+	}
+	if len(rejected) == 0 {
+		return "Previous draft failed factual verification. Rewrite using ONLY literal, explicitly stated facts from the supplied evidence and drop any inferred claims."
+	}
+	return "Previous draft failed factual verification on sentence(s) " + strings.Join(rejected, ", ") + ". Remove or rewrite those unsupported claims using ONLY literal facts explicitly stated in the supplied evidence, while keeping at least 250 characters and citing >= 2 distinct origins."
 }
 
 func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity IdentityContext, resolution IdentityResolution, preferRussian, includeReleaseHint bool) ([]ai.SynthesisEvidence, error) {
