@@ -240,7 +240,7 @@ func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity Ide
 	}
 	cards, err := p.ai.Collect(ctx, identityJSON, inputs)
 	if err != nil {
-		return nil, discoveryError("collector_failed", err)
+		return nil, synthesisStageFailure("collector_failed", err)
 	}
 	output := make([]ai.SynthesisEvidence, 0, len(cards))
 	for _, card := range cards {
