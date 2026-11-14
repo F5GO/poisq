@@ -140,3 +140,23 @@ func TestRussianSearchQueryAdaptation(t *testing.T) {
 		t.Fatalf("expected English query, got %q err=%v", enQuery, err)
 	}
 }
+
+func TestArtistBiographyQueryStaysBroadWithReleaseHint(t *testing.T) {
+	input := ArtistSearchQuery{
+		ArtistID:           "izhevski",
+		Name:               "Izhevski",
+		IncludeReleaseHint: true,
+		Tracks:             []string{"Лучший город на земле (ремикс)"},
+	}
+	bioQuery, _, err := buildArtistSearchQuery(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(bioQuery, "Лучший город на земле") {
+		t.Fatalf("expected primary biography query to stay broad without track title, got %q", bioQuery)
+	}
+	relQuery := buildArtistReleaseQuery(input)
+	if !strings.Contains(relQuery, "Izhevski") || !strings.Contains(relQuery, "Лучший город на земле") {
+		t.Fatalf("expected secondary release query to include artist and track, got %q", relQuery)
+	}
+}
