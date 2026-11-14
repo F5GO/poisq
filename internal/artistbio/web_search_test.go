@@ -190,3 +190,24 @@ func TestMixedScriptArtistFiltersHomonymResults(t *testing.T) {
 		t.Fatalf("expected only exact Sимптом or matching release results, got %#v", filtered)
 	}
 }
+
+func TestMultiWordArtistFiltersHomonymNoise(t *testing.T) {
+	input := ArtistSearchQuery{
+		ArtistID: "4atty",
+		Name:     "4atty aka Tilla",
+		Albums:   []string{"Дом на колесах"},
+	}
+	noise := []WebSearchResult{
+		{ID: "1", Title: "Tilla - 2026 Company Profile", Domain: "tracxn.com", Snippet: "Tilla is a technology startup based in Bangalore."},
+		{ID: "2", Title: "Gurudwara Majnu ka Tilla", Domain: "mapquest.com", Snippet: "Historic site in Delhi."},
+	}
+	if got := filterResultsForArtist(input, noise); len(got) != 0 {
+		t.Fatalf("expected pure homonym noise to be filtered out, got %#v", got)
+	}
+	mixed := append(noise, WebSearchResult{
+		ID: "3", Title: "4atty aka Tilla — биография", Domain: "genius.com", Snippet: "Киевский рэпер, участник группы Грибы.",
+	})
+	if got := filterResultsForArtist(input, mixed); len(got) != 1 || got[0].ID != "3" {
+		t.Fatalf("expected exact artist match to survive, got %#v", got)
+	}
+}

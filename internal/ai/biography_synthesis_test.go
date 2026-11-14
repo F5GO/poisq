@@ -410,3 +410,32 @@ func TestFilterGroundedSummaryRetainsVerifiedSentences(t *testing.T) {
 		t.Fatal("expected FilterGroundedSummary to reject single-origin remainder")
 	}
 }
+
+func TestBiographyVerifierDeduplicatesSharedEvidence(t *testing.T) {
+	largeFact := strings.Repeat("A", 2500)
+	evidence := []SynthesisEvidence{
+		{ID: "catalog:wikipedia:1", Origin: "wikipedia", Language: "en", Text: largeFact},
+		{ID: "catalog:yandex_music:2", Origin: "yandex_music", Language: "ru", Text: largeFact},
+	}
+	s := "Группа выпустила успешный альбом и выступила на крупных фестивалях."
+	summary := BiographySummary{
+		Summary: strings.Join([]string{s, s, s, s, s}, " "),
+		Sentences: []SummarySentence{
+			{ID: 1, Text: s, SourceIDs: []string{"catalog:wikipedia:1", "catalog:yandex_music:2"}},
+			{ID: 2, Text: s, SourceIDs: []string{"catalog:wikipedia:1", "catalog:yandex_music:2"}},
+			{ID: 3, Text: s, SourceIDs: []string{"catalog:wikipedia:1", "catalog:yandex_music:2"}},
+			{ID: 4, Text: s, SourceIDs: []string{"catalog:wikipedia:1", "catalog:yandex_music:2"}},
+			{ID: 5, Text: s, SourceIDs: []string{"catalog:wikipedia:1", "catalog:yandex_music:2"}},
+		},
+		UsedSourceIDs: []string{"catalog:wikipedia:1", "catalog:yandex_music:2"},
+	}
+	verifier := `{"sentences":[{"id":1,"verdict":"grounded","confidence":0.95},{"id":2,"verdict":"grounded","confidence":0.95},{"id":3,"verdict":"grounded","confidence":0.95},{"id":4,"verdict":"grounded","confidence":0.95},{"id":5,"verdict":"grounded","confidence":0.95}]}`
+	gen := &synthesisSequenceGenerator{responses: []string{verifier}}
+	res, err := NewBiographySynthesisAI(gen).Verify(context.Background(), summary, evidence)
+	if err != nil || !res.Grounded {
+		t.Fatalf("expected deduplicated verifier payload to succeed, got res=%#v err=%v", res, err)
+	}
+	if len(gen.inputs) != 1 || strings.Count(gen.inputs[0], "catalog:wikipedia:1") != 6 {
+		t.Fatalf("expected evidence ID once in evidence list and 5 times in sentence source_ids, got inputs=%d count=%d", len(gen.inputs), strings.Count(gen.inputs[0], "catalog:wikipedia:1"))
+	}
+}
