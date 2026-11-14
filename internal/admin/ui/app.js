@@ -2817,7 +2817,6 @@ function initKeyModal() {
       showToast("✓ Ключ зашифрован (AES-256-GCM) и добавлен в пул ротации", "success");
       closeModal();
       await loadKeysData();
-      if (provider === "music_assistant") await loadCastSettings();
     } catch (err) {
       showToast(`Ошибка сохранения ключа: ${err.message}`, "error");
     }
@@ -2836,22 +2835,22 @@ async function loadKeysData() {
     state.keys = [];
   }
 
-  if (state.keys.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" class="cell-empty">В пуле пока нет ключей. Нажмите «+ Добавить ключ» для подключения Gemini, Groq или Yandex.</td></tr>`;
+  const poolKeys = state.keys.filter(k => k.provider !== "music_assistant");
+  if (poolKeys.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" class="cell-empty">В пуле пока нет ключей. Нажмите «+ Добавить ключ» для подключения Groq Cloud, Яндекс Музыки или Tavily Search.</td></tr>`;
     return;
   }
 
   const providerNames = {
-    gemini: "Google Gemini",
-    groq: "Groq Cloud (Whisper)",
-    acoustid: "AcoustID (fpcalc)",
+    groq: "Groq Cloud (Whisper + LLM)",
     yandex: "Яндекс Музыка",
-    genius: "Genius API",
-	avily: "Tavily Search",
-    music_assistant: "Music Assistant"
+    tavily: "Tavily Search",
+    gemini: "Google Gemini",
+    acoustid: "AcoustID (fpcalc)",
+    genius: "Genius API"
   };
 
-  tbody.innerHTML = state.keys.map(k => {
+  tbody.innerHTML = poolKeys.map(k => {
     let statusBadge = `<span class="text-emerald">Активен</span>`;
     if (k.status === "cooldown") {
       statusBadge = `<span class="text-amber">429 Cooldown (65с)</span>`;
@@ -2893,32 +2892,65 @@ async function deleteKey(id) {
 // -----------------------------------------------------------------------------
 // 7.1 Трансляция на колонки через Music Assistant
 // -----------------------------------------------------------------------------
+function collectCastFormPayload(extra = {}) {
+  const boxes = [...document.querySelectorAll("#cast-players-list input[type=checkbox]")];
+  const tokenInput = document.getElementById("cast-token");
+  const token = tokenInput?.value.trim() || "";
+  return {
+    url: document.getElementById("cast-url")?.value.trim() || "",
+    provider: document.getElementById("cast-provider")?.value || "",
+    // MA недоступен и список не построен — не теряем уже выбранные колонки
+    players: boxes.length ? boxes.filter(b => b.checked).map(b => b.value) : (state.castPlayers || []),
+    ...(token ? { token } : {}),
+    ...extra
+  };
+}
+
 function initCastForm() {
   document.getElementById("form-cast")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const boxes = [...document.querySelectorAll("#cast-players-list input[type=checkbox]")];
-    const payload = {
-      url: document.getElementById("cast-url")?.value.trim() || "",
-      provider: document.getElementById("cast-provider")?.value || "",
-      // MA недоступен и список не построен — не теряем уже выбранные колонки
-      players: boxes.length ? boxes.filter(b => b.checked).map(b => b.value) : (state.castPlayers || [])
-    };
+    const payload = collectCastFormPayload();
     const btn = document.getElementById("btn-save-cast");
     if (btn) btn.disabled = true;
     const res = await loadCastSettings(payload);
     if (btn) btn.disabled = false;
-    if (res) showToast(res.error ? "Настройки сохранены, но MA не ответил" : "✓ Настройки трансляции сохранены", res.error ? "info" : "success");
+    const tokenInput = document.getElementById("cast-token");
+    if (res && tokenInput) tokenInput.value = "";
+    if (res) {
+      showToast(
+        res.error ? "Настройки сохранены, но сервер MA не ответил" : "✓ Настройки Music Assistant сохранены",
+        res.error ? "info" : "success"
+      );
+    }
+  });
+
+  document.getElementById("btn-clear-cast-token")?.addEventListener("click", async () => {
+    if (!confirm("Удалить сохранённый токен доступа Music Assistant?")) return;
+    const tokenInput = document.getElementById("cast-token");
+    if (tokenInput) tokenInput.value = "";
+    const payload = collectCastFormPayload({ token: "", clearToken: true });
+    const res = await loadCastSettings(payload);
+    if (res) showToast("Токен Music Assistant удален", "info");
   });
 }
 
 async function loadCastSettings(payload = null) {
   const status = document.getElementById("cast-status");
+  const statusBadge = document.getElementById("cast-status-badge");
+  const tokenBadge = document.getElementById("cast-token-badge");
+  const clearTokenBtn = document.getElementById("btn-clear-cast-token");
+  const tokenInput = document.getElementById("cast-token");
   if (!status) return null;
+
   let res;
   try {
     res = payload ? await fetchApi("/cast", "POST", payload) : await fetchApi("/cast");
   } catch (err) {
     status.textContent = `Ошибка: ${err.message}`;
+    if (statusBadge) {
+      statusBadge.className = "badge badge-danger";
+      statusBadge.textContent = "Ошибка";
+    }
     return null;
   }
 
@@ -2926,9 +2958,27 @@ async function loadCastSettings(payload = null) {
   state.castPlayers = st.players || [];
   document.getElementById("cast-url").value = st.url || "";
 
+  if (tokenBadge) {
+    if (res.hasToken) {
+      tokenBadge.textContent = `✓ Сохранён (${res.tokenMask || "••••"})`;
+      tokenBadge.className = "cast-token-meta text-success";
+    } else {
+      tokenBadge.textContent = "Не задан";
+      tokenBadge.className = "cast-token-meta text-muted";
+    }
+  }
+  if (clearTokenBtn) {
+    clearTokenBtn.classList.toggle("hidden", !res.hasToken);
+  }
+  if (tokenInput) {
+    tokenInput.placeholder = res.hasToken
+      ? "Введите новый токен для замены текущего..."
+      : "Вставьте долгосрочный токен MA...";
+  }
+
   const sel = document.getElementById("cast-provider");
   const providers = res.providers || [];
-  let options = `<option value="">— выберите —</option>` +
+  let options = `<option value="">— выберите источник —</option>` +
     providers.map(p => `<option value="${escapeHtml(p.instance_id)}">${escapeHtml(p.name || p.instance_id)}</option>`).join("");
   if (st.provider && !providers.some(p => p.instance_id === st.provider)) {
     options += `<option value="${escapeHtml(st.provider)}">${escapeHtml(st.provider)} (не найден в MA)</option>`;
@@ -2948,10 +2998,37 @@ async function loadCastSettings(payload = null) {
         </label>`).join("")
     : "Колонки появятся после подключения к Music Assistant.";
 
-  if (!res.hasToken) status.textContent = "Добавьте токен Music Assistant в пул ключей выше.";
-  else if (res.error) status.textContent = `Music Assistant: ${res.error}`;
-  else if (!st.provider) status.textContent = "Выберите источник музыки и колонки, затем сохраните.";
-  else status.textContent = `✓ Подключено. Колонок в приложении: ${state.castPlayers.length}.`;
+  if (!st.url) {
+    status.textContent = "Укажите адрес сервера и токен доступа Music Assistant.";
+    if (statusBadge) {
+      statusBadge.className = "badge badge-muted";
+      statusBadge.textContent = "Не настроен";
+    }
+  } else if (!res.hasToken) {
+    status.textContent = "Укажите токен доступа Music Assistant и нажмите «Проверить и сохранить».";
+    if (statusBadge) {
+      statusBadge.className = "badge badge-warning";
+      statusBadge.textContent = "Нет токена";
+    }
+  } else if (res.error) {
+    status.textContent = `Music Assistant: ${res.error}`;
+    if (statusBadge) {
+      statusBadge.className = "badge badge-warning";
+      statusBadge.textContent = "Нет связи";
+    }
+  } else if (!st.provider) {
+    status.textContent = "Выберите источник музыки и колонки, затем сохраните настройки.";
+    if (statusBadge) {
+      statusBadge.className = "badge badge-warning";
+      statusBadge.textContent = "Выберите источник";
+    }
+  } else {
+    status.textContent = `✓ Подключено к Music Assistant. Активных колонок в приложении: ${state.castPlayers.length}.`;
+    if (statusBadge) {
+      statusBadge.className = "badge badge-success";
+      statusBadge.textContent = "Подключено";
+    }
+  }
   return res;
 }
 

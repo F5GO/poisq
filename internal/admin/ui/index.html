@@ -414,7 +414,7 @@
       <div class="panel-header">
         <div>
           <h1 class="panel-title">Настройки</h1>
-          <h2 class="cast-section-title">API-ключи и токены</h2>
+          <h2 class="cast-section-title">Пул API-ключей (Groq, Яндекс Музыка, Tavily)</h2>
           <p class="panel-desc">
             Шифрование AES-256-GCM. Автоматическая ротация (LRU) и 65-секундный Cooldown при ошибке 429.
           </p>
@@ -439,30 +439,66 @@
         </table>
       </div>
 
-      <h2 class="cast-section-title">Трансляция на колонки (Music Assistant)</h2>
-      <p class="panel-desc">
-        Приложение poisq может играть музыку на колонки и в комнатах через Music Assistant.
-        Токен MA добавьте в пул выше (провайдер «Music Assistant»), затем укажите адрес и выберите колонки.
-      </p>
-      <form id="form-cast" class="cast-form" autocomplete="off">
-        <div class="form-group">
-          <label class="form-label" for="cast-url">Адрес Music Assistant</label>
-          <input type="url" id="cast-url" class="form-input mono" placeholder="http://192.168.1.10:8095" />
+      <div class="cast-card">
+        <div class="cast-card-header">
+          <div>
+            <h2 class="cast-section-title cast-title-inline">Трансляция на колонки (Music Assistant)</h2>
+            <p class="panel-desc">
+              Вывод звука на колонки и в комнаты через сервер Music Assistant. Укажите адрес сервера, токен доступа, источник медиатеки и отметьте нужные колонки.
+            </p>
+          </div>
+          <span id="cast-status-badge" class="badge badge-muted">Проверка...</span>
         </div>
-        <div class="form-group">
-          <label class="form-label" for="cast-provider">Источник музыки в MA</label>
-          <select id="cast-provider" class="form-select"></select>
-          <span class="form-hint">Файловый источник MA, который смотрит в ту же папку с музыкой, что и Navidrome.</span>
-        </div>
-        <fieldset class="form-group cast-players">
-          <legend class="form-label">Колонки в приложении</legend>
-          <div id="cast-players-list" class="form-hint">Колонки появятся после подключения к Music Assistant.</div>
-        </fieldset>
-        <p id="cast-status" class="form-hint" role="status"></p>
-        <div class="modal-actions">
-          <button type="submit" class="btn btn-primary" id="btn-save-cast">Проверить и сохранить</button>
-        </div>
-      </form>
+
+        <form id="form-cast" class="cast-form" autocomplete="off">
+          <div class="cast-grid">
+            <div class="form-group">
+              <label class="form-label" for="cast-url">Адрес сервера Music Assistant</label>
+              <input type="url" id="cast-url" class="form-input mono" placeholder="http://192.168.1.10:8095" />
+              <span class="form-hint">HTTP/HTTPS-адрес вашего Music Assistant (обычно порт 8095).</span>
+            </div>
+
+            <div class="form-group">
+              <div class="cast-label-row">
+                <label class="form-label" for="cast-token">Токен доступа Music Assistant</label>
+                <span id="cast-token-badge" class="cast-token-meta text-muted">Не задан</span>
+              </div>
+              <div class="cast-token-row">
+                <input
+                  type="text"
+                  id="cast-token"
+                  class="form-input mono masked-key-input"
+                  placeholder="Вставьте долгосрочный токен MA..."
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                />
+                <button type="button" class="btn btn-secondary hidden" id="btn-clear-cast-token" title="Удалить сохранённый токен">Удалить токен</button>
+              </div>
+              <span class="form-hint" id="cast-token-hint">Шифруется AES-256-GCM. Оставьте поле пустым, чтобы сохранить текущий токен.</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cast-provider">Источник музыки в Music Assistant</label>
+            <select id="cast-provider" class="form-select"></select>
+            <span class="form-hint">Файловый источник в MA, который смотрит в ту же папку с музыкой, что и Navidrome.</span>
+          </div>
+
+          <fieldset class="form-group cast-players">
+            <legend class="form-label">Доступные колонки в приложении</legend>
+            <div id="cast-players-list" class="cast-players-grid form-hint">Колонки появятся после подключения к Music Assistant.</div>
+          </fieldset>
+
+          <div class="cast-footer">
+            <p id="cast-status" class="form-hint cast-status-text" role="status"></p>
+            <button type="submit" class="btn btn-primary" id="btn-save-cast">Проверить и сохранить</button>
+          </div>
+        </form>
+      </div>
     </section>
 
   </main>
@@ -491,18 +527,15 @@
         <div class="form-group">
           <label class="form-label" for="key-provider">Сервис / Провайдер</label>
           <select id="key-provider" class="form-select" required>
-            <option value="gemini">Google Gemini (Gemini 3.8 Flash / 3.6 Flash — консенсус и караоке)</option>
-            <option value="groq">Groq Cloud (Whisper Large v3 — транскрибация караоке)</option>
-            <option value="yandex">Яндекс Музыка (OAuth токен с Плюсом)</option>
-            <option value="genius">Genius API (Поиск текстов андеграунда)</option>
-			<option value="tavily">Tavily Search (поиск источников для биографий)</option>
-            <option value="music_assistant">Music Assistant (токен для трансляции на колонки)</option>
+            <option value="groq">Groq Cloud (Whisper Large v3 и LLM — караоке и биографии)</option>
+            <option value="yandex">Яндекс Музыка (OAuth-токен с подпиской Плюс)</option>
+            <option value="tavily">Tavily Search (веб-поиск источников для биографий)</option>
           </select>
         </div>
 
         <div class="form-group">
           <label class="form-label" for="key-label">Метка ключа (для себя)</label>
-          <input type="text" id="key-label" class="form-input" placeholder="например, Gemini Primary или Резервный" />
+          <input type="text" id="key-label" class="form-input" placeholder="например, Groq Primary или Резервный" />
         </div>
 
         <div class="form-group">

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/F5GO/poisq/internal/cast"
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/keypool"
 	"github.com/F5GO/poisq/internal/lyrics"
@@ -276,5 +277,94 @@ func TestTrackTagsManualEditAndUndo(t *testing.T) {
 
 	if rec := post("/api/v1/tracks/tags", `{"trackId":"nope","title":"x"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("неизвестный трек: ожидался 400, получено %d", rec.Code)
+	}
+}
+
+func TestCastSettingsTokenManagement(t *testing.T) {
+	tmpDir := t.TempDir()
+	musicDir := filepath.Join(tmpDir, "music")
+	_ = os.MkdirAll(musicDir, 0755)
+
+	poisqDB, err := db.OpenPoisqDatabase(filepath.Join(tmpDir, "poisq.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer poisqDB.Close()
+
+	cipher, _ := security.NewKeyCipher("test-cast-secret", tmpDir)
+	guard, _ := security.NewPathGuard(musicDir)
+	kp := keypool.NewManager(db.NewKeyRepository(poisqDB), cipher)
+	trackRepo := db.NewTrackRepository(poisqDB)
+	stagingRepo := db.NewStagingRepository(poisqDB)
+	coverFetch := metadata.NewCoverFetcher(guard)
+	stagingSvc := tagger.NewStagingService(tagger.NewAtomicTagWriter(guard), coverFetch, trackRepo, stagingRepo)
+
+	srv := NewAdminServer(
+		trackRepo,
+		stagingRepo,
+		db.NewJobRepository(poisqDB),
+		db.NewProviderCacheRepository(poisqDB),
+		kp,
+		metadata.NewLibraryScanner(guard.Root(), trackRepo, stagingRepo, nil, coverFetch),
+		stagingSvc,
+		nil,
+		nil,
+		guard,
+		nil,
+	)
+	srv.SetCast(&cast.Service{
+		DB:   poisqDB,
+		HTTP: &http.Client{},
+		Token: func() (string, error) {
+			k, err := kp.Acquire(cast.TokenProvider)
+			if err != nil {
+				return "", err
+			}
+			return k.PlainKey, nil
+		},
+	})
+
+	// 1. Сохранение настроек вместе с токеном MA
+	reqSave := httptest.NewRequest(http.MethodPost, "http://localhost:4535/api/v1/cast", strings.NewReader(`{
+		"url": "http://127.0.0.1:8095",
+		"provider": "filesystem_local",
+		"players": ["living_room"],
+		"token": "ma_secret_long_lived_token_12345"
+	}`))
+	recSave := httptest.NewRecorder()
+	srv.ServeHTTP(recSave, reqSave)
+	if recSave.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on POST /api/v1/cast, got %d: %s", recSave.Code, recSave.Body.String())
+	}
+
+	var saveResp struct {
+		HasToken  bool   `json:"hasToken"`
+		TokenMask string `json:"tokenMask"`
+	}
+	if err := json.Unmarshal(recSave.Body.Bytes(), &saveResp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !saveResp.HasToken || saveResp.TokenMask == "" {
+		t.Fatalf("expected hasToken=true and non-empty tokenMask, got %+v", saveResp)
+	}
+
+	// 2. Удаление токена через clearToken
+	reqClear := httptest.NewRequest(http.MethodPost, "http://localhost:4535/api/v1/cast", strings.NewReader(`{
+		"url": "http://127.0.0.1:8095",
+		"provider": "filesystem_local",
+		"players": ["living_room"],
+		"clearToken": true
+	}`))
+	recClear := httptest.NewRecorder()
+	srv.ServeHTTP(recClear, reqClear)
+	if recClear.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on clearToken, got %d: %s", recClear.Code, recClear.Body.String())
+	}
+	var clearResp struct {
+		HasToken bool `json:"hasToken"`
+	}
+	_ = json.Unmarshal(recClear.Body.Bytes(), &clearResp)
+	if clearResp.HasToken {
+		t.Fatalf("expected hasToken=false after clearToken=true")
 	}
 }
