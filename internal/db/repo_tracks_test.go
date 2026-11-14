@@ -51,3 +51,47 @@ func TestTrackRepositoryArtistIdentityContextTreatsNameAsData(t *testing.T) {
 		t.Fatalf("tracks table changed: %v", err)
 	}
 }
+
+func TestTrackRepositoryArtistIdentityContextMatchesCollaborativeCreditsSafely(t *testing.T) {
+	database, err := OpenPoisqDatabase(filepath.Join(t.TempDir(), "poisq.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+	repo := NewTrackRepository(database)
+	for i, track := range []TrackRecord{
+		{ID: "1", FilePath: "/music/1.flac", Artist: "Grebz • 4atty aka Tilla • Sимптом", AlbumArtist: "Grebz • 4atty aka Tilla • Sимптом", Album: "STYLE IN MC", Title: "Юрфак", Year: 2019},
+		{ID: "2", FilePath: "/music/2.flac", Artist: "Grebz feat. Другой", AlbumArtist: "Grebz", Album: "Рэп", Title: "Сталь мс", Year: 2019},
+		{ID: "3", FilePath: "/music/3.flac", Artist: "GrebzX", AlbumArtist: "GrebzX", Album: "Чужой", Title: "Чужой", Year: 2020},
+	} {
+		track.TrackNumber = i + 1
+		if err := repo.UpsertTrack(track); err != nil {
+			t.Fatalf("upsert track %d: %v", i, err)
+		}
+	}
+
+	got, err := repo.ArtistIdentityContext(context.Background(), "Grebz", 10, 10)
+	if err != nil {
+		t.Fatalf("collaborative context: %v", err)
+	}
+	if len(got.Albums) != 1 || got.Albums[0].Title != "Рэп" {
+		// Exact match on track #2 ("Grebz" as AlbumArtist) hits fast path first; verify collaborative-only artist too.
+		t.Fatalf("unexpected exact+collab result: %#v", got)
+	}
+
+	gotCollab, err := repo.ArtistIdentityContext(context.Background(), "4atty aka Tilla", 10, 10)
+	if err != nil {
+		t.Fatalf("collab-only context: %v", err)
+	}
+	if len(gotCollab.Albums) != 1 || gotCollab.Albums[0].Title != "STYLE IN MC" || len(gotCollab.Tracks) != 1 || gotCollab.Tracks[0] != "Юрфак" {
+		t.Fatalf("expected collaborative credit match, got %#v", gotCollab)
+	}
+
+	noSubstring, err := repo.ArtistIdentityContext(context.Background(), "Greb", 10, 10)
+	if err != nil {
+		t.Fatalf("substring check: %v", err)
+	}
+	if len(noSubstring.Albums) != 0 || len(noSubstring.Tracks) != 0 {
+		t.Fatalf("substring matched unexpectedly: %#v", noSubstring)
+	}
+}
