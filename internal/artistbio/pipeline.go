@@ -257,7 +257,7 @@ func buildVerificationRetryFeedback(summary ai.BiographySummary, verification ai
 	if len(rejected) == 0 {
 		return "Previous draft failed factual verification. Rewrite using ONLY literal, explicitly stated facts from the supplied evidence and drop any inferred claims."
 	}
-	return "Previous draft failed factual verification on sentence(s) " + strings.Join(rejected, ", ") + ". Remove or rewrite those unsupported claims using ONLY literal facts explicitly stated in the supplied evidence, while keeping at least 250 characters and citing >= 2 distinct origins."
+	return "Previous draft failed factual verification on sentence(s) " + strings.Join(rejected, ", ") + ". Remove or rewrite those unsupported claims using ONLY literal facts explicitly stated in the supplied evidence, while keeping at least 150 characters and citing >= 2 distinct origins."
 }
 
 func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity IdentityContext, resolution IdentityResolution, preferRussian, includeReleaseHint bool) ([]ai.SynthesisEvidence, error) {

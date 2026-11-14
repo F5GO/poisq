@@ -285,3 +285,17 @@ func TestBiographyVerifierThreshold(t *testing.T) {
 		t.Fatalf("expected Verify at 0.89 to fail grounding, got %#v", resFail)
 	}
 }
+
+func TestBiographyEditorAcceptsShort150CharSummary(t *testing.T) {
+	short := "Украинский хип-хоп-исполнитель Sимптом участвовал в совместных записях с группой Grebz и выпускал собственные релизы. Подтверждённые публикации фиксируют его студийные работы."
+	response := fmt.Sprintf(`{"summary":%q,"sentences":[{"id":1,"text":"Украинский хип-хоп-исполнитель Sимптом участвовал в совместных записях с группой Grebz и выпускал собственные релизы.","source_ids":["catalog:yandex_music:1"]},{"id":2,"text":"Подтверждённые публикации фиксируют его студийные работы.","source_ids":["web:fact-1"]}],"used_source_ids":["catalog:yandex_music:1","web:fact-1"]}`, short)
+	gen := &synthesisSequenceGenerator{responses: []string{response}}
+	service := NewBiographySynthesisAI(gen)
+	result, err := service.Edit(context.Background(), []SynthesisEvidence{
+		{ID: "catalog:yandex_music:1", Origin: "yandex_music", Language: "ru", Text: "Подтверждённый текст о Sимптом."},
+		{ID: "web:fact-1", Origin: "example.com", Language: "ru", Text: "Подтверждённые публикации о студийных работах."},
+	})
+	if err != nil || result.Summary != short {
+		t.Fatalf("short 150+ char summary rejected: err=%v result=%#v", err, result)
+	}
+}
