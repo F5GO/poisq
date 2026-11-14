@@ -237,3 +237,16 @@ func TestBiographyCollectorNormalizesLanguageAndRetriesFactLimit(t *testing.T) {
 		t.Fatalf("collector retry/lang failed: cards=%#v calls=%d err=%v", cards, gen.calls, err)
 	}
 }
+
+func TestBiographyCollectorKeepsSingleValidDomainAfterRetry(t *testing.T) {
+	singleDomain := `{"cards":[{"id":"fact-1","result_id":"result-1","fact":"Подтверждённый факт об исполнителе.","language":"ru"}]}`
+	gen := &synthesisSequenceGenerator{responses: []string{singleDomain, singleDomain}}
+	service := NewBiographySynthesisAI(gen)
+	cards, err := service.Collect(context.Background(), json.RawMessage(`{"name":"Biicla"}`), []SearchEvidenceInput{
+		{ID: "result-1", Title: "One", URL: "https://one.example/a", Domain: "one.example", Snippet: "Подтверждённый факт об исполнителе."},
+		{ID: "result-2", Title: "Unrelated", URL: "https://two.example/a", Domain: "two.example", Snippet: "Completely unrelated page about another topic."},
+	})
+	if err != nil || len(cards) != 1 || gen.calls != 2 {
+		t.Fatalf("expected single-domain fallback cards after 2 attempts, got cards=%#v calls=%d err=%v", cards, gen.calls, err)
+	}
+}

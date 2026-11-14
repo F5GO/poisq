@@ -134,6 +134,7 @@ func (b *BiographySynthesisAI) Collect(ctx context.Context, identityJSON json.Ra
 		return nil, fmt.Errorf("biography collector input exceeds limit")
 	}
 	var lastErr error
+	var fallbackCards []CollectedEvidence
 	for attempt := 0; attempt < 2; attempt++ {
 		prompt := collectorSystemPrompt
 		if feedback := synthesisErrorFeedback(lastErr); feedback != "" {
@@ -147,7 +148,14 @@ func (b *BiographySynthesisAI) Collect(ctx context.Context, identityJSON json.Ra
 		if parseErr == nil {
 			return cards, nil
 		}
+		var stageErr *synthesisStageError
+		if errors.As(parseErr, &stageErr) && stageErr.reason == "collector_insufficient_origins" && len(cards) > 0 {
+			fallbackCards = cards
+		}
 		lastErr = parseErr
+	}
+	if len(fallbackCards) > 0 {
+		return fallbackCards, nil
 	}
 	return nil, lastErr
 }
@@ -228,7 +236,7 @@ func parseCollectorResponse(raw string, allowed map[string]struct{}, domains map
 		cards = append(cards, CollectedEvidence{card.ID, card.ResultID, fact, lang})
 	}
 	if len(origins) < requiredOrigins {
-		return nil, &synthesisStageError{
+		return cards, &synthesisStageError{
 			reason:   "collector_insufficient_origins",
 			msg:      "biography collector returned insufficient origins",
 			feedback: fmt.Sprintf("used only %d domain(s), must use at least %d distinct supplied domains if relevant", len(origins), requiredOrigins),
