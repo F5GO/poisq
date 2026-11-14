@@ -312,7 +312,7 @@ func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity Ide
 	}
 	cards, err := p.ai.Collect(ctx, identityJSON, inputs)
 	if err != nil {
-		logger.Debug("[BIO] artist_id=%q collector_error=%v search_results=%d", identity.ArtistID, err, len(inputs))
+		logger.Debug("[BIO] artist_id=%q collector_error=%v search_results=%d sources=%s", identity.ArtistID, err, len(inputs), summarizeSearchInputs(inputs))
 		return nil, synthesisStageFailure("collector_failed", err)
 	}
 	output := make([]ai.SynthesisEvidence, 0, len(cards))
@@ -488,4 +488,12 @@ func formatVerificationSummary(v ai.SynthesisVerification) string {
 		parts = append(parts, fmt.Sprintf("%d:%s(%.2f)", index+1, verdict, score))
 	}
 	return strings.Join(parts, ",")
+}
+
+func summarizeSearchInputs(inputs []ai.SearchEvidenceInput) string {
+	parts := make([]string, 0, min(4, len(inputs)))
+	for _, item := range inputs[:min(4, len(inputs))] {
+		parts = append(parts, item.Domain+":"+truncateUTF8Bytes(strings.TrimSpace(item.Title), 40))
+	}
+	return strings.Join(parts, " | ")
 }
