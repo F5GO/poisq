@@ -305,6 +305,25 @@ func truncateSynthesisBytes(value string, limit int) string {
 	return strings.TrimSpace(value)
 }
 
+type editorFeedbackContextKey struct{}
+
+// WithEditorFeedback attaches verifier rejection notes to ctx so Edit can drop or rewrite ungrounded claims.
+func WithEditorFeedback(ctx context.Context, feedback string) context.Context {
+	feedback = strings.TrimSpace(feedback)
+	if feedback == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, editorFeedbackContextKey{}, feedback)
+}
+
+func editorFeedbackFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	feedback, _ := ctx.Value(editorFeedbackContextKey{}).(string)
+	return strings.TrimSpace(feedback)
+}
+
 func (b *BiographySynthesisAI) Edit(ctx context.Context, evidence []SynthesisEvidence) (BiographySummary, error) {
 	if b == nil || b.gen == nil || len(evidence) < 2 || len(evidence) > maxSynthesisItems {
 		return BiographySummary{}, &synthesisStageError{reason: "summary_edit_invalid_input", msg: "invalid biography editor input"}
@@ -331,9 +350,13 @@ func (b *BiographySynthesisAI) Edit(ctx context.Context, evidence []SynthesisEvi
 		return BiographySummary{}, &synthesisStageError{reason: "summary_edit_input_limit", msg: "biography editor input exceeds limit"}
 	}
 
+	ctxFeedback := editorFeedbackFromContext(ctx)
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		prompt := editorSystemPrompt
+		if ctxFeedback != "" {
+			prompt += " " + ctxFeedback
+		}
 		if feedback := synthesisErrorFeedback(lastErr); feedback != "" {
 			prompt += " Previous response failed validation (" + feedback + "). Fix that issue strictly and return only one valid JSON object."
 		}

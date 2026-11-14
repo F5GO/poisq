@@ -156,3 +156,31 @@ func TestStore_RecoversStaleJobsWithoutStartingWork(t *testing.T) {
 		t.Fatalf("recovered state: %#v found=%v err=%v", state, found, err)
 	}
 }
+
+func TestStore_CommitAISummaryAcceptsMixedLatinTermsAndRejectsEnglish(t *testing.T) {
+	store, err := artistbio.NewStore(openTestDB(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, admitted, err := store.QueueJob(ctx, "izhevski", "Izhevski", false, time.Now()); err != nil || !admitted {
+		t.Fatalf("queue: admitted=%v err=%v", admitted, err)
+	}
+	if err := store.MarkJobRunning(ctx, "izhevski", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	english := "Izhevski is an electronic music producer from Russia releasing melodic house and organic deep tracks across international labels and festivals."
+	if _, err := store.CommitAISummary(ctx, "izhevski", "v-en", english, `{"sources":["ra.co"]}`, time.Now()); err == nil {
+		t.Fatalf("expected English summary to be rejected")
+	}
+
+	mixedRussian := "Izhevski — российский электронный продюсер, участник проекта Gorod и автор релизов Novgorod, Luda и Esli на лейблах All Day I Dream и Anjunadeep. Саммари создано ИИ на основе проверенных источников: izhevski.bandcamp.com, residentadvisor.net, soundcloud.com."
+	analysis := artistbio.DetectBiographyLanguage(mixedRussian)
+	if !analysis.QualityOK || analysis.RussianShare < 0.45 || analysis.RussianShare >= 0.80 {
+		t.Fatalf("expected test fixture to have mixed russian share in [0.45, 0.80), got %#v", analysis)
+	}
+	id, err := store.CommitAISummary(ctx, "izhevski", "v-mix", mixedRussian, `{"sources":["ra.co","bandcamp.com"]}`, time.Now())
+	if err != nil || id <= 0 {
+		t.Fatalf("expected mixed-latin Russian summary to commit, got id=%d err=%v", id, err)
+	}
+}

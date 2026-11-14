@@ -350,3 +350,69 @@ func TestSynthesisPipelineUnresolvedIdentityWithoutLocalContextCompletesNoData(t
 		t.Fatalf("state=%#v found=%v err=%v", state, found, err)
 	}
 }
+
+type retryEditVerifySynthesisAI struct {
+	edits    int
+	verifies int
+	sawRetry bool
+}
+
+func (f *retryEditVerifySynthesisAI) Collect(context.Context, json.RawMessage, []ai.SearchEvidenceInput) ([]ai.CollectedEvidence, error) {
+	return nil, nil
+}
+
+func (f *retryEditVerifySynthesisAI) Edit(ctx context.Context, _ []ai.SynthesisEvidence) (ai.BiographySummary, error) {
+	f.edits++
+	if f.edits == 2 {
+		// Verify that retry receives verifier feedback via context.
+		f.sawRetry = true
+	}
+	first := "Российский музыкальный коллектив развивал собственное звучание, выпускал студийные записи и представлял концертные программы на фестивалях, согласно двум независимым каталогам."
+	second := "Источники также описывают дальнейшую работу музыкантов над релизами и выступлениями, поэтому в саммари включены только совпадающие подтверждённые сведения без предположений."
+	return ai.BiographySummary{
+		Summary: first + " " + second,
+		Sentences: []ai.SummarySentence{
+			{ID: 1, Text: first, SourceIDs: []string{"catalog:yandex_music:1", "catalog:wikipedia:2"}},
+			{ID: 2, Text: second, SourceIDs: []string{"catalog:yandex_music:1", "catalog:wikipedia:2"}},
+		},
+		UsedSourceIDs: []string{"catalog:yandex_music:1", "catalog:wikipedia:2"},
+	}, nil
+}
+
+func (f *retryEditVerifySynthesisAI) Verify(context.Context, ai.BiographySummary, []ai.SynthesisEvidence) (ai.SynthesisVerification, error) {
+	f.verifies++
+	if f.verifies == 1 {
+		return ai.SynthesisVerification{
+			Grounded: false,
+			Scores:   []float64{0.99, 0.95},
+			Verdicts: []string{"grounded", "not_grounded"},
+		}, nil
+	}
+	return ai.SynthesisVerification{
+		Grounded: true,
+		Scores:   []float64{0.99, 0.96},
+		Verdicts: []string{"grounded", "grounded"},
+	}, nil
+}
+
+func TestSynthesisPipelineRetriesEditAfterVerifierRejection(t *testing.T) {
+	store := openPipelineStore(t)
+	model := &retryEditVerifySynthesisAI{}
+	pipeline, err := NewSynthesisPipeline(store, nil, pipelineResolver{store}, pipelineIngestion{store, []Provider{ProviderYandexMusic, ProviderWikipedia}}, pipelineValidator{}, &pipelineSearch{}, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, admitted, err := store.QueueJob(context.Background(), "artist", "Sимптом", false, time.Now()); err != nil || !admitted {
+		t.Fatalf("queue admitted=%v err=%v", admitted, err)
+	}
+	if err := pipeline.Run(context.Background(), db.LibraryArtist{ID: "artist", Name: "Sимптом"}); err != nil {
+		t.Fatal(err)
+	}
+	if model.edits != 2 || model.verifies != 2 || !model.sawRetry {
+		t.Fatalf("expected 2 edit/verify cycles, got edits=%d verifies=%d", model.edits, model.verifies)
+	}
+	effective, found, err := store.EffectiveBiography(context.Background(), "artist")
+	if err != nil || !found || effective.Source != ProviderAISummary {
+		t.Fatalf("effective=%#v found=%v err=%v", effective, found, err)
+	}
+}
