@@ -175,6 +175,12 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 		reportSearchKeyFailure(s.keys, leased.ID, status, headers)
 		return WebSearchReport{}, err
 	}
+	if releaseQuery := buildArtistReleaseQuery(input); releaseQuery != "" && releaseQuery != query && ctx.Err() == nil {
+		relResults, _, _, relErr := s.searchTavilyOnce(ctx, leased.PlainKey, releaseQuery, "basic", 0)
+		if relErr == nil && len(relResults) > 0 {
+			results = mergeSearchResults(results, relResults, maxSearchResults)
+		}
+	}
 	if !hasEnoughSearchResults(results) && ctx.Err() == nil {
 		advResults, _, _, advErr := s.searchTavilyOnce(ctx, leased.PlainKey, query, "advanced", 3)
 		if advErr == nil && len(advResults) > 0 {
@@ -338,9 +344,9 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		sort.Strings(aliases)
 		appendBounded(aliases, 1)
 	}
-	if input.IncludeReleaseHint || utf8.RuneCountInString(name) <= 5 {
+	if utf8.RuneCountInString(name) <= 5 {
 		appendBounded(input.Albums, 1)
-		if len(input.Albums) == 0 || input.IncludeReleaseHint {
+		if len(input.Albums) == 0 {
 			appendBounded(input.Tracks, 1)
 		}
 	}
@@ -350,11 +356,41 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 	if len(query) > maxSearchIdentityBytes {
 		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
 	}
-	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: query}})
+	releaseHint := buildArtistReleaseQuery(input)
+	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v2:" + query + "|" + releaseHint}})
 	if err != nil {
 		return "", "", err
 	}
 	return query, version, nil
+}
+
+func buildArtistReleaseQuery(input ArtistSearchQuery) string {
+	if !input.IncludeReleaseHint {
+		return ""
+	}
+	name := strings.Join(strings.Fields(input.Name), " ")
+	if name == "" {
+		return ""
+	}
+	hint := ""
+	if len(input.Albums) > 0 {
+		hint = strings.Join(strings.Fields(input.Albums[0]), " ")
+	}
+	if hint == "" && len(input.Tracks) > 0 {
+		hint = strings.Join(strings.Fields(input.Tracks[0]), " ")
+	}
+	if hint == "" || len(hint) > 256 {
+		return ""
+	}
+	suffix := "music artist"
+	if isRussianSearchArtist(input) {
+		suffix = "музыкант"
+	}
+	query := strings.Join([]string{name, hint, suffix}, " ")
+	if len(query) > maxSearchIdentityBytes {
+		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
+	}
+	return query
 }
 
 func safePublicEvidenceURL(raw string) (string, string, bool) {
@@ -378,7 +414,7 @@ func safePublicEvidenceURL(raw string) (string, string, bool) {
 
 func lowQualityEvidenceURL(canonical, domain string) bool {
 	lower := strings.ToLower(canonical)
-	blockedDomains := []string{"reddit.com", "facebook.com", "instagram.com", "tiktok.com", "x.com", "twitter.com"}
+	blockedDomains := []string{"reddit.com", "facebook.com", "instagram.com", "tiktok.com", "x.com", "twitter.com", "linkedin.com", "hh.ru", "habr.com"}
 	for _, blocked := range blockedDomains {
 		if domain == blocked || strings.HasSuffix(domain, "."+blocked) {
 			return true
