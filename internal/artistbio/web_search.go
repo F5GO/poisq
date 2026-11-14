@@ -193,7 +193,7 @@ func (s *TavilySearch) Search(ctx context.Context, input ArtistSearchQuery) (Web
 			results = mergeSearchResults(filterResultsForArtist(input, advResults), results, maxSearchResults)
 		}
 	}
-	if !hasEnoughSearchResults(results) && !isRussianSearchArtist(input) && ctx.Err() == nil {
+	if len(results) == 0 && !isRussianSearchArtist(input) && ctx.Err() == nil {
 		ruQuery := buildRussianFallbackQuery(input)
 		if ruQuery != "" {
 			ruResults, _, _, ruErr := s.searchTavilyOnce(ctx, leased.PlainKey, ruQuery, "basic", "tavily-ru", 0)
