@@ -264,6 +264,10 @@ func fitCollectorResults(identityJSON json.RawMessage, input []SearchEvidenceInp
 			if len(candidate.Snippet) < 160 {
 				continue
 			}
+			rechecked, recErr := marshalCollectorPayload(identityJSON, append(append([]SearchEvidenceInput(nil), bounded...), candidate))
+			if recErr != nil || len(rechecked) > maxCollectorPayload {
+				continue
+			}
 		}
 		bounded = append(bounded, candidate)
 	}

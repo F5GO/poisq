@@ -299,3 +299,26 @@ func TestBiographyEditorAcceptsShort150CharSummary(t *testing.T) {
 		t.Fatalf("short 150+ char summary rejected: err=%v result=%#v", err, result)
 	}
 }
+
+func TestBiographyCollectorHandlesJSONEscapedTruncationWithinLimit(t *testing.T) {
+	escapedSnippet := strings.Repeat(`A&B<C>"D" `, 80) // heavy JSON escaping (\u0026, \u003c, \u003e, \")
+	var results []SearchEvidenceInput
+	for i := 0; i < 8; i++ {
+		results = append(results, SearchEvidenceInput{
+			ID:      fmt.Sprintf("tavily:%d", i),
+			Title:   fmt.Sprintf("Result %d", i),
+			URL:     fmt.Sprintf("https://domain%d.example/artist", i),
+			Domain:  fmt.Sprintf("domain%d.example", i),
+			Snippet: escapedSnippet,
+		})
+	}
+	gen := &synthesisSequenceGenerator{
+		responses: []string{
+			`{"cards":[{"id":"fact-1","result_id":"tavily:0","fact":"Факт 1.","language":"ru"},{"id":"fact-2","result_id":"tavily:1","fact":"Факт 2.","language":"ru"}]}`,
+		},
+	}
+	cards, err := NewBiographySynthesisAI(gen).Collect(context.Background(), json.RawMessage(`{"name":"Izhevski"}`), results)
+	if err != nil || len(cards) != 2 || gen.calls != 1 {
+		t.Fatalf("expected collector to fit JSON-escaped payload and call LLM once, got cards=%#v calls=%d err=%v", cards, gen.calls, err)
+	}
+}
