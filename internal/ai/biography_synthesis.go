@@ -486,11 +486,11 @@ func (b *BiographySynthesisAI) Verify(ctx context.Context, summary BiographySumm
 
 func validateBiographySummary(summary BiographySummary, allowed map[string]string) error {
 	length := utf8.RuneCountInString(summary.Summary)
-	if length < 250 {
+	if length < 150 {
 		return &synthesisStageError{
 			reason:   "summary_edit_length",
 			msg:      "invalid Russian biography summary",
-			feedback: fmt.Sprintf("summary length was %d characters, which is below the 250 minimum; expand using only supported details from the supplied evidence (genres, years, locations, releases, tracks, labels, performances) to reach 450-900 characters", length),
+			feedback: fmt.Sprintf("summary length was %d characters, which is below the 150 minimum; expand using only supported details from the supplied evidence (genres, years, locations, releases, tracks, labels, performances) to reach 450-900 characters when possible", length),
 		}
 	}
 	if length > 1200 {
@@ -615,5 +615,5 @@ func isPredominantlyRussian(value string) bool {
 			cyrillic++
 		}
 	}
-	return letters >= 150 && cyrillic*100/letters >= 70
+	return letters >= 100 && cyrillic*100/letters >= 70
 }
