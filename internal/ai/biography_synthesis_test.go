@@ -322,3 +322,16 @@ func TestBiographyCollectorHandlesJSONEscapedTruncationWithinLimit(t *testing.T)
 		t.Fatalf("expected collector to fit JSON-escaped payload and call LLM once, got cards=%#v calls=%d err=%v", cards, gen.calls, err)
 	}
 }
+
+func TestBiographyEditorRejectsEnglishSentenceInMixedSummary(t *testing.T) {
+	mixed := `{"summary":"4atty aka Tilla is a Ukrainian rapper from Kyiv active since 2005 in hip-hop. Он является участником коллективов Грибы и Grebz, а также выпускал совместные альбомы на лейбле Most Label.","sentences":[{"id":1,"text":"4atty aka Tilla is a Ukrainian rapper from Kyiv active since 2005 in hip-hop.","source_ids":["catalog:yandex_music:1"]},{"id":2,"text":"Он является участником коллективов Грибы и Grebz, а также выпускал совместные альбомы на лейбле Most Label.","source_ids":["web:fact-1"]}],"used_source_ids":["catalog:yandex_music:1","web:fact-1"]}`
+	fixed := `{"summary":"4atty aka Tilla — украинский рэпер из Киева, активный на хип-хоп-сцене с 2005 года. Он является участником коллективов Грибы и Grebz, а также выпускал совместные альбомы на лейбле Most Label.","sentences":[{"id":1,"text":"4atty aka Tilla — украинский рэпер из Киева, активный на хип-хоп-сцене с 2005 года.","source_ids":["catalog:yandex_music:1"]},{"id":2,"text":"Он является участником коллективов Грибы и Grebz, а также выпускал совместные альбомы на лейбле Most Label.","source_ids":["web:fact-1"]}],"used_source_ids":["catalog:yandex_music:1","web:fact-1"]}`
+	gen := &synthesisSequenceGenerator{responses: []string{mixed, fixed}}
+	res, err := NewBiographySynthesisAI(gen).Edit(context.Background(), []SynthesisEvidence{
+		{ID: "catalog:yandex_music:1", Origin: "yandex_music", Language: "en", Text: "4atty aka Tilla is a Ukrainian rapper from Kyiv active since 2005."},
+		{ID: "web:fact-1", Origin: "example.com", Language: "ru", Text: "Участник коллективов Грибы и Grebz, выпускал альбомы на Most Label."},
+	})
+	if err != nil || gen.calls != 2 || strings.Contains(res.Summary, "Ukrainian rapper") {
+		t.Fatalf("expected English sentence to trigger retry and translate to Russian, got calls=%d err=%v summary=%q", gen.calls, err, res.Summary)
+	}
+}
