@@ -250,3 +250,38 @@ func TestBiographyCollectorKeepsSingleValidDomainAfterRetry(t *testing.T) {
 		t.Fatalf("expected single-domain fallback cards after 2 attempts, got cards=%#v calls=%d err=%v", cards, gen.calls, err)
 	}
 }
+
+func TestBiographyVerifierThreshold(t *testing.T) {
+	summary := BiographySummary{
+		Summary: "Подтверждённое предложение.",
+		Sentences: []SummarySentence{
+			{ID: 1, Text: "Подтверждённое предложение.", SourceIDs: []string{"web:fact-1"}},
+		},
+		UsedSourceIDs: []string{"web:fact-1"},
+	}
+	evidence := []SynthesisEvidence{
+		{ID: "web:fact-1", Origin: "example.com", Language: "ru", Text: "Подтверждённое предложение."},
+	}
+
+	genPass := &synthesisSequenceGenerator{
+		responses: []string{`{"sentences":[{"id":1,"verdict":"grounded","confidence":0.90}]}`},
+	}
+	resPass, err := NewBiographySynthesisAI(genPass).Verify(context.Background(), summary, evidence)
+	if err != nil {
+		t.Fatalf("expected Verify at 0.90 to succeed, got err=%v", err)
+	}
+	if !resPass.Grounded {
+		t.Fatalf("expected Verify at 0.90 to be grounded, got %#v", resPass)
+	}
+
+	genFail := &synthesisSequenceGenerator{
+		responses: []string{`{"sentences":[{"id":1,"verdict":"grounded","confidence":0.89}]}`},
+	}
+	resFail, err := NewBiographySynthesisAI(genFail).Verify(context.Background(), summary, evidence)
+	if err != nil {
+		t.Fatalf("expected Verify at 0.89 to return result without error, got err=%v", err)
+	}
+	if resFail.Grounded {
+		t.Fatalf("expected Verify at 0.89 to fail grounding, got %#v", resFail)
+	}
+}

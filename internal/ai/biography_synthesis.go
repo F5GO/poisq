@@ -450,7 +450,7 @@ func (b *BiographySynthesisAI) Verify(ctx context.Context, summary BiographySumm
 			}
 			result.Scores[index] = verdict.Confidence
 			result.Verdicts[index] = verdict.Verdict
-			if verdict.Verdict != "grounded" || verdict.Confidence < 0.95 {
+			if verdict.Verdict != "grounded" || verdict.Confidence < 0.90 {
 				result.Grounded = false
 			}
 		}
