@@ -221,3 +221,19 @@ func TestBiographyEditorAcceptsCompact250CharSummary(t *testing.T) {
 		t.Fatalf("compact summary rejected: err=%v result=%#v", err, result)
 	}
 }
+
+func TestBiographyCollectorNormalizesLanguageAndRetriesFactLimit(t *testing.T) {
+	tooLongFact := strings.Repeat("а", 501)
+	gen := &synthesisSequenceGenerator{responses: []string{
+		fmt.Sprintf(`{"cards":[{"id":"fact-1","result_id":"result-1","fact":%q,"language":"RU"}]}`, tooLongFact),
+		`{"cards":[{"id":"fact-1","result_id":"result-1","fact":"Подтверждённый факт об исполнителе.","language":"RU"},{"id":"fact-2","result_id":"result-2","fact":"Независимый источник подтверждает выступления.","language":"EN"}]}`,
+	}}
+	service := NewBiographySynthesisAI(gen)
+	cards, err := service.Collect(context.Background(), json.RawMessage(`{"name":"Artist"}`), []SearchEvidenceInput{
+		{ID: "result-1", Title: "One", URL: "https://one.example/a", Domain: "one.example", Snippet: "Подтверждённый факт об исполнителе и его карьере."},
+		{ID: "result-2", Title: "Two", URL: "https://two.example/a", Domain: "two.example", Snippet: "Independent live performance facts about the artist."},
+	})
+	if err != nil || len(cards) != 2 || cards[0].Language != "ru" || cards[1].Language != "en" || gen.calls != 2 {
+		t.Fatalf("collector retry/lang failed: cards=%#v calls=%d err=%v", cards, gen.calls, err)
+	}
+}
