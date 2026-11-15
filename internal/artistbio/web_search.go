@@ -287,7 +287,9 @@ func hasEnoughSearchResults(results []WebSearchResult) bool {
 	domains := make(map[string]struct{}, len(results))
 	totalRunes := 0
 	for _, r := range results {
-		domains[r.Domain] = struct{}{}
+		if r.Domain != "youtube.com" && r.Domain != "www.youtube.com" && r.Domain != "m.youtube.com" && r.Domain != "youtu.be" {
+			domains[r.Domain] = struct{}{}
+		}
 		totalRunes += utf8.RuneCountInString(r.Snippet)
 	}
 	return len(domains) >= 2 && totalRunes >= 800
@@ -348,6 +350,10 @@ func isRussianSearchArtist(input ArtistSearchQuery) bool {
 	return false
 }
 
+func shouldQuoteArtistSearchName(name string) bool {
+	return !strings.Contains(name, `"`) && (hasMixedScript(name) || len(strings.Fields(name)) >= 2)
+}
+
 func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 	if err := validateRequired("artist id", input.ArtistID, MaxProviderIDBytes); err != nil {
 		return "", "", err
@@ -357,7 +363,7 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 	}
 	name := strings.Join(strings.Fields(input.Name), " ")
 	searchName := name
-	if hasMixedScript(name) && !strings.Contains(name, `"`) {
+	if shouldQuoteArtistSearchName(name) {
 		searchName = `"` + name + `"`
 	}
 	suffix := "music artist biography discography"
@@ -379,7 +385,7 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		sort.Strings(aliases)
 		appendBounded(aliases, 1)
 	}
-	if utf8.RuneCountInString(name) <= 5 {
+	if len(strings.Fields(name)) == 1 && utf8.RuneCountInString(name) <= 3 {
 		appendBounded(input.Albums, 1)
 		if len(input.Albums) == 0 {
 			appendBounded(input.Tracks, 1)
@@ -392,7 +398,7 @@ func buildArtistSearchQuery(input ArtistSearchQuery) (string, string, error) {
 		query = truncateUTF8Bytes(query, maxSearchIdentityBytes)
 	}
 	releaseHint := buildArtistReleaseQuery(input)
-	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v9:" + query + "|" + releaseHint}})
+	version, err := evidenceVersion([]EvidenceItem{{ID: input.ArtistID, Origin: "v10:" + query + "|" + releaseHint}})
 	if err != nil {
 		return "", "", err
 	}
@@ -405,7 +411,7 @@ func buildArtistFallbackQuery(input ArtistSearchQuery, primaryQuery string) stri
 		return primaryQuery
 	}
 	searchName := name
-	if hasMixedScript(name) && !strings.Contains(name, `"`) {
+	if shouldQuoteArtistSearchName(name) {
 		searchName = `"` + name + `"`
 	}
 	hint := ""
@@ -436,7 +442,7 @@ func buildRussianFallbackQuery(input ArtistSearchQuery) string {
 		return ""
 	}
 	searchName := name
-	if hasMixedScript(name) && !strings.Contains(name, `"`) {
+	if shouldQuoteArtistSearchName(name) {
 		searchName = `"` + name + `"`
 	}
 	query := searchName + " музыкант биография"
@@ -548,12 +554,14 @@ func resultMatchesArtist(input ArtistSearchQuery, exactName string, r WebSearchR
 		}
 	}
 	for _, album := range input.Albums {
-		if a := normalizeSearchMatchText(strings.TrimSpace(album)); a != "" && strings.Contains(combined, a) {
+		a := normalizeSearchMatchText(strings.TrimSpace(album))
+		if len(strings.Fields(a)) >= 2 && utf8.RuneCountInString(a) >= 8 && strings.Contains(combined, a) {
 			return true
 		}
 	}
 	for _, track := range input.Tracks {
-		if tr := normalizeSearchMatchText(strings.TrimSpace(track)); tr != "" && strings.Contains(combined, tr) {
+		tr := normalizeSearchMatchText(strings.TrimSpace(track))
+		if len(strings.Fields(tr)) >= 2 && utf8.RuneCountInString(tr) >= 8 && strings.Contains(combined, tr) {
 			return true
 		}
 	}
@@ -581,7 +589,7 @@ func safePublicEvidenceURL(raw string) (string, string, bool) {
 
 func lowQualityEvidenceURL(canonical, domain string) bool {
 	lower := strings.ToLower(canonical)
-	blockedDomains := []string{"reddit.com", "facebook.com", "instagram.com", "tiktok.com", "x.com", "twitter.com", "linkedin.com", "hh.ru", "habr.com"}
+	blockedDomains := []string{"reddit.com", "facebook.com", "instagram.com", "tiktok.com", "x.com", "twitter.com", "linkedin.com", "hh.ru", "habr.com", "tavily.com"}
 	for _, blocked := range blockedDomains {
 		if domain == blocked || strings.HasSuffix(domain, "."+blocked) {
 			return true

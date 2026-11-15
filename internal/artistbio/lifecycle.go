@@ -156,7 +156,7 @@ func (s *Store) QueueJob(ctx context.Context, artistID, artistName string, force
 }
 
 func (s *Store) MarkJobRunning(ctx context.Context, artistID string, startedAt time.Time) error {
-	return s.transitionJob(ctx, artistID, JobRunning, "", "", time.Time{}, startedAt, time.Time{}, []JobStatus{JobQueued})
+	return s.transitionJob(ctx, artistID, JobRunning, "", "", time.Time{}, startedAt, time.Time{}, []JobStatus{JobQueued, JobRetryable})
 }
 
 func (s *Store) CompleteNoData(ctx context.Context, artistID, inputVersion string, completedAt time.Time) error {

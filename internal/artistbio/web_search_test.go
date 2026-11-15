@@ -223,4 +223,22 @@ func TestMultiWordArtistFiltersHomonymNoise(t *testing.T) {
 	if got := filterResultsForArtist(biiclaInput, biiclaNoise); len(got) != 0 {
 		t.Fatalf("expected unrelated generic musician pages to be filtered out for Biicla, got %#v", got)
 	}
+
+	nicInput := ArtistSearchQuery{
+		ArtistID: "nicd",
+		Name:     "Nic D",
+		Albums:   []string{"Scoop"},
+	}
+	nicQuery, _, err := buildArtistSearchQuery(nicInput)
+	if err != nil || !strings.Contains(nicQuery, `"Nic D"`) || strings.Contains(nicQuery, "Scoop") {
+		t.Fatalf("expected quoted Nic D without unquoted Scoop in primary query, got %q err=%v", nicQuery, err)
+	}
+	nicNoise := []WebSearchResult{
+		{ID: "1", Title: "Scoop", Domain: "tavily.com", Snippet: "Tavily Scoop search product page."},
+		{ID: "2", Title: "Scoop - song by Someone Else", Domain: "open.spotify.com", Snippet: "Listen to Scoop on Spotify."},
+		{ID: "3", Title: "Nic D - Biography & Songs", Domain: "genius.com", Snippet: "Nic D is an independent pop-rap artist."},
+	}
+	if got := filterResultsForArtist(nicInput, nicNoise); len(got) != 1 || got[0].ID != "3" {
+		t.Fatalf("expected single-word album Scoop noise to be filtered out for Nic D, got %#v", got)
+	}
 }

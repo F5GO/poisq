@@ -115,7 +115,7 @@ func (c *Coordinator) run(ctx context.Context) {
 				jobCtx, cancel := context.WithTimeout(ctx, c.jobTimeout)
 				err := c.pipeline.Run(jobCtx, artist)
 				cancel()
-				if err == nil || attempt == c.maxJobRetries || ctx.Err() != nil {
+				if err == nil || attempt == c.maxJobRetries || ctx.Err() != nil || safePipelineErrorReason(err) == "collector_empty" {
 					break
 				}
 				logger.Info("[BIO] artist_id=%q artist=%q retry=%d/%d after=%s error=%v", artist.ID, artist.Name, attempt+1, c.maxJobRetries, c.retryDelay, err)
