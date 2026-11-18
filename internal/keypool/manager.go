@@ -39,7 +39,11 @@ type Manager struct {
 }
 
 // NewManager создает новый менеджер пула API-ключей.
+// Ключи, не расшифрованные прошлым процессом, снова пробуются: мастер-ключ меняется только перезапуском.
 func NewManager(repo *db.KeyRepository, cipher *security.KeyCipher) *Manager {
+	if repo != nil {
+		_ = repo.ResetDecryptErrors()
+	}
 	return &Manager{
 		repo:   repo,
 		cipher: cipher,
@@ -69,7 +73,7 @@ func (m *Manager) AddKey(provider, label, plainKey string) (int64, error) {
 func validProvider(value string) bool {
 	switch value {
 	case "gemini", "groq", "yandex", "genius", "music_assistant", "acoustid",
-		"apple_music", "lastfm", "discogs", "tavily":
+		"apple_music", "lastfm", "discogs", "tavily", "navidrome":
 		return true
 	default:
 		return false
@@ -110,7 +114,8 @@ func (m *Manager) AcquireExcluding(provider string, excludeKeyID int64) (*Leased
 
 		plain, err := m.cipher.Decrypt(rec.KeyEncrypted)
 		if err != nil {
-			_ = m.repo.MarkStatus(rec.ID, "invalid", 0, "ошибка расшифровки ключа: "+err.Error())
+			// Ключ цел, не подошёл мастер-ключ: не invalid навсегда, а до перезапуска с верным POISQ_SECRET_KEY.
+			_ = m.repo.MarkStatus(rec.ID, "decrypt_error", 0, "ошибка расшифровки ключа: "+err.Error())
 			excludeKeyID = rec.ID
 			continue
 		}
@@ -195,7 +200,7 @@ func (m *Manager) HasKeys(provider string) bool {
 	}
 	clean := strings.ToLower(strings.TrimSpace(provider))
 	for _, k := range keys {
-		if strings.ToLower(k.Provider) == clean && k.Status != "invalid" {
+		if strings.ToLower(k.Provider) == clean && k.Status != "invalid" && k.Status != "decrypt_error" {
 			return true
 		}
 	}

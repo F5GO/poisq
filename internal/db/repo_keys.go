@@ -144,6 +144,16 @@ func (r *KeyRepository) MarkSuccess(id int64) error {
 	return err
 }
 
+// ResetDecryptErrors возвращает в строй ключи, которые не удалось расшифровать прошлым мастер-ключом.
+// Ловит и старые записи, которые раньше помечались invalid с той же причиной.
+func (r *KeyRepository) ResetDecryptErrors() error {
+	_, err := r.db.Exec(`
+		UPDATE api_keys SET status = 'active', cooldown_until = 0, last_error = ''
+		WHERE status = 'decrypt_error' OR (status = 'invalid' AND last_error LIKE 'ошибка расшифровки ключа%')
+	`)
+	return err
+}
+
 // MarkStatus переводит ключ в указанный статус (cooldown, exhausted_daily, invalid) с логом ошибки.
 func (r *KeyRepository) MarkStatus(id int64, status string, cooldownUntil int64, errMsg string) error {
 	_, err := r.db.Exec(`

@@ -66,3 +66,56 @@ func TestKeyPoolLRURotationAndCooldowns(t *testing.T) {
 		t.Fatalf("expected future retry timestamp, got %d", nextTs)
 	}
 }
+
+// Ключ, не расшифрованный чужим мастер-ключом, возвращается в строй после перезапуска с верным.
+func TestDecryptErrorRecoversAfterRestartWithRightSecret(t *testing.T) {
+	tmpDir := t.TempDir()
+	sqliteDB, err := db.OpenPoisqDatabase(filepath.Join(tmpDir, "poisq.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqliteDB.Close()
+	repo := db.NewKeyRepository(sqliteDB)
+	right, _ := security.NewKeyCipher("right-secret", tmpDir)
+	wrong, _ := security.NewKeyCipher("wrong-secret", tmpDir)
+
+	if _, err := NewManager(repo, right).AddKey("groq", "k", "gsk_value"); err != nil {
+		t.Fatal(err)
+	}
+	// старый формат: раньше такой ключ навсегда становился invalid
+	if _, err := sqliteDB.Exec(`INSERT INTO api_keys (provider, label, key_encrypted, key_mask, status, last_error) VALUES ('groq', 'old', ?, 'x', 'invalid', 'ошибка расшифровки ключа: test')`, mustEncrypt(t, right, "gsk_old")); err != nil {
+		t.Fatal(err)
+	}
+
+	bad := NewManager(repo, wrong)
+	if _, err := bad.Acquire("groq"); err == nil {
+		t.Fatal("чужой мастер-ключ не должен расшифровать ключ")
+	}
+	if bad.HasKeys("groq") {
+		t.Fatal("нерасшифрованные ключи не должны считаться рабочими")
+	}
+
+	good := NewManager(repo, right)
+	seen := map[string]bool{}
+	var lastID int64
+	for i := 0; i < 2; i++ {
+		k, err := good.AcquireExcluding("groq", lastID)
+		if err != nil {
+			t.Fatalf("после перезапуска с верным ключом: %v", err)
+		}
+		seen[k.PlainKey] = true
+		lastID = k.ID
+	}
+	if !seen["gsk_value"] || !seen["gsk_old"] {
+		t.Fatalf("в строй вернулись не все ключи: %v", seen)
+	}
+}
+
+func mustEncrypt(t *testing.T, c *security.KeyCipher, v string) string {
+	t.Helper()
+	s, err := c.Encrypt(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
