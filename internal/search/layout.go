@@ -38,23 +38,47 @@ func init() {
 
 // SwapLayout выполняет смену раскладки текста:
 // английские символы переводятся в русские, а русские — в английские.
-// Символы, для которых соответствие не задано (пробелы, цифры и т.д.), остаются неизменными.
+// Для общих символов пунктуации ('.', ',', ';', ':', '"', '?') направление определяется
+// по преобладающему алфавиту строки, чтобы переключение было обратимым и не смешивало алфавиты.
 func SwapLayout(text string) string {
 	if text == "" {
 		return ""
 	}
 
+	cyrCount, latCount := 0, 0
+	for _, r := range text {
+		if unicode.Is(unicode.Cyrillic, r) {
+			cyrCount++
+		} else if unicode.Is(unicode.Latin, r) {
+			latCount++
+		}
+	}
+	preferRuToEn := cyrCount > latCount
+
 	var sb strings.Builder
 	sb.Grow(len(text))
 
 	for _, r := range text {
-		if ru, ok := enToRuMap[r]; ok {
-			sb.WriteRune(ru)
-		} else if en, ok := ruToEnMap[r]; ok {
-			sb.WriteRune(en)
+		if preferRuToEn {
+			if en, ok := ruToEnMap[r]; ok {
+				sb.WriteRune(en)
+				continue
+			}
+			if ru, ok := enToRuMap[r]; ok {
+				sb.WriteRune(ru)
+				continue
+			}
 		} else {
-			sb.WriteRune(r)
+			if ru, ok := enToRuMap[r]; ok {
+				sb.WriteRune(ru)
+				continue
+			}
+			if en, ok := ruToEnMap[r]; ok {
+				sb.WriteRune(en)
+				continue
+			}
 		}
+		sb.WriteRune(r)
 	}
 
 	return sb.String()

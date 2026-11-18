@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/F5GO/poisq/internal/search"
 )
@@ -50,9 +51,6 @@ func (it *Interceptor) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	path := strings.ToLower(req.URL.Path)
 
-	// Сохраняем Subsonic/Navidrome сессию в памяти для нужд внутренней панели Studio (:4535)
-	CaptureSubsonicAuth(req)
-
 	// 1. Проверка Subsonic поиска (search3, search2, search, а также расширения .view)
 	if isSubsonicSearchPath(path) {
 		it.handleSubsonicSearch(w, req)
@@ -77,7 +75,7 @@ func (it *Interceptor) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// 3. Диагностическое логирование запросов аутентификации и сессий для проверки сети и CDN
 	if strings.HasPrefix(path, "/auth/") || strings.HasPrefix(path, "/api/auth") || path == "/auth" {
 		clientIP := ExtractClientIP(req)
-		log.Printf("[AUTH] [%s] %s (Host: %s, Origin: %s, IP: %s, Proto: %s)",
+		log.Printf("[AUTH] [%s] %q (Host: %q, Origin: %q, IP: %s, Proto: %q)",
 			req.Method, req.URL.Path, req.Host, req.Header.Get("Origin"), clientIP, req.Header.Get("X-Forwarded-Proto"))
 	}
 
@@ -117,30 +115,38 @@ func (it *Interceptor) handleSubsonicSearch(w http.ResponseWriter, req *http.Req
 	// Поддержка POST-запросов со строкой поиска в теле (application/x-www-form-urlencoded)
 	var isFormBody bool
 	var formBytes []byte
-	// Тело читаем и тогда, когда запрос в адресе: вход (u, t, s) может лежать в теле, а он нужен для fan-out.
-	if req.Method == http.MethodPost {
+	var parsedForm url.Values
+	// Тело читаем и тогда, когда запрос в адресе: вход (u, t, s) и клиент (c) могут лежать в теле.
+	if req.Method == http.MethodPost && req.Body != nil {
 		contentType := req.Header.Get("Content-Type")
-		if strings.Contains(contentType, "application/x-www-form-urlencoded") {
-			body, err := io.ReadAll(io.LimitReader(req.Body, 1024*1024))
-			if err == nil {
-				parsedForm, err := url.ParseQuery(string(body))
-				if err == nil && rawQuery == "" {
-					if v := parsedForm.Get("query"); v != "" {
-						paramName = "query"
-						rawQuery = v
-						isFormBody = true
-					} else if v := parsedForm.Get("q"); v != "" {
-						paramName = "q"
-						rawQuery = v
-						isFormBody = true
-					} else if v := parsedForm.Get("any"); v != "" {
-						paramName = "any"
-						rawQuery = v
-						isFormBody = true
+		if strings.Contains(strings.ToLower(contentType), "application/x-www-form-urlencoded") {
+			origBody := req.Body
+			body, err := io.ReadAll(io.LimitReader(origBody, 1024*1024+1))
+			_ = origBody.Close()
+			if err == nil && len(body) <= 1024*1024 {
+				if form, parseErr := url.ParseQuery(string(body)); parseErr == nil {
+					parsedForm = form
+					if rawQuery == "" {
+						if v := form.Get("query"); v != "" {
+							paramName = "query"
+							rawQuery = v
+							isFormBody = true
+						} else if v := form.Get("q"); v != "" {
+							paramName = "q"
+							rawQuery = v
+							isFormBody = true
+						} else if v := form.Get("any"); v != "" {
+							paramName = "any"
+							rawQuery = v
+							isFormBody = true
+						}
 					}
 				}
 				formBytes = body
 				req.Body = io.NopCloser(bytes.NewReader(body))
+			} else if err == nil {
+				// Если тело превысило 1 МБ, восстанавливаем уже прочитанный префикс и отдаем как есть.
+				req.Body = io.NopCloser(bytes.NewReader(body[:1024*1024]))
 			}
 		}
 	}
@@ -154,24 +160,27 @@ func (it *Interceptor) handleSubsonicSearch(w http.ResponseWriter, req *http.Req
 
 	res := it.engine.ProcessQuery(rawQuery)
 	elapsedMs := float64(time.Since(start).Microseconds()) / 1000.0
-	log.Printf("[REWRITE] [%s] %s=%q -> %q [%.2fms] (Agent: %s, IP: %s, Path: %s)",
+	log.Printf("[REWRITE] [%s] %s=%q -> %q [%.2fms] (Agent: %q, IP: %s, Path: %s)",
 		req.Method, paramName, rawQuery, res.RewrittenQuery, elapsedMs, req.UserAgent(), clientIP, req.URL.Path)
 
-	// Хвост «(запрос)» нужен клиентам с локальной фильтрацией выдачи; нашему приложению он не нужен.
-	decorateTitles := rawQuery != "" && res.RewrittenQuery != rawQuery && NeedsDecoratedTitles(req)
+	// Переносим параметры из тела POST-запроса (включая c=poisq и авторизацию) в query до проверки NeedsDecoratedTitles и fan-out.
+	if parsedForm != nil {
+		merged := req.URL.Query()
+		for k, v := range parsedForm {
+			if merged.Get(k) == "" {
+				merged[k] = v
+			}
+		}
+		req.URL.RawQuery = merged.Encode()
+	}
 
 	// Формируем расширенный список запросов для широкого и точного параллельного поиска
 	queries := search.ExpandQuery(rawQuery, &res)
+
+	// Хвост «(запрос)» нужен клиентам с локальной фильтрацией выдачи; нашему приложению он не нужен.
+	decorateTitles := rawQuery != "" && (res.RewrittenQuery != rawQuery || len(queries) > 1 || res.NeedsFanout) && NeedsDecoratedTitles(req)
+
 	if len(queries) > 1 || res.RewrittenQuery != rawQuery || res.NeedsFanout {
-		if formBytes != nil { // fan-out строит GET-запросы из адреса: переносим туда параметры и вход из тела
-			if form, err := url.ParseQuery(string(formBytes)); err == nil {
-				merged := req.URL.Query()
-				for k, v := range form {
-					merged[k] = v
-				}
-				req.URL.RawQuery = merged.Encode()
-			}
-		}
 		it.fanoutMgr.ExecuteMultiFanout(w, req, queries, paramName, rawQuery, decorateTitles)
 		return
 	}
@@ -243,19 +252,43 @@ func (it *Interceptor) handleNativeSearch(w http.ResponseWriter, req *http.Reque
 	}
 	res := it.engine.ProcessQuery(val)
 	elapsedMs := float64(time.Since(start).Microseconds()) / 1000.0
-	log.Printf("[REWRITE-NATIVE] [%s] %s=%q -> %q [%.2fms] (Agent: %s, IP: %s, Path: %s)",
+	log.Printf("[REWRITE-NATIVE] [%s] %s=%q -> %q [%.2fms] (Agent: %q, IP: %s, Path: %s)",
 		req.Method, targetParam, val, res.RewrittenQuery, elapsedMs, req.UserAgent(), clientIP, req.URL.Path)
 
+	normalizedQuery := lowerNonASCII(res.RewrittenQuery)
 	if isFilterJSON {
-		filterMap[filterKey] = res.RewrittenQuery
+		filterMap[filterKey] = normalizedQuery
 		if newFilterBytes, err := json.Marshal(filterMap); err == nil {
 			q.Set("filter", string(newFilterBytes))
 		}
 	} else {
-		q.Set(targetParam, res.RewrittenQuery)
+		q.Set(targetParam, normalizedQuery)
 	}
 	req.URL.RawQuery = q.Encode()
 	req.RequestURI = req.URL.RequestURI()
 
 	it.reverseProxy.ServeHTTP(w, req)
+}
+
+// lowerNonASCII приводит к нижнему регистру только не-ASCII руны (для регистрозависимого SQLite LIKE на кириллице),
+// сохраняя регистр латиницы для обратной совместимости с нативным UI и тестами.
+func lowerNonASCII(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	changed := false
+	for _, r := range s {
+		if r > unicode.MaxASCII {
+			lr := unicode.ToLower(r)
+			if lr != r {
+				changed = true
+			}
+			b.WriteRune(lr)
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	if !changed {
+		return s
+	}
+	return b.String()
 }

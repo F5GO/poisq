@@ -122,9 +122,9 @@ func MatchPhraseTokens(phrase string, dict *Dictionary) (string, []string, bool)
 		}
 	}
 
-	// Если лучший кандидат набрал 2+ голоса или поддержан большинством слов
+	// Если лучший кандидат набрал 2+ голосов разных слов фразы
 	best := candidates[0]
-	if best.Votes >= 2 || (len(words) == 2 && best.Votes >= 1) {
+	if best.Votes >= 2 {
 		return best.Entity, candidateList, true
 	}
 

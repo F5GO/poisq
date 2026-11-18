@@ -7,16 +7,14 @@ package proxy
 
 import (
 	"encoding/xml"
-	"io"
 	"strings"
 )
 
-// SubsonicXMLEntity представляет базовый XML-элемент (artist, album, song) с атрибутами.
+// SubsonicXMLEntity представляет базовый XML-элемент (artist, album, song) с атрибутами и вложенными тегами.
 type SubsonicXMLEntity struct {
 	XMLName xml.Name
 	Attrs   []xml.Attr `xml:",any,attr"`
 	Content []byte     `xml:",innerxml"`
-	ID      string     `xml:"-"`
 }
 
 // SubsonicXMLSearchResult представляет контейнер searchResult3 или searchResult2.
@@ -35,6 +33,7 @@ type SubsonicXMLResponse struct {
 	OpenSubsonic  string                   `xml:"openSubsonic,attr,omitempty"`
 	SearchResult3 *SubsonicXMLSearchResult `xml:"searchResult3,omitempty"`
 	SearchResult2 *SubsonicXMLSearchResult `xml:"searchResult2,omitempty"`
+	SearchResult  *SubsonicXMLSearchResult `xml:"searchResult,omitempty"`
 }
 
 func extractID(attrs []xml.Attr) string {
@@ -109,40 +108,4 @@ func decorateXMLEntity(e *SubsonicXMLEntity, rawQuery string) {
 			return
 		}
 	}
-}
-
-// UnmarshalXML кастомно разбирает элементы SubsonicXMLEntity с извлечением ID.
-func (e *SubsonicXMLEntity) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	e.XMLName = start.Name
-	e.Attrs = start.Attr
-	e.ID = extractID(start.Attr)
-
-	for {
-		token, err := d.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		if end, ok := token.(xml.EndElement); ok && end.Name == start.Name {
-			break
-		}
-	}
-	return nil
-}
-
-// MarshalXML сериализует SubsonicXMLEntity обратно в XML-тег в пространстве имен Subsonic.
-func (e SubsonicXMLEntity) MarshalXML(enc *xml.Encoder, start xml.StartElement) error {
-	start.Name = xml.Name{Space: "http://subsonic.org/restapi", Local: e.XMLName.Local}
-	start.Attr = e.Attrs
-	if err := enc.EncodeToken(start); err != nil {
-		return err
-	}
-	if len(e.Content) > 0 {
-		if err := enc.EncodeToken(xml.CharData(e.Content)); err != nil {
-			return err
-		}
-	}
-	return enc.EncodeToken(start.End())
 }

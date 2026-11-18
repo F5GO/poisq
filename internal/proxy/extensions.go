@@ -29,11 +29,18 @@ func AdvertisePoisqExtension(resp *http.Response) error {
 		resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" {
 		return nil
 	}
-	body, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
+	const maxExtBytes = 2 << 20
+	origBody := resp.Body
+	body, err := io.ReadAll(io.LimitReader(origBody, maxExtBytes+1))
 	if err != nil {
+		_ = origBody.Close()
 		return err
 	}
+	if len(body) > maxExtBytes {
+		resp.Body = &prefixedReadCloser{Reader: io.MultiReader(bytes.NewReader(body), origBody), Closer: origBody}
+		return nil
+	}
+	_ = origBody.Close()
 
 	out := body
 	if strings.Contains(resp.Header.Get("Content-Type"), "json") {
@@ -44,6 +51,9 @@ func AdvertisePoisqExtension(resp *http.Response) error {
 
 	resp.Body = io.NopCloser(bytes.NewReader(out))
 	resp.ContentLength = int64(len(out))
+	resp.TransferEncoding = nil
+	resp.Header.Del("Transfer-Encoding")
+	resp.Header.Del("ETag")
 	resp.Header.Set("Content-Length", strconv.Itoa(len(out)))
 	return nil
 }
@@ -55,6 +65,13 @@ func addExtensionJSON(body []byte) []byte {
 	}
 	var sr map[string]json.RawMessage
 	if json.Unmarshal(root["subsonic-response"], &sr) != nil {
+		return body
+	}
+	var status string
+	if rawStatus, ok := sr["status"]; ok {
+		_ = json.Unmarshal(rawStatus, &status)
+	}
+	if !strings.EqualFold(status, "ok") {
 		return body
 	}
 	var list []json.RawMessage
@@ -83,7 +100,10 @@ func addExtensionJSON(body []byte) []byte {
 func addExtensionXML(body []byte) []byte {
 	const closing = "</subsonic-response>"
 	s := string(body)
-	if strings.Contains(s, `name="poisq"`) {
+	if !strings.Contains(s, `status="ok"`) && !strings.Contains(s, `status='ok'`) {
+		return body
+	}
+	if strings.Contains(s, `name="poisq"`) || strings.Contains(s, `name='poisq'`) {
 		return body
 	}
 	i := strings.LastIndex(s, closing)

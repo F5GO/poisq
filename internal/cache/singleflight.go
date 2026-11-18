@@ -39,7 +39,7 @@ func (g *SingleFlight) Do(key string, fn func() ([]byte, http.Header, int, error
 	if c, ok := g.m[key]; ok {
 		g.mu.Unlock()
 		c.wg.Wait()
-		return c.body, c.header, c.code, c.err
+		return c.body, cloneHeader(c.header), c.code, c.err
 	}
 
 	c := new(call)
@@ -47,12 +47,20 @@ func (g *SingleFlight) Do(key string, fn func() ([]byte, http.Header, int, error
 	g.m[key] = c
 	g.mu.Unlock()
 
+	defer func() {
+		c.wg.Done()
+		g.mu.Lock()
+		delete(g.m, key)
+		g.mu.Unlock()
+	}()
+
 	c.body, c.header, c.code, c.err = fn()
-	c.wg.Done()
+	return c.body, cloneHeader(c.header), c.code, c.err
+}
 
-	g.mu.Lock()
-	delete(g.m, key)
-	g.mu.Unlock()
-
-	return c.body, c.header, c.code, c.err
+func cloneHeader(h http.Header) http.Header {
+	if h == nil {
+		return nil
+	}
+	return h.Clone()
 }

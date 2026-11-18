@@ -7,6 +7,7 @@
 package search
 
 import (
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,16 +36,22 @@ type MatchToken struct {
 
 // Engine инкапсулирует словарь, кэш запросов и логику интеллектуальной обработки поиска.
 type Engine struct {
-	dict       *Dictionary
-	cacheMu    sync.RWMutex
-	queryCache map[string]SearchResult
+	dict        *Dictionary
+	cacheMu     sync.RWMutex
+	dictVersion uint64
+	queryCache  map[string]SearchResult
 }
 
 // NewEngine создает новый экземпляр движка поиска.
 func NewEngine(dict *Dictionary) *Engine {
+	var ver uint64
+	if dict != nil {
+		ver = dict.Version()
+	}
 	return &Engine{
-		dict:       dict,
-		queryCache: make(map[string]SearchResult, 2048),
+		dict:        dict,
+		dictVersion: ver,
+		queryCache:  make(map[string]SearchResult, 2048),
 	}
 }
 
@@ -62,12 +69,17 @@ func (e *Engine) ProcessQuery(rawQuery string) SearchResult {
 		}
 	}
 
-	// Проверяем сверхбыстрый кэш в оперативной памяти (0.0001ms)
+	// Проверяем сверхбыстрый кэш в оперативной памяти (0.0001ms) с учетом актуальной версии словаря
 	lowerClean := strings.ToLower(clean)
+	curVersion := uint64(0)
+	if e.dict != nil {
+		curVersion = e.dict.Version()
+	}
 	e.cacheMu.RLock()
 	cached, ok := e.queryCache[lowerClean]
+	cacheValid := e.dictVersion == curVersion
 	e.cacheMu.RUnlock()
-	if ok {
+	if ok && cacheValid {
 		cached.RawQuery = rawQuery
 		cached.DurationMicros = time.Since(start).Microseconds()
 		return cached
@@ -93,8 +105,9 @@ func (e *Engine) ProcessQuery(rawQuery string) SearchResult {
 
 	// Сохраняем результат в кэше движка
 	e.cacheMu.Lock()
-	if len(e.queryCache) >= 4096 {
+	if e.dictVersion != curVersion || len(e.queryCache) >= 4096 {
 		e.queryCache = make(map[string]SearchResult, 2048)
+		e.dictVersion = curVersion
 	}
 	e.queryCache[lowerClean] = res
 	e.cacheMu.Unlock()
@@ -247,12 +260,10 @@ func (e *Engine) processLongQuery(res *SearchResult, clean string, runeLen int) 
 	}
 
 	if len(fastCandidates) > 0 {
+		sort.SliceStable(fastCandidates, func(i, j int) bool {
+			return fastCandidates[i].weight > fastCandidates[j].weight
+		})
 		best := fastCandidates[0]
-		for _, c := range fastCandidates[1:] {
-			if c.weight > best.weight {
-				best = c
-			}
-		}
 
 		seenCand := make(map[string]bool)
 		for _, c := range fastCandidates {

@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
+	"strings"
 )
 
 // MergeMultipleJSONResponses объединяет произвольное количество JSON-ответов Subsonic
@@ -24,11 +25,20 @@ func MergeMultipleJSONResponses(responses [][]byte, maxArtists, maxAlbums, maxSo
 		}
 		var env SubsonicJSONEnvelope
 		if err := json.Unmarshal(resp, &env); err == nil && env.SubsonicResponse != nil {
+			var status string
+			if rawStatus, ok := env.SubsonicResponse["status"]; ok {
+				_ = json.Unmarshal(rawStatus, &status)
+			}
+			if !strings.EqualFold(status, "ok") {
+				continue
+			}
 			if searchKey == "" {
 				if _, ok := env.SubsonicResponse["searchResult3"]; ok {
 					searchKey = "searchResult3"
 				} else if _, ok := env.SubsonicResponse["searchResult2"]; ok {
 					searchKey = "searchResult2"
+				} else if _, ok := env.SubsonicResponse["searchResult"]; ok {
+					searchKey = "searchResult"
 				}
 			}
 			validEnvelopes = append(validEnvelopes, env)
@@ -86,19 +96,22 @@ func MergeMultipleJSONResponses(responses [][]byte, maxArtists, maxAlbums, maxSo
 // в единый непротиворечивый ответ с дедупликацией сущностей по идентификаторам.
 func MergeMultipleXMLResponses(responses [][]byte, maxArtists, maxAlbums, maxSongs int, rawQuery string, decorateTitles bool) ([]byte, error) {
 	var validDocs []SubsonicXMLResponse
-	isSearch3 := true
+	searchKind := "searchResult3"
 
 	for _, resp := range responses {
 		if len(resp) == 0 {
 			continue
 		}
 		var doc SubsonicXMLResponse
-		if err := xml.Unmarshal(resp, &doc); err == nil {
+		if err := xml.Unmarshal(resp, &doc); err == nil && strings.EqualFold(doc.Status, "ok") {
 			if doc.SearchResult3 != nil {
-				isSearch3 = true
+				searchKind = "searchResult3"
 				validDocs = append(validDocs, doc)
 			} else if doc.SearchResult2 != nil {
-				isSearch3 = false
+				searchKind = "searchResult2"
+				validDocs = append(validDocs, doc)
+			} else if doc.SearchResult != nil {
+				searchKind = "searchResult"
 				validDocs = append(validDocs, doc)
 			}
 		}
@@ -113,28 +126,39 @@ func MergeMultipleXMLResponses(responses [][]byte, maxArtists, maxAlbums, maxSon
 
 	for _, doc := range validDocs {
 		var list []SubsonicXMLEntity
-		if isSearch3 && doc.SearchResult3 != nil {
-			list = doc.SearchResult3.Entities
-		} else if !isSearch3 && doc.SearchResult2 != nil {
-			list = doc.SearchResult2.Entities
+		switch searchKind {
+		case "searchResult3":
+			if doc.SearchResult3 != nil {
+				list = doc.SearchResult3.Entities
+			}
+		case "searchResult2":
+			if doc.SearchResult2 != nil {
+				list = doc.SearchResult2.Entities
+			}
+		case "searchResult":
+			if doc.SearchResult != nil {
+				list = doc.SearchResult.Entities
+			}
 		}
 		allEntities = append(allEntities, list...)
 	}
 
 	mergedEntities := mergeXMLEntities(allEntities, nil, maxArtists, maxAlbums, maxSongs, rawQuery, decorateTitles)
 
-	targetTag := xml.Name{Space: "http://subsonic.org/restapi", Local: "searchResult3"}
-	if !isSearch3 {
-		targetTag.Local = "searchResult2"
-	}
-
-	if isSearch3 {
+	targetTag := xml.Name{Space: "http://subsonic.org/restapi", Local: searchKind}
+	switch searchKind {
+	case "searchResult3":
 		baseDoc.SearchResult3 = &SubsonicXMLSearchResult{
 			XMLName:  targetTag,
 			Entities: mergedEntities,
 		}
-	} else {
+	case "searchResult2":
 		baseDoc.SearchResult2 = &SubsonicXMLSearchResult{
+			XMLName:  targetTag,
+			Entities: mergedEntities,
+		}
+	case "searchResult":
+		baseDoc.SearchResult = &SubsonicXMLSearchResult{
 			XMLName:  targetTag,
 			Entities: mergedEntities,
 		}

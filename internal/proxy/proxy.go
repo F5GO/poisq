@@ -80,9 +80,12 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 		if err := AdvertisePoisqExtension(resp); err != nil {
 			return err
 		}
+		captureSubsonicAuthOnSuccess(resp)
 		enrichArtistInfoResponseOnDemand(resp, srv.biographies, srv.bioJobs, srv.bioWait)
 		if origin := resp.Request.Header.Get("Origin"); origin != "" {
 			setCORS(resp.Header, origin)
+		} else {
+			resp.Header.Add("Vary", "Origin")
 		}
 		return nil
 	}
@@ -139,6 +142,7 @@ func setCORS(h http.Header, origin string) {
 	h.Set("Access-Control-Allow-Credentials", "true")
 	h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
 	h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-ND-Client-Unique-Id, X-ND-Authorization")
+	h.Add("Vary", "Origin")
 }
 
 // CleanHost очищает строку хоста от порта и от запятых (в случае нескольких прокси в цепочке CDN/NPM/FRP).
@@ -153,16 +157,20 @@ func CleanHost(rawHost string) string {
 	return strings.TrimSpace(rawHost)
 }
 
-// ExtractClientHost определяет реальный домен клиента, приоритезируя Origin/Referer браузера и CDN-заголовки.
+// ExtractClientHost определяет реальный домен клиента из X-Forwarded-Host или req.Host,
+// не позволяя внешним заголовкам Origin/Referer подменять Host при прямых запросах.
 func ExtractClientHost(req *http.Request) string {
-	if origin := req.Header.Get("Origin"); origin != "" {
-		if u, err := url.Parse(origin); err == nil && u.Host != "" {
-			return CleanHost(u.Host)
-		}
-	}
 	if xfh := req.Header.Get("X-Forwarded-Host"); xfh != "" {
 		if cleaned := CleanHost(xfh); cleaned != "" {
 			return cleaned
+		}
+	}
+	if h := CleanHost(req.Host); h != "" {
+		return h
+	}
+	if origin := req.Header.Get("Origin"); origin != "" {
+		if u, err := url.Parse(origin); err == nil && u.Host != "" {
+			return CleanHost(u.Host)
 		}
 	}
 	if referer := req.Header.Get("Referer"); referer != "" {
@@ -170,7 +178,7 @@ func ExtractClientHost(req *http.Request) string {
 			return CleanHost(u.Host)
 		}
 	}
-	return CleanHost(req.Host)
+	return ""
 }
 
 // ExtractClientIP извлекает реальный IP клиента с учетом заголовков Cloudflare, Nginx и CDN.

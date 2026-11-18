@@ -48,6 +48,7 @@ type TokenEntry struct {
 // Dictionary инкапсулирует словарь слов и фраз медиатеки с потокобезопасным обновлением.
 type Dictionary struct {
 	mu            sync.RWMutex
+	version       uint64
 	trie          *Trie
 	exactMap      map[string]TokenEntry
 	tokensByLen   map[int][]TokenEntry
@@ -194,7 +195,15 @@ func (d *Dictionary) Rebuild(items []DictItem) {
 	d.tokensByLen = newTokensByLen
 	d.tokensByRune = newTokensByRune
 	d.canonicalSet = newCanonicalSet
+	d.version++
 	d.mu.Unlock()
+}
+
+// Version возвращает монотонно растущую эпоху словаря для инвалидации кэша движка.
+func (d *Dictionary) Version() uint64 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.version
 }
 
 // UpdateAliases обновляет активную таблицу алиасов и перестраивает словарь на лету.
@@ -325,16 +334,13 @@ func (d *Dictionary) FindFuzzyPrefix(queryToken string, maxDistance int) (TokenE
 		return bestEntry, bestDist, true
 	}
 
-	// 2. Если ничего не найдено, проверяем остальные буквы (на случай опечатки в 1-м символе)
-	if bestWeight == -1 && maxDistance >= 1 {
+	// 2. Если не найдено совпадение с расстоянием <= 1, проверяем остальные буквы (на случай опечатки в 1-м символе)
+	if bestDist > 1 && maxDistance >= 1 {
 		for r, candidates := range d.tokensByRune {
 			if r == firstRune {
 				continue
 			}
 			checkCandidates(candidates)
-			if bestWeight != -1 && bestDist == 1 {
-				break
-			}
 		}
 	}
 

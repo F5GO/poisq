@@ -31,6 +31,11 @@ type ResilientClient struct {
 	restrictedHost   string
 }
 
+var (
+	errRedirectLimit    = errors.New("redirect limit exceeded")
+	errRedirectRejected = errors.New("redirect rejected by origin policy")
+)
+
 // RestrictOrigin pins initial requests and redirects to one origin. Configure it before the first request.
 func (rc *ResilientClient) RestrictOrigin(origin string) error {
 	if rc == nil || rc.client == nil {
@@ -47,10 +52,10 @@ func (rc *ResilientClient) RestrictOrigin(origin string) error {
 	rc.restrictedHost = strings.ToLower(parsed.Host)
 	rc.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
-			return errors.New("redirect limit exceeded")
+			return errRedirectLimit
 		}
 		if !rc.urlAllowed(req.URL) {
-			return errors.New("redirect rejected by origin policy")
+			return errRedirectRejected
 		}
 		return nil
 	}
@@ -99,6 +104,7 @@ func (rc *ResilientClient) DoWithRetry(ctx context.Context, buildReq func() (*ht
 
 	release, err := rc.limiter.Wait(ctx)
 	if err != nil {
+		rc.breaker.ReleaseHalfOpen()
 		return nil, 0, nil, err
 	}
 	defer release()
@@ -108,21 +114,33 @@ func (rc *ResilientClient) DoWithRetry(ctx context.Context, buildReq func() (*ht
 
 	for attempt := 1; attempt <= rc.maxRetries; attempt++ {
 		if ctx.Err() != nil {
+			rc.breaker.ReleaseHalfOpen()
 			return nil, 0, nil, ctx.Err()
 		}
 
 		req, err := buildReq()
 		if err != nil {
+			rc.breaker.ReleaseHalfOpen()
 			return nil, 0, nil, err
 		}
 		if !rc.urlAllowed(req.URL) {
+			rc.breaker.ReleaseHalfOpen()
 			return nil, 0, nil, errors.New("request rejected by origin policy")
 		}
 
 		resp, err := rc.client.Do(req.WithContext(ctx))
 		if err != nil {
 			if ctx.Err() != nil {
+				rc.breaker.ReleaseHalfOpen()
 				return nil, 0, nil, ctx.Err()
+			}
+			if errors.Is(err, errRedirectRejected) || strings.Contains(err.Error(), "redirect rejected") {
+				rc.breaker.ReleaseHalfOpen()
+				return nil, 0, nil, errRedirectRejected
+			}
+			if errors.Is(err, errRedirectLimit) {
+				rc.breaker.ReleaseHalfOpen()
+				return nil, 0, nil, errRedirectLimit
 			}
 			lastErr = errors.New("HTTP request failed")
 			if attempt == rc.maxRetries {
@@ -137,8 +155,8 @@ func (rc *ResilientClient) DoWithRetry(ctx context.Context, buildReq func() (*ht
 		_ = resp.Body.Close()
 		lastStatus = resp.StatusCode
 		if readErr == nil && int64(len(body)) > rc.maxBytes {
-			readErr = errors.New("HTTP response exceeds size limit")
-			body = nil
+			rc.breaker.ReleaseHalfOpen()
+			return nil, lastStatus, nil, errors.New("HTTP response exceeds size limit")
 		}
 
 		if readErr != nil {
@@ -152,7 +170,7 @@ func (rc *ResilientClient) DoWithRetry(ctx context.Context, buildReq func() (*ht
 		}
 
 		// Серверные сбои 5xx или временные 429 — кандидаты на ретрай
-		if resp.StatusCode >= 500 {
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			if attempt == rc.maxRetries {
 				rc.breaker.RecordFailure()

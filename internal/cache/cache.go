@@ -61,7 +61,9 @@ func (c *MemoryCache) Get(key string) ([]byte, http.Header, int, bool) {
 
 	if time.Now().After(item.ExpiresAt) {
 		c.mu.Lock()
-		delete(c.items, key)
+		if cur, exists := c.items[key]; exists && time.Now().After(cur.ExpiresAt) {
+			delete(c.items, key)
+		}
 		c.mu.Unlock()
 		return nil, nil, 0, false
 	}

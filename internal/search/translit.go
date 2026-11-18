@@ -18,11 +18,11 @@ var ruToEnCharMap = map[rune]string{
 	'ъ': "", 'ы': "y", 'ь': "", 'э': "e", 'ю': "yu", 'я': "ya",
 }
 
-var enToRuCharMap = map[rune]rune{
-	'a': 'а', 'b': 'б', 'c': 'к', 'd': 'д', 'e': 'е', 'f': 'ф', 'g': 'г',
-	'h': 'х', 'i': 'и', 'j': 'ж', 'k': 'к', 'l': 'л', 'm': 'м', 'n': 'н',
-	'o': 'о', 'p': 'п', 'q': 'к', 'r': 'р', 's': 'с', 't': 'т', 'u': 'у',
-	'v': 'в', 'w': 'в', 'x': 'к', 'y': 'и', 'z': 'з',
+var enToRuCharMap = map[rune]string{
+	'a': "а", 'b': "б", 'c': "к", 'd': "д", 'e': "е", 'f': "ф", 'g': "г",
+	'h': "х", 'i': "и", 'j': "ж", 'k': "к", 'l': "л", 'm': "м", 'n': "н",
+	'o': "о", 'p': "п", 'q': "к", 'r': "р", 's': "с", 't': "т", 'u': "у",
+	'v': "в", 'w': "в", 'x': "кс", 'y': "и", 'z': "з",
 }
 
 // TransliterateRuToEn переводит русский текст в латиницу с учетом музыкальных и фонетических особенностей.
@@ -82,7 +82,7 @@ func TransliterateEnToRu(input string) string {
 		}
 
 		if ru, ok := enToRuCharMap[r]; ok {
-			sb.WriteRune(ru)
+			sb.WriteString(ru)
 		} else {
 			sb.WriteRune(r)
 		}

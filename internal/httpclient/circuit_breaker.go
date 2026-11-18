@@ -23,6 +23,7 @@ type CircuitBreaker struct {
 	openDuration     time.Duration
 	failures         int
 	openUntil        time.Time
+	halfOpenInFlight bool
 }
 
 // NewCircuitBreaker создает новый автоматический выключатель (по умолчанию: 3 сбоя -> пауза 3 минуты).
@@ -45,12 +46,16 @@ func (cb *CircuitBreaker) Allow() bool {
 	defer cb.mu.Unlock()
 
 	if cb.openUntil.IsZero() {
-		return true
+		return !cb.halfOpenInFlight
 	}
 	if time.Now().After(cb.openUntil) {
-		// Переход в Half-Open: пробуем пропустить запрос
+		// Переход в Half-Open: пропускаем строго один пробный запрос
+		if cb.halfOpenInFlight {
+			return false
+		}
 		cb.openUntil = time.Time{}
 		cb.failures = cb.failureThreshold - 1
+		cb.halfOpenInFlight = true
 		return true
 	}
 	return false
@@ -62,6 +67,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 	defer cb.mu.Unlock()
 	cb.failures = 0
 	cb.openUntil = time.Time{}
+	cb.halfOpenInFlight = false
 }
 
 // RecordFailure регистрирует сетевой сбой или ошибку 5xx и при достижении порога размыкает цепь на 3 минуты.
@@ -70,12 +76,23 @@ func (cb *CircuitBreaker) RecordFailure() bool {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
+	cb.halfOpenInFlight = false
 	cb.failures++
 	if cb.failures >= cb.failureThreshold {
 		cb.openUntil = time.Now().Add(cb.openDuration)
 		return true
 	}
 	return false
+}
+
+// ReleaseHalfOpen освобождает слот пробного запроса без учёта ошибки (например, при отмене или локальной политике).
+func (cb *CircuitBreaker) ReleaseHalfOpen() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if cb.halfOpenInFlight {
+		cb.halfOpenInFlight = false
+		cb.openUntil = time.Now().Add(cb.openDuration)
+	}
 }
 
 // OpenFor возвращает, сколько времени источник еще будет отключен (0 — цепь замкнута).

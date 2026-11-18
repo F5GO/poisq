@@ -9,8 +9,11 @@
 package proxy
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 )
 
@@ -30,40 +33,112 @@ func CaptureSubsonicAuth(req *http.Request) {
 	if req == nil {
 		return
 	}
-	q := req.URL.Query()
+	captureSubsonicAuthFromValues(req.URL.Query(), req.Header.Get("X-ND-Authorization"))
+}
+
+// captureSubsonicAuthFromValues сохраняет авторизационные параметры из query/form и/или заголовка X-ND-Authorization,
+// не смешивая между собой разные схемы и сессии авторизации.
+func captureSubsonicAuthFromValues(q url.Values, ndAuth string) {
 	u := q.Get("u")
 	t := q.Get("t")
 	s := q.Get("s")
 	p := q.Get("p")
-	ndAuth := req.Header.Get("X-ND-Authorization")
+	apiKey := q.Get("apiKey")
 
-	if (u != "" && (t != "" || p != "")) || ndAuth != "" {
-		globalAuthCache.mu.Lock()
-		if u != "" {
-			// Набор заменяется целиком: иначе u одного клиента смешается с t/s другого, и Navidrome отклонит такой вход.
-			fresh := url.Values{"u": {u}}
+	hasSubsonicAuth := (u != "" && (t != "" || p != "")) || apiKey != ""
+	if !hasSubsonicAuth && ndAuth == "" {
+		return
+	}
+
+	globalAuthCache.mu.Lock()
+	defer globalAuthCache.mu.Unlock()
+
+	if hasSubsonicAuth {
+		// Набор заменяется целиком: иначе u одного клиента смешается с t/s или X-ND-Authorization другого.
+		fresh := url.Values{}
+		if apiKey != "" {
+			fresh.Set("apiKey", apiKey)
+		} else {
+			fresh.Set("u", u)
 			if t != "" {
 				fresh.Set("t", t)
 				fresh.Set("s", s)
 			} else {
 				fresh.Set("p", p)
 			}
-			v := q.Get("v")
-			if v == "" {
-				v = "1.16.1"
-			}
-			fresh.Set("v", v)
-			c := q.Get("c")
-			if c == "" {
-				c = "poisq"
-			}
-			fresh.Set("c", c)
-			globalAuthCache.query = fresh
 		}
-		if ndAuth != "" {
-			globalAuthCache.ndAuth = ndAuth
+		v := q.Get("v")
+		if v == "" {
+			v = "1.16.1"
 		}
-		globalAuthCache.mu.Unlock()
+		fresh.Set("v", v)
+		c := q.Get("c")
+		if c == "" {
+			c = "poisq"
+		}
+		fresh.Set("c", c)
+		globalAuthCache.query = fresh
+		globalAuthCache.ndAuth = ""
+		return
+	}
+
+	if ndAuth != "" {
+		globalAuthCache.ndAuth = ndAuth
+		globalAuthCache.query = nil
+	}
+}
+
+// captureSubsonicAuthOnSuccess сохраняет авторизационные данные только после подтверждения
+// их валидности успешным ответом от Navidrome (HTTP 200 и отсутствие status="failed").
+func captureSubsonicAuthOnSuccess(resp *http.Response) {
+	if resp == nil || resp.Request == nil || resp.StatusCode != http.StatusOK {
+		return
+	}
+	req := resp.Request
+	q := req.URL.Query()
+	hasQueryCreds := (q.Get("u") != "" && (q.Get("t") != "" || q.Get("p") != "")) || q.Get("apiKey") != ""
+	ndAuth := req.Header.Get("X-ND-Authorization")
+	if !hasQueryCreds && ndAuth == "" {
+		return
+	}
+
+	path := strings.ToLower(req.URL.Path)
+	if strings.HasPrefix(path, "/api/") {
+		captureSubsonicAuthFromValues(q, ndAuth)
+		return
+	}
+
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.HasPrefix(ct, "audio/") || strings.HasPrefix(ct, "video/") ||
+		strings.HasPrefix(ct, "image/") || strings.Contains(ct, "octet-stream") {
+		captureSubsonicAuthFromValues(q, ndAuth)
+		return
+	}
+
+	if resp.Body == nil || resp.Header.Get("Content-Encoding") != "" {
+		return
+	}
+
+	origBody := resp.Body
+	prefix, readErr := io.ReadAll(io.LimitReader(origBody, 1024))
+	resp.Body = &prefixedReadCloser{
+		Reader: io.MultiReader(bytes.NewReader(prefix), origBody),
+		Closer: origBody,
+	}
+	if readErr != nil && len(prefix) == 0 {
+		return
+	}
+
+	low := strings.ToLower(string(prefix))
+	if strings.Contains(low, `"status":"failed"`) ||
+		strings.Contains(low, `"status": "failed"`) ||
+		strings.Contains(low, `status="failed"`) {
+		return
+	}
+	if strings.Contains(low, `"status":"ok"`) ||
+		strings.Contains(low, `"status": "ok"`) ||
+		strings.Contains(low, `status="ok"`) {
+		captureSubsonicAuthFromValues(q, ndAuth)
 	}
 }
 

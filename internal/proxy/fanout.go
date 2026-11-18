@@ -84,21 +84,29 @@ func (f *FanoutManager) ExecuteMultiFanout(w http.ResponseWriter, req *http.Requ
 	artistCount := parseCount(origQuery.Get("artistCount"))
 	albumCount := parseCount(origQuery.Get("albumCount"))
 	songCount := parseCount(origQuery.Get("songCount"))
+	artistOffset := origQuery.Get("artistOffset")
+	albumOffset := origQuery.Get("albumOffset")
+	songOffset := origQuery.Get("songOffset")
+	musicFolderID := origQuery.Get("musicFolderId")
+	callback := origQuery.Get("callback")
 	format := strings.ToLower(origQuery.Get("f"))
+	normPath := strings.ToLower(req.URL.Path)
 
-	cacheKey := fmt.Sprintf("%s|%s|%s|%s|%d|%d|%d|%v|%s",
-		req.Method, strings.Join(queries, "##"), format, authKey(req), artistCount, albumCount, songCount, decorateTitles, rawQuery)
+	cacheKey := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%d|%d|%s|%s|%s|%s|%s|%v|%s",
+		req.Method, normPath, strings.Join(queries, "##"), format, authKey(req),
+		artistCount, albumCount, songCount, artistOffset, albumOffset, songOffset, musicFolderID, callback, decorateTitles, rawQuery)
 
 	// 1. Проверяем кэш в оперативной памяти (ответ за <0.05ms)
 	if f.cache != nil {
 		if cachedBody, cachedHdr, cachedCode, ok := f.cache.Get(cacheKey); ok {
 			isJSON := strings.Contains(strings.ToLower(cachedHdr.Get("Content-Type")), "json")
 			log.Printf("[CACHE-HIT] queries=%v (%d bytes) [0.05ms]", queries, len(cachedBody))
-			f.writeResponse(w, cachedBody, cachedCode, cachedHdr, isJSON)
+			f.writeResponse(w, req, cachedBody, cachedCode, cachedHdr, isJSON)
 			return
 		}
 	}
 
+	var shouldCache bool
 	fetchAndMerge := func() ([]byte, http.Header, int, bool, error) {
 		ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
 		defer cancel()
@@ -162,13 +170,14 @@ func (f *FanoutManager) ExecuteMultiFanout(w http.ResponseWriter, req *http.Requ
 		}
 
 		if mergeErr != nil || len(merged) == 0 {
-			// В случае ошибки слияния отдаем первый успешный ответ
+			// В случае ошибки слияния (например, все ответы имели status="failed") отдаем первый ответ и не кэшируем.
 			for i := 0; i < n; i++ {
 				if len(responses[i]) > 0 {
 					return responses[i], headersList[i], codes[i], isJSON, nil
 				}
 			}
 		}
+		shouldCache = true
 
 		log.Printf("[MULTI-FANOUT] queries=%v -> merged=%d bytes (isJSON=%v, code=%d)",
 			queries, len(merged), isJSON, firstValidCode)
@@ -216,12 +225,15 @@ func (f *FanoutManager) ExecuteMultiFanout(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	// 3. Сохраняем в кэш на 30 секунд для мгновенных повторных ответов
-	if f.cache != nil && mergedCode == http.StatusOK {
-		f.cache.Set(cacheKey, merged, mergedHeaders, mergedCode, 30*time.Second)
+	// 3. Сохраняем в кэш и обновляем кеш авторизации только для подтверждённого status="ok" ответа
+	if shouldCache && mergedCode == http.StatusOK {
+		CaptureSubsonicAuth(req)
+		if f.cache != nil {
+			f.cache.Set(cacheKey, merged, mergedHeaders, mergedCode, 30*time.Second)
+		}
 	}
 
-	f.writeResponse(w, merged, mergedCode, mergedHeaders, isJSON)
+	f.writeResponse(w, req, merged, mergedCode, mergedHeaders, isJSON)
 }
 
 func singleJoiningSlash(a, b string) string {
@@ -320,17 +332,26 @@ func (f *FanoutManager) fetchSubsonic(ctx context.Context, origReq *http.Request
 	return body, resp.StatusCode, resp.Header, nil
 }
 
-func (f *FanoutManager) writeResponse(w http.ResponseWriter, body []byte, statusCode int, upstreamHeaders http.Header, isJSON bool) {
-	// Проксируем метаданные от Navidrome (CORS, кэш, Subsonic метаданные), исключая hop-by-hop заголовки
+func (f *FanoutManager) writeResponse(w http.ResponseWriter, req *http.Request, body []byte, statusCode int, upstreamHeaders http.Header, isJSON bool) {
+	// Проксируем метаданные от Navidrome, исключая hop-by-hop заголовки и закэшированные CORS-заголовки
 	if upstreamHeaders != nil {
 		for key, values := range upstreamHeaders {
 			lowerKey := strings.ToLower(key)
-			if hopByHopHeaders[lowerKey] || strings.EqualFold(key, "Content-Type") {
+			if hopByHopHeaders[lowerKey] || strings.EqualFold(key, "Content-Type") ||
+				strings.HasPrefix(lowerKey, "access-control-") || lowerKey == "vary" {
 				continue
 			}
 			for _, v := range values {
 				w.Header().Add(key, v)
 			}
+		}
+	}
+
+	if req != nil {
+		if origin := req.Header.Get("Origin"); origin != "" {
+			setCORS(w.Header(), origin)
+		} else {
+			w.Header().Add("Vary", "Origin")
 		}
 	}
 
