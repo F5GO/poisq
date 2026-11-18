@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -25,6 +26,31 @@ type Server struct {
 	biographies effectiveBiographyReader
 	bioJobs     biographyRequester
 	bioWait     time.Duration
+	trusted     []netip.Prefix // обратные прокси, чьим заголовкам о клиенте верим; пусто — никому
+}
+
+// SetTrustedProxies задаёт адреса обратных прокси. Вызывать до запуска HTTP-сервера.
+func (s *Server) SetTrustedProxies(prefixes []netip.Prefix) { s.trusted = prefixes }
+
+// clientSuppliedHeaders описывают клиента (IP, хост, схему, вход по заголовку в Navidrome).
+// От прямого клиента их убираем: иначе он подменит IP или войдёт в Navidrome под чужим именем через Remote-User.
+var clientSuppliedHeaders = []string{
+	"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port", "X-Forwarded-Ssl",
+	"X-Real-IP", "True-Client-IP", "CF-Connecting-IP", "CF-Visitor", "Remote-User",
+}
+
+func (s *Server) trustedPeer(remoteAddr string) bool {
+	ap, err := netip.ParseAddrPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	addr := ap.Addr().Unmap()
+	for _, p := range s.trusted {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetCast подключает эндпоинты трансляции. Вызывать до запуска HTTP-сервера.
@@ -80,7 +106,6 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 		if err := AdvertisePoisqExtension(resp); err != nil {
 			return err
 		}
-		captureSubsonicAuthOnSuccess(resp)
 		enrichArtistInfoResponseOnDemand(resp, srv.biographies, srv.bioJobs, srv.bioWait)
 		if origin := resp.Request.Header.Get("Origin"); origin != "" {
 			setCORS(resp.Header, origin)
@@ -137,9 +162,11 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 }
 
 // setCORS разрешает браузерному клиенту с этого Origin работать с прокси (ответы и preflight).
+// Без Allow-Credentials: вход идёт параметрами u/t/s или заголовком X-ND-Authorization, cookie не нужны,
+// а чужой сайт не сможет читать ответы от имени браузера пользователя.
 func setCORS(h http.Header, origin string) {
 	h.Set("Access-Control-Allow-Origin", origin)
-	h.Set("Access-Control-Allow-Credentials", "true")
+	h.Del("Access-Control-Allow-Credentials") // Navidrome мог прислать свой
 	h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
 	h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-ND-Client-Unique-Id, X-ND-Authorization")
 	h.Add("Vary", "Origin")
@@ -240,5 +267,10 @@ func SetupDirector(targetURL *url.URL, originalDirector func(*http.Request)) fun
 
 // ServeHTTP реализует интерфейс http.Handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !s.trustedPeer(r.RemoteAddr) {
+		for _, h := range clientSuppliedHeaders {
+			r.Header.Del(h)
+		}
+	}
 	s.handler.ServeHTTP(w, r)
 }

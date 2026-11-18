@@ -49,7 +49,6 @@ ENV LISTEN_ADDR=":4534" \
     POISQ_DB_PATH="/data/poisq.db" \
     MUSIC_PATH="/music" \
     SYNC_INTERVAL="2m" \
-    ENRICH_SQLITE_FULLTEXT="true" \
     LOG_LEVEL="info"
 
 ENTRYPOINT ["/app/poisq"]

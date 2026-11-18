@@ -499,6 +499,37 @@
           </div>
         </form>
       </div>
+
+      <div class="cast-card">
+        <div class="cast-card-header">
+          <div>
+            <h2 class="cast-section-title cast-title-inline">Служебная учётная запись Navidrome</h2>
+            <p class="panel-desc">
+              Studio берёт из Navidrome аудиопоток, если файла нет в папке с музыкой, и обложки или фото артистов, которых нет на диске и в кэше Navidrome. Создайте в Navidrome отдельного пользователя без прав администратора и укажите его здесь.
+            </p>
+          </div>
+          <span id="navidrome-account-badge" class="badge badge-muted">Проверка...</span>
+        </div>
+
+        <form id="form-navidrome-account" class="cast-form" autocomplete="off">
+          <div class="cast-grid">
+            <div class="form-group">
+              <label class="form-label" for="navidrome-username">Имя пользователя</label>
+              <input type="text" id="navidrome-username" class="form-input mono" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="navidrome-password">Пароль</label>
+              <input type="password" id="navidrome-password" class="form-input mono" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" />
+              <span class="form-hint">Шифруется AES-256-GCM. Без учётной записи эти запасные пути просто не используются.</span>
+            </div>
+          </div>
+          <div class="cast-footer">
+            <p id="navidrome-account-status" class="form-hint cast-status-text" role="status"></p>
+            <button type="button" class="btn btn-secondary hidden" id="btn-clear-navidrome-account">Удалить</button>
+            <button type="submit" class="btn btn-primary" id="btn-save-navidrome-account">Проверить и сохранить</button>
+          </div>
+        </form>
+      </div>
     </section>
 
   </main>

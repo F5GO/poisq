@@ -191,6 +191,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initDrawer();
   initKeyModal();
   initCastForm();
+  initNavidromeAccountForm();
   initBiographyStudio();
   loadLibraryData();
   loadKeysData();
@@ -308,6 +309,7 @@ function switchTab(tabName) {
   if (tabName === "keys") {
     loadKeysData();
     loadCastSettings();
+    loadNavidromeAccount();
   }
 }
 
@@ -2842,7 +2844,7 @@ async function loadKeysData() {
     state.keys = [];
   }
 
-  const poolKeys = state.keys.filter(k => k.provider !== "music_assistant");
+  const poolKeys = state.keys.filter(k => k.provider !== "music_assistant" && k.provider !== "navidrome");
   if (poolKeys.length === 0) {
     tbody.innerHTML = `<tr><td colspan="5" class="cell-empty">В пуле пока нет ключей. Нажмите «+ Добавить ключ» для подключения Groq Cloud, Яндекс Музыки или Tavily Search.</td></tr>`;
     return;
@@ -2865,6 +2867,8 @@ async function loadKeysData() {
       statusBadge = `<span class="text-amber">Исчерпан до 11:00 МСК</span>`;
     } else if (k.status === "invalid") {
       statusBadge = `<span class="text-crimson" style="color: var(--color-crimson);">Невалиден (401/403)</span>`;
+    } else if (k.status === "decrypt_error") {
+      statusBadge = `<span class="text-amber">Не расшифрован: проверьте POISQ_SECRET_KEY</span>`;
     }
 
     const providerTitle = providerNames[k.provider] || k.provider;
@@ -2939,6 +2943,48 @@ function initCastForm() {
     const res = await loadCastSettings(payload);
     if (res) showToast("Токен Music Assistant удален", "info");
   });
+}
+
+function initNavidromeAccountForm() {
+  const form = document.getElementById("form-navidrome-account");
+  form?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("btn-save-navidrome-account");
+    if (btn) btn.disabled = true;
+    const res = await loadNavidromeAccount({
+      username: document.getElementById("navidrome-username")?.value.trim() || "",
+      password: document.getElementById("navidrome-password")?.value || ""
+    });
+    if (btn) btn.disabled = false;
+    if (res) showToast("✓ Учётная запись Navidrome сохранена", "success");
+  });
+  document.getElementById("btn-clear-navidrome-account")?.addEventListener("click", async () => {
+    if (!confirm("Удалить служебную учётную запись Navidrome?")) return;
+    const res = await loadNavidromeAccount({ clear: true });
+    if (res) showToast("Учётная запись Navidrome удалена", "info");
+  });
+}
+
+async function loadNavidromeAccount(payload = null) {
+  const status = document.getElementById("navidrome-account-status");
+  const badge = document.getElementById("navidrome-account-badge");
+  if (!status) return null;
+  let res;
+  try {
+    res = payload ? await fetchApi("/navidrome/account", "POST", payload) : await fetchApi("/navidrome/account");
+  } catch (err) {
+    status.textContent = `Ошибка: ${err.message}`;
+    return null;
+  }
+  status.textContent = "";
+  document.getElementById("navidrome-password").value = "";
+  document.getElementById("navidrome-username").value = res.username || "";
+  document.getElementById("btn-clear-navidrome-account")?.classList.toggle("hidden", !res.configured);
+  if (badge) {
+    badge.className = res.configured ? "badge badge-success" : "badge badge-muted";
+    badge.textContent = res.configured ? "Задана" : "Не задана";
+  }
+  return res;
 }
 
 async function loadCastSettings(payload = null) {

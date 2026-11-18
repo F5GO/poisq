@@ -29,3 +29,19 @@ func TestBiographyFirstRequestWaitBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestTrustedProxies(t *testing.T) {
+	t.Setenv("TRUSTED_PROXIES", "10.0.0.0/8, 192.168.1.5, ::1")
+	cfg, err := Load()
+	if err != nil || len(cfg.TrustedProxies) != 3 || cfg.TrustedProxies[1].String() != "192.168.1.5/32" {
+		t.Fatalf("cfg=%v err=%v", cfg.TrustedProxies, err)
+	}
+	t.Setenv("TRUSTED_PROXIES", "none")
+	if cfg, err := Load(); err != nil || len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("none: %v %v", cfg.TrustedProxies, err)
+	}
+	t.Setenv("TRUSTED_PROXIES", "example.com")
+	if _, err := Load(); err == nil {
+		t.Fatal("мусор в TRUSTED_PROXIES должен останавливать запуск")
+	}
+}

@@ -18,23 +18,18 @@ import (
 
 // Белый список допустимых таблиц для исключения любых SQL-инъекций
 var allowedTables = map[string]bool{
-	"artist":            true,
-	"album":             true,
-	"media_file":        true,
-	"_poisq_enrichment": true,
+	"artist":     true,
+	"album":      true,
+	"media_file": true,
 }
 
 // Белый список допустимых столбцов для динамических запросов
 var allowedColumns = map[string]bool{
-	"id":            true,
-	"name":          true,
-	"title":         true,
-	"full_text":     true,
-	"play_count":    true,
-	"entity_table":  true,
-	"entity_id":     true,
-	"original_hash": true,
-	"enriched_at":   true,
+	"id":         true,
+	"name":       true,
+	"title":      true,
+	"full_text":  true,
+	"play_count": true,
 }
 
 // ValidateIdentifier проверяет имя таблицы или столбца по строгому белому списку разрешенных идентификаторов.

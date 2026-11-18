@@ -9,6 +9,7 @@ package admin
 
 import (
 	"database/sql"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -19,7 +20,6 @@ import (
 
 	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/metadata"
-	"github.com/F5GO/poisq/internal/proxy"
 )
 
 // SetNavidromeURL задает базовый URL сервера Navidrome (например, http://navidrome:4533)
@@ -420,22 +420,20 @@ func (s *AdminServer) tryServeFromNavidromeAPIOrCache(w http.ResponseWriter, r *
 		}
 	}
 
-	// 2. Запрашиваем у живого сервера Navidrome по HTTP
-	if s.navidromeURL == "" {
-		return false
-	}
+	// 2. Запрашиваем у живого сервера Navidrome по HTTP (от служебной учётной записи Studio)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	for _, idCandidate := range []string{coverArtID, rawID} {
 		if idCandidate == "" {
 			continue
 		}
-		u := s.navidromeURL + "/rest/getCoverArt?id=" + url.QueryEscape(idCandidate)
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
+		req, err := s.navidromeRequest(r.Context(), "getCoverArt", url.Values{"id": {idCandidate}})
+		if errors.Is(err, errNoNavidromeAccount) {
+			return false
+		}
 		if err != nil {
 			continue
 		}
-		proxy.ApplyCachedAuthToRequest(req)
 
 		resp, err := client.Do(req)
 		if err != nil {

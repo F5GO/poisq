@@ -133,7 +133,6 @@ services:
       MUSIC_PATH: "/music"
       POISQ_SECRET_KEY: "придумайте_секретный_ключ_для_шифрования_api_keys"
       SYNC_INTERVAL: "2m"
-      ENRICH_SQLITE_FULLTEXT: "true"
       LOG_LEVEL: "info"
     volumes:
       - navidrome_data:/data
@@ -208,7 +207,7 @@ docker compose up -d
 | `MUSIC_PATH` | `/music` | Корневая директория медиатеки (монтируется `:rw`) |
 | `POISQ_SECRET_KEY` | *(автогенерация)* | Секретный мастер-ключ для шифрования API-ключей (AES-256-GCM) |
 | `SYNC_INTERVAL` | `2m` | Интервал фоновой синхронизации словаря и треков |
-| `ENRICH_SQLITE_FULLTEXT`| `true` | Фоновое безопасное обогащение поиска в `navidrome.db` |
+| `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7` | Адреса обратных прокси (nginx, frpc, cloudflared), от которых poisq принимает `X-Forwarded-*`, `X-Real-IP`, `CF-*` и `Remote-User`. От остальных эти заголовки удаляются. `none` — не доверять никому |
 | `LOG_LEVEL` | `info` | Уровень логирования (`debug`, `info`, `warn`) |
 | `ENABLE_DEBUG_API` | `false` | Включение диагностических эндпоинтов `/_smart/*` на порту :4534 |
 | `ALIGNER_URL` | *(пусто)* | Адрес сервиса акустического выравнивания, например `http://aligner:4540`. Пусто — прежний облачный режим караоке |

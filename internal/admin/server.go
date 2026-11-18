@@ -117,6 +117,7 @@ func NewAdminServer(
 
 	mux.HandleFunc("/api/v1/keys", s.handleKeysAPI)
 	mux.HandleFunc("/api/v1/cast", s.handleCast)
+	mux.HandleFunc("/api/v1/navidrome/account", s.handleNavidromeAccount)
 	mux.HandleFunc("/api/v1/artist-biographies", s.handleArtistBiographies)
 	mux.HandleFunc("/api/v1/artist-biographies/detail", s.handleArtistBiographyDetail)
 	mux.HandleFunc("/api/v1/artist-biographies/reset", s.handleArtistBiographyReset)

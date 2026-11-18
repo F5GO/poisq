@@ -214,6 +214,7 @@ func main() {
 	}
 
 	proxyServer := proxy.NewServer(cfg.NavidromeURL, engine, dict, aliasMgr, cfg.EnableDebugAPI)
+	proxyServer.SetTrustedProxies(cfg.TrustedProxies)
 	proxyServer.SetCast(castService)
 	proxyServer.SetBiographyReader(bioStore)
 	proxyServer.SetBiographyCoordinator(bioCoordinator, cfg.BiographyFirstRequestWait)
@@ -276,11 +277,12 @@ func main() {
 	go func() {
 		defer syncWG.Done()
 		if sqliteDB, err := db.OpenDatabase(cfg.NavidromeDBPath); err == nil {
-			enricher := db.NewEnricher(sqliteDB, cfg.EnrichSQLiteFullText)
-			if err := enricher.InitSchema(); err != nil {
-				log.Printf("[WARN] Не удалось инициализировать схему обогатителя: %v", err)
+			if n, err := db.RemoveLegacyEnrichment(sqliteDB); err != nil {
+				log.Printf("[WARN] Не удалось убрать прежнее обогащение full_text из navidrome.db: %v", err)
+			} else if n > 0 {
+				log.Printf("[INFO] Из navidrome.db убраны вставки poisq в full_text (%d записей)", n)
 			}
-			syncData(ctx, sqliteDB, dict, enricher, libraryScanner, cfg)
+			syncData(sqliteDB, dict, libraryScanner)
 			_ = sqliteDB.Close()
 		}
 		runBackgroundSync(ctx, cfg, dict, libraryScanner)
@@ -301,9 +303,9 @@ func main() {
 	log.Println("[INFO] Сервис poisq успешно остановлен")
 }
 
-// syncData вычитывает свежие данные из базы Navidrome, обновляет поисковый словарь,
-// запускает обогащение full_text и синхронизирует список треков в poisq.db.
-func syncData(ctx context.Context, sqliteDB *sql.DB, dict *search.Dictionary, enricher *db.Enricher, scanner *metadata.LibraryScanner, cfg *config.Config) {
+// syncData вычитывает свежие данные из базы Navidrome (только чтение), обновляет поисковый словарь
+// и синхронизирует список треков в poisq.db.
+func syncData(sqliteDB *sql.DB, dict *search.Dictionary, scanner *metadata.LibraryScanner) {
 	if sqliteDB == nil {
 		return
 	}
@@ -316,10 +318,6 @@ func syncData(ctx context.Context, sqliteDB *sql.DB, dict *search.Dictionary, en
 		log.Printf("[INFO] Словарь успешно обновлен. Всего уникальных слов: %d", dict.TotalWords())
 	}
 
-	if enricher != nil && cfg.EnrichSQLiteFullText {
-		enricher.RunEnrichment()
-	}
-
 	if scanner != nil {
 		if synced, err := scanner.SyncFromNavidromeDB(sqliteDB); err == nil && synced > 0 {
 			log.Printf("[INFO] Каталог poisq.db синхронизирован с Navidrome (%d треков)", synced)
@@ -328,7 +326,7 @@ func syncData(ctx context.Context, sqliteDB *sql.DB, dict *search.Dictionary, en
 
 }
 
-// runBackgroundSync выполняет периодическое обновление словаря, обогащение базы и синхронизацию треков.
+// runBackgroundSync выполняет периодическое обновление словаря и синхронизацию треков.
 func runBackgroundSync(ctx context.Context, cfg *config.Config, dict *search.Dictionary, scanner *metadata.LibraryScanner) {
 	ticker := time.NewTicker(cfg.SyncInterval)
 	defer ticker.Stop()
@@ -344,10 +342,7 @@ func runBackgroundSync(ctx context.Context, cfg *config.Config, dict *search.Dic
 				continue
 			}
 
-			enricher := db.NewEnricher(sqliteDB, cfg.EnrichSQLiteFullText)
-			_ = enricher.InitSchema()
-
-			syncData(ctx, sqliteDB, dict, enricher, scanner, cfg)
+			syncData(sqliteDB, dict, scanner)
 			_ = sqliteDB.Close()
 		}
 	}

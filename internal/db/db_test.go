@@ -1,13 +1,12 @@
 // Package db отвечает за безопасное взаимодействие с базой данных SQLite Navidrome.
 //
 // Данный файл db_test.go содержит тесты загрузки словаря, схемы отслеживания изменений
-// и безопасного обогащения столбца full_text в таблицах artist, album, media_file.
+// и разовой очистки прежнего обогащения full_text в таблицах artist, album, media_file.
 package db
 
 import (
 	"database/sql"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -76,51 +75,46 @@ func TestEnricherAndLoader(t *testing.T) {
 		t.Errorf("Ожидалось 4 элемента в словаре, получено %d", len(items))
 	}
 
-	// 2. Тестируем Enricher
-	enricher := NewEnricher(db, true)
-	if err := enricher.InitSchema(); err != nil {
-		t.Fatalf("Ошибка InitSchema: %v", err)
-	}
+}
 
-	enricher.RunEnrichment()
-
-	// Проверяем, что в artist full_text добавились транслитерации
-	var ftOffspring string
-	err = db.QueryRow("SELECT full_text FROM artist WHERE id = 'art-1'").Scan(&ftOffspring)
+func TestRemoveLegacyEnrichment(t *testing.T) {
+	db, _ := createTestDB(t)
+	defer db.Close()
+	_, err := db.Exec(`
+		CREATE TABLE _poisq_enrichment (entity_table TEXT, entity_id TEXT, original_hash TEXT);
+		INSERT INTO artist (id, name, full_text) VALUES ('a1', 'Кино', 'кино русский рок [poisq: kino]');
+		INSERT INTO artist (id, name, full_text) VALUES ('a2', 'X', '[poisq: iks]');
+		INSERT INTO album (id, name, full_text) VALUES ('b1', 'Smash', 'smash offspring [ndss: smesh]');
+		INSERT INTO media_file (id, title, full_text) VALUES ('m1', 'Self Esteem', 'self esteem');
+	`)
 	if err != nil {
-		t.Fatalf("Ошибка чтения full_text Offspring: %v", err)
-	}
-	if !strings.Contains(ftOffspring, "[poisq:") || !strings.Contains(ftOffspring, "офспринг") {
-		t.Errorf("full_text Offspring не содержит транслитерации: %s", ftOffspring)
-	}
-
-	var ftKino string
-	err = db.QueryRow("SELECT full_text FROM artist WHERE id = 'art-2'").Scan(&ftKino)
-	if err != nil {
-		t.Fatalf("Ошибка чтения full_text Кино: %v", err)
-	}
-	if !strings.Contains(ftKino, "[poisq:") || !strings.Contains(ftKino, "kino") {
-		t.Errorf("full_text Кино не содержит транслитерации 'kino': %s", ftKino)
-	}
-
-	// 3. Тестируем идемпотентность (повторный прогон не должен ничего ломать или дублировать)
-	enricher.RunEnrichment()
-
-	var ftKinoSecond string
-	_ = db.QueryRow("SELECT full_text FROM artist WHERE id = 'art-2'").Scan(&ftKinoSecond)
-	if strings.Count(ftKinoSecond, "[poisq:") != 1 {
-		t.Errorf("Маркер [poisq: сдублировался при повторном запуске: %s", ftKinoSecond)
-	}
-
-	// 4. Navidrome пересобрал full_text (файл изменился, название то же) — вставка должна вернуться
-	if _, err := db.Exec("UPDATE artist SET full_text = 'кино русский рок' WHERE id = 'art-2'"); err != nil {
 		t.Fatal(err)
 	}
-	enricher.RunEnrichment()
-	var ftKinoRewritten string
-	_ = db.QueryRow("SELECT full_text FROM artist WHERE id = 'art-2'").Scan(&ftKinoRewritten)
-	if !strings.Contains(ftKinoRewritten, "[poisq:") {
-		t.Errorf("после пересборки full_text вставка poisq не вернулась: %s", ftKinoRewritten)
+
+	n, err := RemoveLegacyEnrichment(db)
+	if err != nil || n != 3 {
+		t.Fatalf("очищено %d записей, ошибка %v; ждали 3", n, err)
+	}
+	for id, want := range map[string]string{"a1": "кино русский рок", "a2": ""} {
+		var got string
+		_ = db.QueryRow(`SELECT full_text FROM artist WHERE id = ?`, id).Scan(&got)
+		if got != want {
+			t.Errorf("artist %s: full_text=%q, ждали %q", id, got, want)
+		}
+	}
+	var album, track string
+	_ = db.QueryRow(`SELECT full_text FROM album WHERE id = 'b1'`).Scan(&album)
+	_ = db.QueryRow(`SELECT full_text FROM media_file WHERE id = 'm1'`).Scan(&track)
+	if album != "smash offspring" || track != "self esteem" {
+		t.Errorf("album=%q track=%q", album, track)
+	}
+
+	// таблица удалена: повторный запуск ничего не трогает
+	if _, err := db.Exec(`UPDATE artist SET full_text = 'ручной [poisq: x]' WHERE id = 'a1'`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := RemoveLegacyEnrichment(db); err != nil || n != 0 {
+		t.Fatalf("повторный запуск: %d, %v", n, err)
 	}
 }
 

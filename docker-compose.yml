@@ -38,10 +38,11 @@ services:
       POISQ_DB_PATH: "/data/poisq.db"
       MUSIC_PATH: "/music"
       SYNC_INTERVAL: "2m"
-      ENRICH_SQLITE_FULLTEXT: "true"
       LOG_LEVEL: "info"
       # Studio открывается по IP, localhost, имени без точки или *.local/*.lan; другое имя (например, за обратным прокси) — сюда через запятую
       # ADMIN_HOSTS: "studio.example.com"
+      # Обратные прокси, чьим заголовкам о клиенте (X-Forwarded-*, CF-*, Remote-User) верим. По умолчанию — локальные и частные сети
+      # TRUSTED_PROXIES: "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
       # Точный тайминг караоке через сервис выравнивания (профиль "aligner" ниже).
       # Включите, когда запустите сервис: docker compose --profile aligner up -d
       # ALIGNER_URL: "http://aligner:4540"

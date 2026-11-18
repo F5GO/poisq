@@ -18,7 +18,6 @@ import (
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/logger"
 	"github.com/F5GO/poisq/internal/metadata"
-	"github.com/F5GO/poisq/internal/proxy"
 )
 
 // handleTrackStream безопасно отдает аудиофайл браузеру с поддержкой Range-запросов
@@ -58,11 +57,9 @@ func (s *AdminServer) handleTrackStream(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Фоллбэк: проксируем аудиопоток напрямую из сервера Navidrome (/rest/stream?id=...)
-	if s.navidromeURL != "" {
-		streamURL := s.navidromeURL + "/rest/stream?id=" + url.QueryEscape(trackID)
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, streamURL, nil)
+	{
+		req, err := s.navidromeRequest(r.Context(), "stream", url.Values{"id": {trackID}})
 		if err == nil {
-			proxy.ApplyCachedAuthToRequest(req)
 			if rng := r.Header.Get("Range"); rng != "" {
 				req.Header.Set("Range", rng)
 			}

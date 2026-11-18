@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -498,14 +499,42 @@ func TestPostSearchFanoutKeepsBodyAuth(t *testing.T) {
 	}
 }
 
-// Вход одного клиента не смешивается с входом другого.
-func TestCapturedAuthIsReplacedWhole(t *testing.T) {
-	CaptureSubsonicAuth(httptest.NewRequest("GET", "/rest/ping?u=a&t=tok&s=salt", nil))
-	CaptureSubsonicAuth(httptest.NewRequest("GET", "/rest/ping?u=b&p=pass", nil))
-	req := httptest.NewRequest("GET", "/rest/getCoverArt?id=1", nil)
-	ApplyCachedAuthToRequest(req)
-	q := req.URL.Query()
-	if q.Get("u") != "b" || q.Get("p") != "pass" || q.Get("t") != "" || q.Get("s") != "" {
-		t.Fatalf("смешанный вход: %v", q)
+// Заголовки о клиенте верны только от своего обратного прокси; прямой клиент их не подменит.
+func TestClientSuppliedHeadersNeedTrustedPeer(t *testing.T) {
+	var got http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+	u, _ := reqGetURL(upstream.URL)
+	dict := search.NewDictionary()
+	srv := NewServer(u, search.NewEngine(dict), dict, search.NewAliasManager("", "", dict), false)
+	srv.SetTrustedProxies([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
+
+	send := func(remote string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/rest/ping", nil)
+		req.RemoteAddr = remote
+		req.Header.Set("Remote-User", "admin")
+		req.Header.Set("X-Real-IP", "1.2.3.4")
+		req.Header.Set("Origin", "https://evil.example")
+		rr := httptest.NewRecorder()
+		srv.ServeHTTP(rr, req)
+		return rr
+	}
+
+	rr := send("203.0.113.5:4444")
+	if got.Get("Remote-User") != "" || strings.Contains(got.Get("X-Forwarded-For"), "1.2.3.4") ||
+		!strings.Contains(got.Get("X-Forwarded-For"), "203.0.113.5") {
+		t.Fatalf("прямой клиент подменил заголовки: Remote-User=%q XFF=%q", got.Get("Remote-User"), got.Get("X-Forwarded-For"))
+	}
+	if rr.Header().Get("Access-Control-Allow-Credentials") != "" || rr.Header().Get("Access-Control-Allow-Origin") != "https://evil.example" {
+		t.Fatalf("CORS: %v", rr.Header())
+	}
+
+	send("10.1.2.3:4444")
+	if got.Get("Remote-User") != "admin" || !strings.Contains(got.Get("X-Forwarded-For"), "1.2.3.4") {
+		t.Fatalf("заголовки доверенного прокси потеряны: Remote-User=%q XFF=%q", got.Get("Remote-User"), got.Get("X-Forwarded-For"))
 	}
 }

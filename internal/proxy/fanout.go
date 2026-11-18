@@ -225,9 +225,8 @@ func (f *FanoutManager) ExecuteMultiFanout(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	// 3. Сохраняем в кэш и обновляем кеш авторизации только для подтверждённого status="ok" ответа
+	// 3. Сохраняем в кэш только подтверждённый status="ok" ответ
 	if shouldCache && mergedCode == http.StatusOK {
-		CaptureSubsonicAuth(req)
 		if f.cache != nil {
 			f.cache.Set(cacheKey, merged, mergedHeaders, mergedCode, 30*time.Second)
 		}

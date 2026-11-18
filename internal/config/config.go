@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"log"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -42,8 +43,8 @@ type Config struct {
 	// SyncInterval — интервал периодической синхронизации словаря и обогащения SQLite (по умолчанию 2m).
 	SyncInterval time.Duration
 
-	// EnrichSQLiteFullText — флаг включения безопасного обогащения столбца full_text в SQLite.
-	EnrichSQLiteFullText bool
+	// TrustedProxies — адреса обратных прокси (nginx, frpc, cloudflared), которым верим в заголовках X-Forwarded-*, CF-* и Remote-User.
+	TrustedProxies []netip.Prefix
 
 	// LogLevel — уровень логирования ("debug", "info", "warn").
 	LogLevel string
@@ -82,7 +83,7 @@ func Load() (*Config, error) {
 	musicPath := getEnv("MUSIC_PATH", "/music")
 	secretKey := getEnv("POISQ_SECRET_KEY", "")
 	rawSyncInterval := getEnv("SYNC_INTERVAL", "2m")
-	rawEnrich := getEnv("ENRICH_SQLITE_FULLTEXT", "true")
+	rawTrusted := getEnv("TRUSTED_PROXIES", "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7")
 	logLevel := strings.ToLower(getEnv("LOG_LEVEL", "info"))
 	aliasesFile := getEnv("ALIASES_FILE", "/data/aliases.json")
 	aliasesSyncURL := getEnv("ALIASES_SYNC_URL", "https://raw.githubusercontent.com/F5GO/poisq/main/aliases.json")
@@ -100,9 +101,9 @@ func Load() (*Config, error) {
 		syncInterval = 2 * time.Minute
 	}
 
-	enrichFullText, err := strconv.ParseBool(rawEnrich)
+	trustedProxies, err := parsePrefixes(rawTrusted)
 	if err != nil {
-		enrichFullText = true
+		return nil, fmt.Errorf("некорректный TRUSTED_PROXIES %q: %w", rawTrusted, err)
 	}
 
 	enableDebugAPI, err := strconv.ParseBool(rawDebugAPI)
@@ -124,7 +125,7 @@ func Load() (*Config, error) {
 		MusicPath:                 musicPath,
 		SecretKey:                 secretKey,
 		SyncInterval:              syncInterval,
-		EnrichSQLiteFullText:      enrichFullText,
+		TrustedProxies:            trustedProxies,
 		LogLevel:                  logLevel,
 		AliasesFile:               aliasesFile,
 		AliasesSyncURL:            aliasesSyncURL,
@@ -139,6 +140,27 @@ func Load() (*Config, error) {
 }
 
 // getEnv возвращает значение переменной окружения или defaultValue, если она не установлена.
+// parsePrefixes разбирает список подсетей и одиночных адресов через запятую; "none" — не доверять никому.
+func parsePrefixes(raw string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" || strings.EqualFold(part, "none") {
+			continue
+		}
+		if p, err := netip.ParsePrefix(part); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(part)
+		if err != nil {
+			return nil, fmt.Errorf("%q: ожидается адрес или подсеть", part)
+		}
+		out = append(out, netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen()))
+	}
+	return out, nil
+}
+
 func getEnv(key, defaultValue string) string {
 	if val, ok := os.LookupEnv(key); ok && strings.TrimSpace(val) != "" {
 		return strings.TrimSpace(val)
