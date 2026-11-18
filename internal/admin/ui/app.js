@@ -27,7 +27,7 @@
 
 // Глобальное состояние веб-интерфейса
 const state = {
-  activeTab: "library",
+  activeTab: null, // выставляет applyRoute по адресу страницы
   viewMode: "tracks",     // "tracks" | "artists" | "albums"
   filterMode: "all",      // "all" | "synced" | "plain" | "none" | "mojibake" | "no_cover"
   searchQuery: "",
@@ -193,7 +193,9 @@ document.addEventListener("DOMContentLoaded", () => {
   initCastForm();
   initNavidromeAccountForm();
   initBiographyStudio();
-  loadLibraryData();
+  window.addEventListener("popstate", applyRoute);
+  applyRoute();
+  if (state.activeTab !== "library") loadLibraryData(); // счётчики в шапке нужны на любой странице
   loadKeysData();
 });
 
@@ -211,13 +213,6 @@ function initTheme() {
       const newTheme = currentTheme === "dark" ? "light" : "dark";
       applyTheme(newTheme);
       localStorage.setItem("poisq_theme", newTheme);
-    });
-  }
-
-  const brandHomeLink = document.getElementById("brand-home-link");
-  if (brandHomeLink) {
-    brandHomeLink.addEventListener("click", () => {
-      switchTab("library");
     });
   }
 }
@@ -239,11 +234,12 @@ function applyTheme(theme) {
 // 1. Навигация и переключение вкладок
 // -----------------------------------------------------------------------------
 function initNavigation() {
-  document.querySelectorAll(".nav-tab").forEach(tab => {
-    tab.addEventListener("click", () => {
-      const tabName = tab.dataset.tab;
-      switchTab(tabName);
-    });
+  // Внутренние ссылки (шапка, подразделы настроек) меняют адрес без перезагрузки; Cmd/Ctrl-клик открывает новую вкладку как обычно.
+  document.addEventListener("click", (e) => {
+    const link = e.target.closest("a[href^='/']");
+    if (!link || link.target || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    navigate(link.getAttribute("href"));
   });
 
   // Действия в медиатеке
@@ -252,7 +248,6 @@ function initNavigation() {
 
   // Staging действия
   document.getElementById("btn-reset-db")?.addEventListener("click", resetFullDatabase);
-  document.getElementById("btn-rescan-audit")?.addEventListener("click", rescanStagingAudit);
   document.getElementById("btn-apply-all-staging")?.addEventListener("click", applyAllStaging);
   document.getElementById("btn-discard-all-staging")?.addEventListener("click", discardAllStaging);
   document.getElementById("btn-undo-staging")?.addEventListener("click", undoStaging);
@@ -277,10 +272,54 @@ function initNavigation() {
   initCoverLightboxEvents();
 }
 
+// Адреса страниц: первая часть пути → вкладка. /lyrics/<id> открывает трек, /settings/<раздел> — подраздел настроек.
+// Очередь задач живёт внутри «Текстов» (/lyrics/queue), поэтому в шапке подсвечиваются «Тексты».
+const ROUTE_TABS = { library: "library", lyrics: "karaoke", biographies: "biographies", fixes: "staging", settings: "keys" };
+const TAB_PATHS = { library: "/library", karaoke: "/lyrics", biographies: "/biographies", staging: "/fixes", jobs: "/lyrics/queue", keys: "/settings/keys" };
+const TAB_TITLES = { library: "Медиатека", karaoke: "Тексты", biographies: "Биографии", staging: "Исправления", jobs: "Очередь задач", keys: "Настройки" };
+const SETTINGS_SECTIONS = ["keys", "navidrome", "cast", "service"];
+
+function navigate(path, replace = false) {
+  if (location.pathname !== path) history[replace ? "replaceState" : "pushState"](null, "", path);
+  applyRoute();
+}
+
 function switchTab(tabName) {
+  navigate(TAB_PATHS[tabName] || "/library");
+}
+
+async function applyRoute() {
+  const parts = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  if (parts[0] === "jobs") return navigate("/lyrics/queue", true); // старый адрес очереди
+  let tab = ROUTE_TABS[parts[0]];
+  if (!tab) return navigate("/library", true);
+  if (tab === "karaoke" && parts[1] === "queue") tab = "jobs";
+
+  if (tab === "keys") {
+    if (!SETTINGS_SECTIONS.includes(parts[1])) return navigate("/settings/keys", true);
+    document.querySelectorAll("[data-settings-section]").forEach(el => { el.hidden = el.dataset.settingsSection !== parts[1]; });
+    document.querySelectorAll("[data-settings]").forEach(el => el.classList.toggle("active", el.dataset.settings === parts[1]));
+  }
+  document.title = `${TAB_TITLES[tab]} — poisq Studio`;
+
+  if (tab === "karaoke" && !parts[1] && state.selectedTrack) {
+    return navigate(`/lyrics/${encodeURIComponent(state.selectedTrack.id)}`, true);
+  }
+  if (tab === "karaoke" && parts[1] && parts[1] !== state.selectedTrack?.id) {
+    await openTrackInKaraoke(parts[1], true);
+    // Переход отменён (несохранённые правки) или трек не найден — адрес возвращаем к открытому треку.
+    if (state.selectedTrack?.id !== parts[1]) {
+      history.replaceState(null, "", state.selectedTrack ? `/lyrics/${encodeURIComponent(state.selectedTrack.id)}` : "/lyrics");
+    }
+  }
+  if (state.activeTab !== tab) activateTab(tab);
+}
+
+function activateTab(tabName) {
   state.activeTab = tabName;
+  const navTab = tabName === "jobs" ? "karaoke" : tabName;
   document.querySelectorAll(".nav-tab").forEach(tab => {
-    tab.classList.toggle("active", tab.dataset.tab === tabName);
+    tab.classList.toggle("active", tab.dataset.tab === navTab);
   });
 
   document.querySelectorAll(".tab-panel").forEach(panel => {
@@ -310,6 +349,7 @@ function switchTab(tabName) {
     loadKeysData();
     loadCastSettings();
     loadNavidromeAccount();
+    loadJobsData(); // состояние паузы воркера для «Обслуживания»
   }
 }
 
@@ -607,13 +647,12 @@ async function loadLibraryData() {
 
     const summary = document.getElementById("library-summary-desc");
     if (summary) {
-      summary.innerHTML = `Каталог <span class="mono text-light">/music</span> · ${total} треков · ${pct}% с синхронными LRC · ${stagingCount} в Staging`;
+      summary.innerHTML = `Каталог <span class="mono text-light">/music</span> · ${total} треков · ${pct}% с синхронными LRC · ${stagingCount} в исправлениях`;
     }
     const badgeStaging = document.getElementById("badge-staging-count");
     if (badgeStaging) badgeStaging.textContent = stagingCount;
 
-    const badgeJobs = document.getElementById("badge-jobs-count");
-    if (badgeJobs) badgeJobs.textContent = jobsCount;
+    setJobsCount(jobsCount);
 
     await loadTracks();
   } catch (err) {
@@ -1022,7 +1061,7 @@ async function saveTrackTags(trackId) {
 async function auditSingleTrack(trackId) {
   try {
     await fetchApi("/scan/audit", "POST", { trackId });
-    showToast("Проверка трека запущена в фоне — предложения появятся в Staging", "info");
+    showToast("Проверка трека запущена в фоне — предложения появятся в «Исправлениях»", "info");
     setTimeout(loadStagingData, 3000);
   } catch (err) {
     showToast(`Ошибка запуска проверки: ${err.message}`, "error");
@@ -1116,7 +1155,7 @@ function initPlayerControls() {
     closeWhisperModal();
     const hasGroq = (state.keys || []).some(k => k.provider === "groq" && k.status !== "invalid");
     if (!hasGroq) {
-      showToast("Для караоке Whisper требуется добавить бесплатный ключ Groq Cloud во вкладке «Ключи API».", "info");
+      showToast("Для караоке Whisper требуется добавить бесплатный ключ Groq Cloud в «Настройки → Ключи API».", "info");
       switchTab("keys");
       return;
     }
@@ -1183,7 +1222,7 @@ function renderKaraokeSidebar(filterText = "") {
   }).join("");
 }
 
-async function openTrackInKaraoke(trackId) {
+async function openTrackInKaraoke(trackId, fromRoute = false) {
   if (window.TimelineEditor && window.TimelineEditor.isDirty() &&
       state.selectedTrack && state.selectedTrack.id !== trackId &&
       !confirm("В редакторе таймингов есть несохранённые изменения. Перейти к другому треку без сохранения?")) {
@@ -1305,7 +1344,16 @@ async function openTrackInKaraoke(trackId) {
   renderLyricsTeleprompter();
   renderKaraokeSidebar();
   updatePlayerUI();
-  switchTab("karaoke");
+  // По треку уже идёт задача (например, вернулись на страницу) — сразу показываем её статус.
+  if (!karaokeJobPollTimer) {
+    fetchApi(`/jobs?trackId=${encodeURIComponent(track.id)}`).then(({ job }) => {
+      const active = job && ["pending", "running", "waiting_quota", "paused"].includes(job.status);
+      if (active && state.selectedTrack?.id === track.id && !karaokeJobPollTimer) {
+        startPollingKaraokeJob(track.id, "Проверяем статус задачи...");
+      }
+    }).catch(() => {});
+  }
+  if (!fromRoute) navigate(`/lyrics/${encodeURIComponent(track.id)}`);
 }
 
 function renderLyricsTeleprompter() {
@@ -1548,46 +1596,35 @@ function startPollingKaraokeJob(trackId, initialText) {
   }
 
   showKaraokeJobBanner(initialText);
+  const stop = (text, hideAfterMs) => {
+    clearInterval(karaokeJobPollTimer);
+    karaokeJobPollTimer = null;
+    if (text) showKaraokeJobBanner(text);
+    setTimeout(hideKaraokeJobBanner, hideAfterMs);
+  };
 
-  let attempts = 0;
+  // Опрашиваем, пока задача не завершится: караоке строится минуты, поэтому лимита по времени нет.
+  // Переход к другому треку останавливает опрос в openTrackInKaraoke.
   karaokeJobPollTimer = setInterval(async () => {
-    attempts++;
-    if (attempts > 60) {
-      clearInterval(karaokeJobPollTimer);
-      karaokeJobPollTimer = null;
-      hideKaraokeJobBanner();
-      return;
-    }
-
     try {
-      const res = await fetchApi("/jobs");
-      const jobs = res.jobs || [];
-      const job = jobs.find(j => j.trackId === trackId);
-
-      if (!job) return;
+      const { job } = await fetchApi(`/jobs?trackId=${encodeURIComponent(trackId)}`);
+      if (!job) return stop("", 0);
 
       if (job.status === "running") {
-        const liveMsg = job.errorLog || (job.jobType === "whisper_karaoke"
+        showKaraokeJobBanner(job.errorLog || (job.jobType === "whisper_karaoke"
           ? "Генерация пословных таймкодов караоке через AI Whisper..."
-          : "Сравнение текстов в турнире (LRCLIB, Yandex, Genius)...");
-        showKaraokeJobBanner(liveMsg);
+          : "Сравнение текстов в турнире (LRCLIB, Yandex, Genius)..."));
+      } else if (job.status === "pending") {
+        showKaraokeJobBanner("Задача в очереди, ждёт воркер...");
+      } else if (job.status === "waiting_quota") {
+        showKaraokeJobBanner(job.errorLog || "Ожидание освобождения API-ключей...");
+      } else if (job.status === "paused") {
+        showKaraokeJobBanner("Задача на паузе. Возобновить можно в очереди задач.");
       } else if (job.status === "done") {
-        clearInterval(karaokeJobPollTimer);
-        karaokeJobPollTimer = null;
-        showKaraokeJobBanner("✓ Текст успешно обновлен (Источник: poisq)!");
-
+        stop("✓ Текст успешно обновлен (Источник: poisq)!", 2500);
         await refreshCurrentKaraokeTrack(trackId);
-
-        setTimeout(() => {
-          hideKaraokeJobBanner();
-        }, 2500);
       } else if (job.status === "failed") {
-        clearInterval(karaokeJobPollTimer);
-        karaokeJobPollTimer = null;
-        showKaraokeJobBanner("Текст не найден или ошибка провайдера");
-        setTimeout(() => {
-          hideKaraokeJobBanner();
-        }, 3000);
+        stop(job.errorLog ? `Не получилось: ${job.errorLog}` : "Текст не найден или ошибка провайдера", 5000);
       }
     } catch (err) {
       console.warn("Ошибка опроса статуса задачи:", err);
@@ -1710,7 +1747,7 @@ async function enqueueWhisperKaraoke() {
 
   const hasGroq = (state.keys || []).some(k => k.provider === "groq" && k.status !== "invalid");
   if (!hasGroq) {
-    showToast("Для создания караоке Whisper требуется добавить ключ Groq Cloud во вкладке «Ключи API».", "info");
+    showToast("Для создания караоке Whisper требуется добавить ключ Groq Cloud в «Настройки → Ключи API».", "info");
     switchTab("keys");
     return;
   }
@@ -1748,7 +1785,7 @@ async function loadStagingData() {
   if (badgeStaging) badgeStaging.textContent = state.stagingItems.length;
 
   if (state.stagingItems.length === 0) {
-    container.innerHTML = `<div class="cell-empty">Очередь Staging пуста. Все теги каноничны. Нажмите «MusicBrainz аудит» для поиска предложений.</div>`;
+    container.innerHTML = `<div class="cell-empty">Исправлений нет. Все теги в порядке. Нажмите «Запустить аудит», чтобы поискать новые.</div>`;
     return;
   }
 
@@ -2397,7 +2434,7 @@ async function applyAllStaging() {
 async function resetFullDatabase() {
   const confirmed = confirm(
     "ВНИМАНИЕ: Вы уверены, что хотите выполнить ПОЛНЫЙ СБРОС БД?\n\n" +
-    "• Будет очищена вся очередь предложений Staging;\n" +
+    "• Будут удалены все предложения исправлений;\n" +
     "• Будут сброшены кэш треков и текстов;\n" +
     "• Все API-ключи (Gemini / Groq) будут сохранены;\n" +
     "• Сразу после сброса запустится свежее сканирование из Navidrome.\n\n" +
@@ -2428,22 +2465,9 @@ async function resetFullDatabase() {
   }
 }
 
-async function rescanStagingAudit() {
-  try {
-    showToast("Запущен глубокий аудит обложек и тегов...", "info");
-    await fetchApi("/scan/audit", "POST", { limitFolders: 50 });
-    setTimeout(async () => {
-      await loadStagingData();
-      await loadLibraryData();
-    }, 2000);
-  } catch (err) {
-    showToast(`Ошибка запуска аудита: ${err.message}`, "error");
-  }
-}
-
 async function discardAllStaging() {
   if (state.stagingItems.length === 0) return;
-  if (!confirm("Отклонить все текущие предложения Staging?")) return;
+  if (!confirm("Отклонить все текущие исправления?")) return;
 
   for (const item of state.stagingItems) {
     try {
@@ -2490,9 +2514,7 @@ async function loadJobsData() {
       pauseBtn.className = state.workerPaused ? "btn btn-primary" : "btn btn-secondary";
     }
 
-    const badgeJobs = document.getElementById("badge-jobs-count");
-    const activeCount = state.jobs.filter(j => j.status === "pending" || j.status === "running").length;
-    if (badgeJobs) badgeJobs.textContent = activeCount;
+    setJobsCount(state.jobs.filter(j => j.status === "pending" || j.status === "running").length);
 
     if (state.jobs.length === 0) {
       tbody.innerHTML = `<tr><td colspan="8" class="cell-empty">Очередь фоновых задач пуста.</td></tr>`;
@@ -2517,7 +2539,7 @@ async function loadJobsData() {
       else if (j.status === "done" || j.status === "completed") statusBadge = `<span class="text-emerald" style="font-weight: 500;">✓ Завершена</span>`;
       else if (j.status === "failed") statusBadge = `<span class="text-crimson" style="color:var(--color-crimson, #f43f5e);">Ошибка</span>`;
       else if (j.status === "waiting_quota") statusBadge = `<span class="text-amber">Ждет квоту API</span>`;
-      else if (j.status === "paused") statusBadge = `<span class="badge-audit-queued" style="background: rgba(148, 163, 184, 0.15); color: var(--text-secondary);">На паузе</span>`;
+      else if (j.status === "paused") statusBadge = `<span class="badge-audit-queued" style="background: var(--bg-subtle); color: var(--text-secondary);">На паузе</span>`;
 
       let jobTypeLabel = j.jobType;
       if (j.jobType === "tournament") jobTypeLabel = "LRC Турнир";
@@ -2692,7 +2714,7 @@ function buildJobDetailsRowHtml(j, trackObj) {
             <span><strong>Файл:</strong> ${escapeHtml(filePath)}</span>
             <span><strong>Создана:</strong> ${escapeHtml(createdStr)}</span>
             <span><strong>Обновлена:</strong> ${escapeHtml(updatedStr)}</span>
-            ${trackObj ? `<button class="btn-table-action primary" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeJsArg(trackObj.id)}')">Открыть в Караоке</button>` : ""}
+            ${trackObj ? `<button class="btn-table-action primary" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeJsArg(trackObj.id)}')">Открыть текст</button>` : ""}
           </div>
           <div class="job-console">
             <div class="job-console-header mono">Живой журнал выполнения под капотом (Задача #${j.id})</div>
@@ -2770,6 +2792,10 @@ async function jobAction(jobId, action, stage = "resume") {
   } catch (err) {
     showToast(`Ошибка: ${err.message}`, "error");
   }
+}
+
+function setJobsCount(count) {
+  document.querySelectorAll(".jobs-count").forEach(el => { el.textContent = count; });
 }
 
 async function toggleWorkerPause() {
@@ -3121,7 +3147,7 @@ async function runMusicBrainzAudit() {
 
   try {
     const res = await fetchApi("/scan/audit", "POST", { limitFolders: 50 });
-    showToast(res.message || "Аудит запущен! Результаты появятся в Staging-буфере.", "success");
+    showToast(res.message || "Аудит запущен. Результаты появятся в разделе «Исправления».", "success");
     setTimeout(() => {
       loadLibraryData();
       loadStagingData();

@@ -186,7 +186,7 @@ func TestAdminServerEndToEnd(t *testing.T) {
 	}{
 		{"/", http.StatusOK, "poisq — Умный поиск музыки и текстов"},
 		{"/styles.css", http.StatusOK, "@import './css/tokens.css'"},
-		{"/css/tokens.css", http.StatusOK, "--signal: #2438E0;"},
+		{"/css/tokens.css", http.StatusOK, "--signal: #111111;"},
 		{"/assets/brand/poisq-mark-192.png", http.StatusOK, ""},
 		{"/favicon.png", http.StatusOK, ""},
 	}

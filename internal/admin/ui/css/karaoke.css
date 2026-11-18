@@ -68,7 +68,7 @@
 
 .sidebar-track-item.active {
   background: var(--bg-surface);
-  border-color: rgba(36, 56, 224, 0.25);
+  border-color: color-mix(in srgb, var(--signal) 25%, transparent);
   box-shadow: var(--shadow-sm);
   position: relative;
 }
@@ -170,7 +170,7 @@
 .spinner-small {
   width: 12px;
   height: 12px;
-  border: 2px solid rgba(36, 56, 224, 0.2);
+  border: 2px solid color-mix(in srgb, var(--signal) 20%, transparent);
   border-top-color: var(--poisq-blue);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -336,18 +336,18 @@
   border-radius: var(--radius-pill);
   background: var(--brand-gradient);
   border: none;
-  color: #FFFFFF;
+  color: var(--text-inverse);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(36, 56, 224, 0.35);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--signal) 35%, transparent);
   transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .btn-play:hover {
   transform: scale(1.06);
-  box-shadow: 0 4px 14px rgba(36, 56, 224, 0.45);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--signal) 45%, transparent);
 }
 
 .btn-play:active {
@@ -594,3 +594,27 @@
 .tl-flag { color: var(--color-red); font-size: 11px; margin-right: 3px; cursor: help; }
 .tl-row.conf-medium .tl-flag { color: var(--color-amber); }
 .tl-num { white-space: nowrap; }
+
+/* Ссылка на очередь задач внизу списка треков */
+.sidebar-queue-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.sidebar-queue-link:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+.back-link:hover { color: var(--text-primary); }

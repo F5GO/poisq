@@ -56,7 +56,7 @@
   font-weight: 600;
   background: var(--color-amber-bg);
   color: var(--color-amber);
-  border: 1px solid rgba(232, 147, 12, 0.25);
+  border: 1px solid color-mix(in srgb, var(--color-amber) 25%, transparent);
   white-space: nowrap;
 }
 
@@ -215,12 +215,12 @@
 .cover-ai-resolve-btn {
   background: var(--brand-gradient-soft);
   color: var(--poisq-violet);
-  border: 1px solid rgba(36, 56, 224, 0.25);
+  border: 1px solid color-mix(in srgb, var(--signal) 25%, transparent);
   font-weight: 600;
 }
 
 .cover-ai-resolve-btn:hover {
-  background: rgba(36, 56, 224, 0.15);
+  background: color-mix(in srgb, var(--signal) 15%, transparent);
   border-color: var(--poisq-violet);
 }
 

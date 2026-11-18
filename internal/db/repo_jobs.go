@@ -196,6 +196,23 @@ func (r *JobRepository) ListRecent(limit int) ([]LyricsJobRecord, error) {
 	return list, rows.Err()
 }
 
+// GetByTrack возвращает задачу трека (у трека не больше одной задачи); sql.ErrNoRows — задачи нет.
+func (r *JobRepository) GetByTrack(trackID string) (*LyricsJobRecord, error) {
+	var j LyricsJobRecord
+	err := r.db.QueryRow(`
+		SELECT id, track_id, job_type, priority, status, attempt_count, next_retry_at, error_log, updated_at
+		FROM lyrics_jobs
+		WHERE track_id = ?
+	`, trackID).Scan(
+		&j.ID, &j.TrackID, &j.JobType, &j.Priority, &j.Status,
+		&j.AttemptCount, &j.NextRetryAt, &j.ErrorLog, &j.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &j, nil
+}
+
 // GetByID возвращает задачу по ее идентификатору ID.
 func (r *JobRepository) GetByID(id int64) (*LyricsJobRecord, error) {
 	var j LyricsJobRecord

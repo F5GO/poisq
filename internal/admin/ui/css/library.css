@@ -79,7 +79,7 @@
 .filter-pill.active {
   background: var(--color-accent-bg);
   color: var(--poisq-blue);
-  border-color: rgba(36, 56, 224, 0.35);
+  border-color: color-mix(in srgb, var(--signal) 35%, transparent);
   font-weight: 600;
 }
 
@@ -139,7 +139,7 @@
   justify-content: center;
   font-size: 28px;
   font-weight: 700;
-  color: #FFFFFF;
+  color: var(--text-inverse);
   background: var(--brand-gradient);
 }
 
@@ -172,7 +172,7 @@
 .drawer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 17, 26, 0.4);
+  background: rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   z-index: 100;

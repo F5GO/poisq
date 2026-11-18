@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/F5GO/poisq/internal/ai"
@@ -130,6 +131,12 @@ func NewAdminServer(
 		fileServer := http.FileServer(http.FS(uiSub))
 		mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p := r.URL.Path
+			// Адреса страниц (/library, /settings/keys) без расширения — это SPA: отдаём index.html, маршрут разбирает app.js.
+			if p != "/" && path.Ext(p) == "" && !strings.HasPrefix(p, "/api/") {
+				r = r.Clone(r.Context())
+				r.URL.Path = "/"
+				p = "/"
+			}
 			if p == "/" || strings.HasSuffix(p, ".html") || strings.HasSuffix(p, ".js") || strings.HasSuffix(p, ".css") {
 				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 				w.Header().Set("Pragma", "no-cache")

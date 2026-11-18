@@ -7,7 +7,9 @@
 package admin
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -253,6 +255,20 @@ func (s *AdminServer) handleLyricsEnqueue(w http.ResponseWriter, r *http.Request
 }
 
 func (s *AdminServer) handleJobsList(w http.ResponseWriter, r *http.Request) {
+	// ?trackId= — задача одного трека для баннера на странице «Тексты», без выборки всей очереди.
+	if trackID := strings.TrimSpace(r.URL.Query().Get("trackId")); r.Method == http.MethodGet && trackID != "" {
+		job, err := s.jobRepo.GetByTrack(trackID)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusOK, map[string]any{"job": nil})
+			return
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"job": job})
+		return
+	}
 	if r.Method == http.MethodDelete {
 		idStr := r.URL.Query().Get("id")
 		if idStr != "" {

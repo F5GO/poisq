@@ -374,3 +374,7 @@
   .biography-artist-list { max-height: 220px; }
   .biography-actions { align-items: stretch; flex-direction: column; }
 }
+
+/* Настройки: подразделы со своими адресами */
+.settings-nav { width: fit-content; margin-bottom: 20px; }
+.settings-section > .cast-card + .cast-card { margin-top: 16px; }

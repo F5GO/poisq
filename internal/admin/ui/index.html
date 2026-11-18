@@ -14,8 +14,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#E8E9EB" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#0E0F11" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#EBEBEB" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0E0E0E" media="(prefers-color-scheme: dark)" />
   <title>poisq — Умный поиск музыки и текстов</title>
   
   <!-- Фирменные фавиконы и иконки poisq -->
@@ -37,7 +37,7 @@
   <!-- Верхняя строка навигации -->
   <header class="navbar">
     <div class="nav-container">
-      <div class="nav-brand" id="brand-home-link" title="poisq — Умный поиск музыки и сервис текстов песен для Navidrome">
+      <a class="nav-brand" id="brand-home-link" href="/library" title="poisq — Умный поиск музыки и сервис текстов песен для Navidrome">
         <div class="brand-icon-wrap">
           <svg class="brand-mark-img" viewBox="0 0 28 28" aria-hidden="true"><rect x="3" y="11" width="3.5" height="6" rx="1"/><rect x="9" y="6" width="3.5" height="16" rx="1"/><rect x="15" y="9" width="3.5" height="10" rx="1"/><rect x="21" y="3" width="3.5" height="22" rx="1" class="mark-live"/></svg>
         </div>
@@ -45,21 +45,20 @@
           <span class="brand-name">poisq</span>
           <span class="brand-sub">studio</span>
         </div>
-      </div>
+      </a>
 
       <nav class="nav-links">
-        <button class="nav-tab active" data-tab="library">Медиатека</button>
-        <button class="nav-tab" data-tab="karaoke">Караоке и LRC</button>
-        <button class="nav-tab" data-tab="staging">
-          <span>Staging</span>
+        <a class="nav-tab active" data-tab="library" href="/library">Медиатека</a>
+        <a class="nav-tab" data-tab="karaoke" href="/lyrics">
+          <span>Тексты</span>
+          <span class="badge-count jobs-count" title="Задач в очереди">0</span>
+        </a>
+        <a class="nav-tab" data-tab="biographies" href="/biographies">Биографии</a>
+        <a class="nav-tab" data-tab="staging" href="/fixes">
+          <span>Исправления</span>
           <span class="badge-count" id="badge-staging-count">0</span>
-        </button>
-        <button class="nav-tab" data-tab="jobs">
-          <span>Задачи</span>
-          <span class="badge-count" id="badge-jobs-count">0</span>
-        </button>
-        <button class="nav-tab" data-tab="biographies">Биографии</button>
-        <button class="nav-tab" data-tab="keys">Настройки</button>
+        </a>
+        <a class="nav-tab" data-tab="keys" href="/settings/keys">Настройки</a>
       </nav>
 
       <div class="nav-right-cluster">
@@ -79,7 +78,7 @@
   <main class="main-content">
 
     <!-- ============================================================== -->
-    <!-- Вкладка 1: Медиатека -->
+    <!-- /library: Медиатека -->
     <!-- ============================================================== -->
     <section id="panel-library" class="tab-panel active">
       <div class="panel-header">
@@ -88,10 +87,6 @@
           <p class="panel-desc" id="library-summary-desc">
             Каталог <span class="mono text-light">/music</span> · Загрузка статистики...
           </p>
-        </div>
-        <div class="header-actions">
-          <button class="btn btn-secondary" id="btn-sync-navidrome">Синхронизация Navidrome</button>
-          <button class="btn btn-primary" id="btn-run-audit">MusicBrainz аудит</button>
         </div>
       </div>
 
@@ -144,7 +139,7 @@
     </section>
 
     <!-- ============================================================== -->
-    <!-- Вкладка 2: Караоке и LRC -->
+    <!-- /lyrics/<id>: Тексты (плеер и LRC-редактор) -->
     <!-- ============================================================== -->
     <section id="panel-karaoke" class="tab-panel">
       <div class="karaoke-layout">
@@ -157,6 +152,10 @@
           <div class="sidebar-tracks" id="karaoke-tracks-list">
             <div class="cell-empty">Загрузка треков...</div>
           </div>
+          <a class="sidebar-queue-link" href="/lyrics/queue">
+            <span>Очередь задач</span>
+            <span class="badge-count jobs-count">0</span>
+          </a>
         </aside>
 
         <!-- Главная область плеера и текста -->
@@ -275,19 +274,18 @@
     </section>
 
     <!-- ============================================================== -->
-    <!-- Вкладка 3: Staging Picard -->
+    <!-- /fixes: Исправления тегов и обложек -->
     <!-- ============================================================== -->
     <section id="panel-staging" class="tab-panel">
       <div class="panel-header">
         <div>
-          <h1 class="panel-title">Staging-буфер (Безопасный режим)</h1>
+          <h1 class="panel-title">Исправления тегов и обложек</h1>
           <p class="panel-desc">
-            Предложения по исправлению кодировки CP1251, канонизации имен артистов и обложкам. Файлы не перезаписываются без подтверждения.
+            Предложения по кодировке CP1251, именам артистов и обложкам. Файлы не меняются, пока вы не примените исправление.
           </p>
         </div>
         <div class="header-actions">
-          <button class="btn btn-danger-outline" id="btn-reset-db" title="Полный сброс базы данных poisq.db: очистка предложений Staging, треков и кэша с автоматическим повторным сканированием Navidrome">Полный сброс БД</button>
-          <button class="btn btn-secondary" id="btn-rescan-audit" title="Запустить глубокий аудит обложек и тегов через MusicBrainz и AI">Запустить аудит</button>
+          <button class="btn btn-secondary" id="btn-run-audit" title="Проверить теги и обложки через MusicBrainz и AI">Запустить аудит</button>
           <button class="btn btn-secondary" id="btn-undo-staging">Откатить последнее (Undo)</button>
           <button class="btn btn-secondary" id="btn-discard-all-staging">Отклонить все</button>
           <button class="btn btn-primary" id="btn-apply-all-staging">Применить изменения</button>
@@ -295,23 +293,23 @@
       </div>
 
       <div class="staging-cards" id="staging-cards-container">
-        <div class="cell-empty">Очередь Staging пуста. Все теги каноничны.</div>
+        <div class="cell-empty">Исправлений нет. Все теги в порядке.</div>
       </div>
     </section>
 
     <!-- ============================================================== -->
-    <!-- Вкладка 4: Очередь фоновых задач -->
+    <!-- /lyrics/queue: Очередь задач по текстам (раздел «Тексты») -->
     <!-- ============================================================== -->
     <section id="panel-jobs" class="tab-panel">
       <div class="panel-header">
         <div>
-          <h1 class="panel-title">Очередь фоновых задач</h1>
+          <a class="back-link" href="/lyrics">← Тексты</a>
+          <h1 class="panel-title">Очередь задач</h1>
           <p class="panel-desc">
-            Фоновый процессор задач: нажмите на любую строку задачи, чтобы раскрыть живой лог и этапы выполнения под капотом.
+            Поиск текстов и создание караоке. Нажмите на строку задачи, чтобы открыть лог и этапы выполнения.
           </p>
         </div>
         <div class="header-actions">
-          <button class="btn btn-secondary" id="btn-toggle-worker-pause">Приостановить воркер</button>
           <button class="btn btn-primary" id="btn-refresh-jobs">Обновить очередь</button>
         </div>
       </div>
@@ -338,7 +336,7 @@
     </section>
 
     <!-- ============================================================== -->
-    <!-- Вкладка 5: Необязательные ручные биографии -->
+    <!-- /biographies: Биографии -->
     <!-- ============================================================== -->
     <section id="panel-biographies" class="tab-panel">
       <div class="panel-header">
@@ -408,12 +406,24 @@
     </section>
 
     <!-- ============================================================== -->
-    <!-- Вкладка 6: Настройки (ключи API, трансляция на колонки) -->
+    <!-- /settings/<раздел>: Настройки (ключи, Navidrome, Music Assistant, обслуживание) -->
     <!-- ============================================================== -->
     <section id="panel-keys" class="tab-panel">
       <div class="panel-header">
         <div>
           <h1 class="panel-title">Настройки</h1>
+        </div>
+      </div>
+      <nav class="segmented-control settings-nav" aria-label="Разделы настроек">
+        <a class="seg-btn" data-settings="keys" href="/settings/keys">Ключи API</a>
+        <a class="seg-btn" data-settings="navidrome" href="/settings/navidrome">Navidrome</a>
+        <a class="seg-btn" data-settings="cast" href="/settings/cast">Music Assistant</a>
+        <a class="seg-btn" data-settings="service" href="/settings/service">Обслуживание</a>
+      </nav>
+
+      <div class="settings-section" data-settings-section="keys">
+      <div class="panel-header">
+        <div>
           <h2 class="cast-section-title">Пул API-ключей (Groq, Яндекс Музыка, Tavily)</h2>
           <p class="panel-desc">
             Шифрование AES-256-GCM. Автоматическая ротация (LRU) и 65-секундный Cooldown при ошибке 429.
@@ -438,6 +448,9 @@
           </tbody>
         </table>
       </div>
+      </div>
+
+      <div class="settings-section" data-settings-section="cast" hidden>
 
       <div class="cast-card">
         <div class="cast-card-header">
@@ -499,6 +512,9 @@
           </div>
         </form>
       </div>
+      </div>
+
+      <div class="settings-section" data-settings-section="navidrome" hidden>
 
       <div class="cast-card">
         <div class="cast-card-header">
@@ -529,6 +545,46 @@
             <button type="submit" class="btn btn-primary" id="btn-save-navidrome-account">Проверить и сохранить</button>
           </div>
         </form>
+      </div>
+      </div>
+
+      <div class="settings-section" data-settings-section="service" hidden>
+        <div class="cast-card">
+          <div class="cast-card-header">
+            <div>
+              <h2 class="cast-section-title cast-title-inline">Воркер очереди текстов</h2>
+              <p class="panel-desc">Пауза останавливает поиск текстов и создание караоке. Задачи остаются в очереди и продолжатся после возобновления.</p>
+            </div>
+          </div>
+          <div class="cast-footer">
+            <p class="form-hint cast-status-text"></p>
+            <button class="btn btn-secondary" id="btn-toggle-worker-pause">Приостановить воркер</button>
+          </div>
+        </div>
+        <div class="cast-card">
+          <div class="cast-card-header">
+            <div>
+              <h2 class="cast-section-title cast-title-inline">Синхронизация с Navidrome</h2>
+              <p class="panel-desc">Перечитать каталог из базы Navidrome. Обычно выполняется автоматически раз в несколько минут.</p>
+            </div>
+          </div>
+          <div class="cast-footer">
+            <p class="form-hint cast-status-text"></p>
+            <button class="btn btn-secondary" id="btn-sync-navidrome">Синхронизировать</button>
+          </div>
+        </div>
+        <div class="cast-card">
+          <div class="cast-card-header">
+            <div>
+              <h2 class="cast-section-title cast-title-inline">Полный сброс базы poisq</h2>
+              <p class="panel-desc">Очищает исправления, кэш треков и текстов и заново читает каталог из Navidrome. API-ключи сохраняются. Отменить нельзя.</p>
+            </div>
+          </div>
+          <div class="cast-footer">
+            <p class="form-hint cast-status-text"></p>
+            <button class="btn btn-danger-outline" id="btn-reset-db">Сбросить базу</button>
+          </div>
+        </div>
       </div>
     </section>
 

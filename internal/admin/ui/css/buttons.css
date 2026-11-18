@@ -38,7 +38,7 @@
 
 .btn-primary {
   background: var(--signal-strong);
-  color: #FFFFFF;
+  color: var(--text-inverse);
 }
 
 .btn-primary:hover:not(:disabled) { background: var(--signal-hover); }

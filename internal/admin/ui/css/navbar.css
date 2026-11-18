@@ -199,3 +199,8 @@
   .nav-tab { height: 40px; }
   .nav-status { display: none; }
 }
+
+/* Вкладки и бренд — ссылки с адресами страниц: убираем подчёркивание и цвет ссылки */
+a.nav-tab, a.nav-brand, a.seg-btn { text-decoration: none; color: inherit; }
+a.nav-tab { color: var(--text-secondary); }
+a.nav-tab.active, a.nav-tab:hover { color: var(--text-primary); }
