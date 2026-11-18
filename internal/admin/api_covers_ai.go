@@ -90,25 +90,36 @@ func (s *AdminServer) handleCoverAIResolve(w http.ResponseWriter, r *http.Reques
 	titleSet := make(map[string]bool)
 
 	if s.tracksRepo != nil {
-		if allTracks, err := s.tracksRepo.ListTracks("all", "", 1000); err == nil {
-			for _, t := range allTracks {
-				if filepath.Clean(t.FolderPath) == cleanFolder || strings.HasPrefix(filepath.Clean(t.FilePath), cleanFolder) {
-					if t.Artist != "" && !artistSet[t.Artist] {
-						artistSet[t.Artist] = true
-						existingArtists = append(existingArtists, t.Artist)
-					}
-					if t.Album != "" && !albumSet[t.Album] {
-						albumSet[t.Album] = true
-						existingAlbums = append(existingAlbums, t.Album)
-					}
-					if t.Title != "" && !titleSet[t.Title] {
-						titleSet[t.Title] = true
-						existingTitles = append(existingTitles, t.Title)
-					}
-					if t.FilePath != "" {
-						trackFiles = append(trackFiles, filepath.Base(t.FilePath))
+		folderTracks, err := s.tracksRepo.ListByFolder(cleanFolder)
+		if (err != nil || len(folderTracks) == 0) && s.guard != nil {
+			if safePath, verr := s.guard.ValidateTarget(cleanFolder, false); verr == nil && safePath != cleanFolder {
+				folderTracks, err = s.tracksRepo.ListByFolder(safePath)
+			}
+		}
+		if err != nil || len(folderTracks) == 0 {
+			if candidates, lerr := s.tracksRepo.ListTracks("all", folderName, 500); lerr == nil {
+				for _, t := range candidates {
+					if filepath.Clean(t.FolderPath) == cleanFolder || strings.HasPrefix(filepath.Clean(t.FilePath), cleanFolder) {
+						folderTracks = append(folderTracks, t)
 					}
 				}
+			}
+		}
+		for _, t := range folderTracks {
+			if t.Artist != "" && !artistSet[t.Artist] {
+				artistSet[t.Artist] = true
+				existingArtists = append(existingArtists, t.Artist)
+			}
+			if t.Album != "" && !albumSet[t.Album] {
+				albumSet[t.Album] = true
+				existingAlbums = append(existingAlbums, t.Album)
+			}
+			if t.Title != "" && !titleSet[t.Title] {
+				titleSet[t.Title] = true
+				existingTitles = append(existingTitles, t.Title)
+			}
+			if t.FilePath != "" {
+				trackFiles = append(trackFiles, filepath.Base(t.FilePath))
 			}
 		}
 	}

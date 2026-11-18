@@ -27,13 +27,19 @@ func (s *AdminServer) handleTracksList(w http.ResponseWriter, r *http.Request) {
 
 	status := r.URL.Query().Get("status")
 	search := r.URL.Query().Get("q")
+	limit := 500
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		if parsed, lerr := strconv.Atoi(rawLimit); lerr == nil && parsed > 0 {
+			limit = min(parsed, 2000)
+		}
+	}
 
 	var tracks []db.TrackRecord
 	var err error
 	if strings.TrimSpace(search) == "" {
-		tracks, err = s.tracksRepo.ListTracks(status, "", 200)
+		tracks, err = s.tracksRepo.ListTracks(status, "", limit)
 	} else {
-		tracks, err = s.smartSearchTracks(status, search, 200)
+		tracks, err = s.smartSearchTracks(status, search, limit)
 	}
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
@@ -429,10 +435,20 @@ func (s *AdminServer) storeEditorFeedback(trackID string, confidence json.RawMes
 	if s.confidence == nil {
 		return
 	}
-	if len(confidence) > 0 && string(confidence) != "null" {
+	trimmedConf := strings.TrimSpace(string(confidence))
+	if trimmedConf == "" || trimmedConf == "null" {
+		// При ручном сохранении без массива confidence (например, из сырого редактора) сбрасываем устаревшую уверенность.
+		if err := s.confidence.Delete(trackID); err != nil {
+			logger.Warn("[API] Не удалось удалить устаревшую уверенность трека %s: %v", trackID, err)
+		}
+	} else {
 		var probe []map[string]any
 		if json.Unmarshal(confidence, &probe) == nil {
-			if err := s.confidence.Set(trackID, string(confidence), "{}"); err != nil {
+			summaryJSON := "{}"
+			if existing, gerr := s.confidence.Get(trackID); gerr == nil && existing != nil && strings.TrimSpace(existing.SummaryJSON) != "" {
+				summaryJSON = existing.SummaryJSON
+			}
+			if err := s.confidence.Set(trackID, string(confidence), summaryJSON); err != nil {
 				logger.Warn("[API] Не удалось сохранить уверенность по строкам трека %s: %v", trackID, err)
 			}
 		}

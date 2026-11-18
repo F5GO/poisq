@@ -135,6 +135,14 @@ func (s *AdminServer) handleNavidromeArtistImage(w http.ResponseWriter, r *http.
 
 	// 5. Прямой поиск по имени артиста на диске
 	if found := metadata.FindCoverByArtistAndAlbum(root, artistName, ""); found != "" {
+		if s.guard != nil {
+			validated, verr := s.guard.ValidateTarget(found, false)
+			if verr != nil {
+				writeJSONError(w, http.StatusForbidden, "forbidden cover path")
+				return
+			}
+			found = validated
+		}
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		http.ServeFile(w, r, found)
 		return
@@ -169,6 +177,14 @@ func (s *AdminServer) handleNavidromeAlbumCover(w http.ResponseWriter, r *http.R
 
 	// 1. Сначала пробуем найти на диске или извлечь из тегов по переданному пути папки
 	if folderPath != "" {
+		if s.guard != nil {
+			validated, verr := s.guard.ValidateTarget(folderPath, false)
+			if verr != nil {
+				writeJSONError(w, http.StatusForbidden, "forbidden cover path")
+				return
+			}
+			folderPath = validated
+		}
 		if s.serveCoverPathOrEmbedded(w, r, root, folderPath, "") {
 			return
 		}
@@ -241,6 +257,14 @@ func (s *AdminServer) handleNavidromeAlbumCover(w http.ResponseWriter, r *http.R
 	// 4. Поиск на диске по названию артиста и альбома
 	if artistName != "" || albumName != "" {
 		if found := metadata.FindCoverByArtistAndAlbum(root, artistName, albumName); found != "" {
+			if s.guard != nil {
+				validated, verr := s.guard.ValidateTarget(found, false)
+				if verr != nil {
+					writeJSONError(w, http.StatusForbidden, "forbidden cover path")
+					return
+				}
+				found = validated
+			}
 			w.Header().Set("Cache-Control", "public, max-age=86400")
 			http.ServeFile(w, r, found)
 			return
@@ -297,12 +321,21 @@ func (s *AdminServer) serveCoverPathOrEmbedded(w http.ResponseWriter, r *http.Re
 			resolvedAudio = metadata.FindAudioFileAnywhere(root, filepath.Join(root, explicitAudioFile))
 		}
 		if resolvedAudio != "" {
+			if s.guard != nil {
+				validated, err := s.guard.ValidateTarget(resolvedAudio, false)
+				if err != nil {
+					return false
+				}
+				resolvedAudio = validated
+			}
 			if data, mime := metadata.ExtractCoverFromAudioFile(resolvedAudio); len(data) > 0 {
-				logger.Debug("[COVER] Извлечена встроенная обложка из аудиофайла: %s", resolvedAudio)
-				w.Header().Set("Content-Type", mime)
-				w.Header().Set("Cache-Control", "public, max-age=86400")
-				_, _ = w.Write(data)
-				return true
+				if ct, ok := safeImageContentType(mime, data); ok {
+					logger.Debug("[COVER] Извлечена встроенная обложка из аудиофайла: %s", resolvedAudio)
+					w.Header().Set("Content-Type", ct)
+					w.Header().Set("Cache-Control", "public, max-age=86400")
+					_, _ = w.Write(data)
+					return true
+				}
 			}
 		}
 	}
@@ -314,12 +347,21 @@ func (s *AdminServer) serveCoverPathOrEmbedded(w http.ResponseWriter, r *http.Re
 			if resolvedDir == "" {
 				resolvedDir = cand
 			}
+			if s.guard != nil {
+				validated, err := s.guard.ValidateTarget(resolvedDir, false)
+				if err != nil {
+					continue
+				}
+				resolvedDir = validated
+			}
 			if data, mime := metadata.ExtractCoverFromAudioOrDir(resolvedDir); len(data) > 0 {
-				logger.Debug("[COVER] Извлечена встроенная обложка из аудиофайлов каталога: %s", resolvedDir)
-				w.Header().Set("Content-Type", mime)
-				w.Header().Set("Cache-Control", "public, max-age=86400")
-				_, _ = w.Write(data)
-				return true
+				if ct, ok := safeImageContentType(mime, data); ok {
+					logger.Debug("[COVER] Извлечена встроенная обложка из аудиофайлов каталога: %s", resolvedDir)
+					w.Header().Set("Content-Type", ct)
+					w.Header().Set("Cache-Control", "public, max-age=86400")
+					_, _ = w.Write(data)
+					return true
+				}
 			}
 		}
 	}
@@ -334,6 +376,13 @@ func (s *AdminServer) serveCoverPathOrCache(w http.ResponseWriter, r *http.Reque
 	}
 	found := metadata.FindCoverAnywhere(root, targetPath)
 	if found != "" {
+		if s.guard != nil {
+			validated, err := s.guard.ValidateTarget(found, false)
+			if err != nil {
+				return false
+			}
+			found = validated
+		}
 		if fi, err := os.Stat(found); err == nil && !fi.IsDir() && fi.Size() > 0 {
 			w.Header().Set("Cache-Control", "public, max-age=86400")
 			http.ServeFile(w, r, found)
@@ -341,6 +390,22 @@ func (s *AdminServer) serveCoverPathOrCache(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	return false
+}
+
+func safeImageContentType(rawMIME string, data []byte) (string, bool) {
+	clean := strings.ToLower(strings.TrimSpace(strings.Split(rawMIME, ";")[0]))
+	switch clean {
+	case "image/jpeg", "image/jpg":
+		return "image/jpeg", true
+	case "image/png", "image/webp", "image/gif":
+		return clean, true
+	}
+	detected := strings.ToLower(http.DetectContentType(data))
+	switch detected {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+		return detected, true
+	}
+	return "", false
 }
 
 // tryServeFromNavidromeAPIOrCache проверяет кэш картинок Navidrome в /data/cache
@@ -432,12 +497,30 @@ func queryLibraryRoot(navDB *sql.DB, fallbackRoot string) string {
 	return fallbackRoot
 }
 
-// findRowCaseInsensitive выполняет безопасный SELECT * FROM table и сопоставляет значение в Go через strings.EqualFold
-// (поскольку SQLite LOWER() не умеет регистронезависимо сравнивать кириллицу UTF-8).
+// findRowCaseInsensitive сначала выполняет быстрый целевой запрос с WHERE IN (варианты регистра)
+// и переходит к полному обходу только при несовпадении смешанного регистра (например, «МакSим»).
 func findRowCaseInsensitive(navDB *sql.DB, table, matchCol, targetVal string) map[string]string {
 	targetVal = strings.TrimSpace(targetVal)
 	if navDB == nil || targetVal == "" {
 		return nil
+	}
+	if !allowedNavTableAndCol(table, matchCol) {
+		return nil
+	}
+
+	if rows, err := navDB.Query(
+		"SELECT * FROM "+table+" WHERE "+matchCol+" IN (?, ?, ?) LIMIT 1",
+		targetVal, strings.ToLower(targetVal), strings.ToUpper(targetVal),
+	); err == nil {
+		cols, cerr := rows.Columns()
+		if cerr == nil && rows.Next() {
+			rowMap := scanDynamicRow(rows, cols)
+			_ = rows.Close()
+			if len(rowMap) > 0 {
+				return rowMap
+			}
+		}
+		_ = rows.Close()
 	}
 
 	rows, err := navDB.Query("SELECT * FROM " + table)
@@ -462,11 +545,55 @@ func findRowCaseInsensitive(navDB *sql.DB, table, matchCol, targetVal string) ma
 	return nil
 }
 
+func allowedNavTableAndCol(table, col string) bool {
+	switch table {
+	case "artist":
+		return col == "name" || col == "id"
+	case "album":
+		return col == "name" || col == "album_artist" || col == "artist" || col == "id"
+	default:
+		return false
+	}
+}
+
 func findAlbumRowCaseInsensitive(navDB *sql.DB, albumName, artistName string) map[string]string {
 	albumName = strings.TrimSpace(albumName)
 	artistName = strings.TrimSpace(artistName)
 	if navDB == nil || albumName == "" {
 		return nil
+	}
+
+	albNorm := metadata.NormalizeNFC(albumName)
+	artNorm := metadata.NormalizeNFC(artistName)
+	var fallbackMatch map[string]string
+
+	if rows, err := navDB.Query(
+		"SELECT * FROM album WHERE name IN (?, ?, ?) LIMIT 25",
+		albumName, strings.ToLower(albumName), strings.ToUpper(albumName),
+	); err == nil {
+		cols, cerr := rows.Columns()
+		if cerr == nil {
+			for rows.Next() {
+				rowMap := scanDynamicRow(rows, cols)
+				if artistName == "" {
+					_ = rows.Close()
+					return rowMap
+				}
+				albArt := metadata.NormalizeNFC(strings.TrimSpace(rowMap["album_artist"]))
+				art := metadata.NormalizeNFC(strings.TrimSpace(rowMap["artist"]))
+				if strings.EqualFold(albArt, artNorm) || strings.EqualFold(art, artNorm) {
+					_ = rows.Close()
+					return rowMap
+				}
+				if fallbackMatch == nil {
+					fallbackMatch = rowMap
+				}
+			}
+		}
+		_ = rows.Close()
+		if fallbackMatch != nil {
+			return fallbackMatch
+		}
 	}
 
 	rows, err := navDB.Query("SELECT * FROM album")
@@ -479,10 +606,6 @@ func findAlbumRowCaseInsensitive(navDB *sql.DB, albumName, artistName string) ma
 	if err != nil {
 		return nil
 	}
-
-	albNorm := metadata.NormalizeNFC(albumName)
-	artNorm := metadata.NormalizeNFC(artistName)
-	var fallbackMatch map[string]string
 
 	for rows.Next() {
 		rowMap := scanDynamicRow(rows, cols)
@@ -527,6 +650,36 @@ func findMediaFileRow(navDB *sql.DB, trackID, albumName, artistName string) map[
 		return nil
 	}
 
+	albNorm := metadata.NormalizeNFC(albumName)
+	artNorm := metadata.NormalizeNFC(artistName)
+	var fallback map[string]string
+
+	if albumName != "" {
+		if rows, err := navDB.Query(
+			"SELECT * FROM media_file WHERE album IN (?, ?, ?) LIMIT 50",
+			albumName, strings.ToLower(albumName), strings.ToUpper(albumName),
+		); err == nil {
+			cols, cerr := rows.Columns()
+			if cerr == nil {
+				for rows.Next() {
+					rowMap := scanDynamicRow(rows, cols)
+					art := metadata.NormalizeNFC(strings.TrimSpace(rowMap["artist"]))
+					if artistName == "" || strings.EqualFold(art, artNorm) {
+						_ = rows.Close()
+						return rowMap
+					}
+					if fallback == nil {
+						fallback = rowMap
+					}
+				}
+			}
+			_ = rows.Close()
+			if fallback != nil {
+				return fallback
+			}
+		}
+	}
+
 	rows, err := navDB.Query("SELECT * FROM media_file")
 	if err != nil {
 		return nil
@@ -537,10 +690,6 @@ func findMediaFileRow(navDB *sql.DB, trackID, albumName, artistName string) map[
 	if err != nil {
 		return nil
 	}
-
-	albNorm := metadata.NormalizeNFC(albumName)
-	artNorm := metadata.NormalizeNFC(artistName)
-	var fallback map[string]string
 
 	for rows.Next() {
 		rowMap := scanDynamicRow(rows, cols)

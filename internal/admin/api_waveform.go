@@ -101,7 +101,10 @@ func buildWaveform(ctx context.Context, audioPath string) (*waveformPayload, err
 	if perr != nil {
 		return nil, perr
 	}
-	if werr != nil && len(mins) == 0 {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if werr != nil {
 		return nil, fmt.Errorf("ffmpeg: %v: %s", werr, strings.TrimSpace(stderr.String()))
 	}
 	if len(mins) == 0 {
@@ -142,9 +145,12 @@ func (s *AdminServer) handleTrackWaveform(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if s.guard != nil {
-		if validated, verr := s.guard.ValidateTarget(found, false); verr == nil {
-			found = validated
+		validated, verr := s.guard.ValidateTarget(found, false)
+		if verr != nil {
+			writeJSONError(w, http.StatusForbidden, "forbidden track path")
+			return
 		}
+		found = validated
 	}
 	fi, err := os.Stat(found)
 	if err != nil {
@@ -175,9 +181,17 @@ func (s *AdminServer) handleTrackWaveform(w http.ResponseWriter, r *http.Request
 	logger.Info("[WAVEFORM] %s: %d пиков (%.0f с) за %.1f с", filepath.Base(found), len(wf.Min), wf.Duration, time.Since(started).Seconds())
 
 	if mkErr := os.MkdirAll(filepath.Dir(cachePath), 0o755); mkErr == nil {
-		tmp := cachePath + ".tmp"
-		if os.WriteFile(tmp, data, 0o644) == nil {
-			_ = os.Rename(tmp, cachePath)
+		if tmpFile, terr := os.CreateTemp(filepath.Dir(cachePath), "wf-*.tmp"); terr == nil {
+			tmpName := tmpFile.Name()
+			_, wErr := tmpFile.Write(data)
+			cErr := tmpFile.Close()
+			if wErr == nil && cErr == nil {
+				if rErr := os.Rename(tmpName, cachePath); rErr != nil {
+					_ = os.Remove(tmpName)
+				}
+			} else {
+				_ = os.Remove(tmpName)
+			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

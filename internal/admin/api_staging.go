@@ -100,11 +100,15 @@ func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) 
 					cands := fetcher.FindCoverCandidates(r.Context(), "", propArtist, propAlbum, 8)
 					if len(cands) > 0 {
 						best := cands[0]
+						var alts []*metadata.CoverCandidate
+						if len(cands) > 1 {
+							alts = cands[1:]
+						}
 						prop["coverUrl"] = best.URL
 						prop["source"] = best.Source
 						prop["width"] = best.Width
 						prop["height"] = best.Height
-						prop["alternatives"] = best.Alternatives
+						prop["alternatives"] = alts
 						prop["reason"] = "Обложка высокого разрешения (" + best.Source + ")"
 						if upBytes, err := json.Marshal(prop); err == nil {
 							item.ProposedJSON = string(upBytes)

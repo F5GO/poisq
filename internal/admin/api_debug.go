@@ -44,6 +44,14 @@ func (s *AdminServer) handleDebugFS(w http.ResponseWriter, r *http.Request) {
 	if subpath != "" {
 		targetDir = filepath.Join(root, subpath)
 	}
+	if s.guard != nil {
+		validated, verr := s.guard.ValidateTarget(targetDir, false)
+		if verr != nil {
+			writeJSONError(w, http.StatusForbidden, "path outside music root")
+			return
+		}
+		targetDir = validated
+	}
 
 	fi, err := os.Stat(targetDir)
 	exists := err == nil

@@ -133,6 +133,20 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
+// escapeJsArg безопасно экранирует строку для передачи внутрь JS-строки '...' в HTML-атрибуте onclick/onsubmit.
+function escapeJsArg(str) {
+  if (str == null) return "";
+  const jsEscaped = String(str)
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/"/g, "\\\"")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+  return escapeHtml(jsEscaped);
+}
+
 function formatDuration(sec) {
   const sTotal = Math.round(sec);
   const m = Math.floor(sTotal / 60);
@@ -675,13 +689,14 @@ function renderTracksTable(container, tracks) {
     const num = (idx + 1 < 10 ? "0" : "") + (idx + 1);
 
     // Интерактивный статус текста песни (клик сразу открывает караоке-плеер)
-    let statusBadge = `<span class="badge-lyric-btn none" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">+ Найти текст</span>`;
+    const jsTrackId = escapeJsArg(t.id);
+    let statusBadge = `<span class="badge-lyric-btn none" onclick="event.stopPropagation(); openTrackInKaraoke('${jsTrackId}')">+ Найти текст</span>`;
     if (t.lyricsStatus === "verified") {
-      statusBadge = `<span class="badge-lyric-btn verified" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">Проверен</span>`;
+      statusBadge = `<span class="badge-lyric-btn verified" onclick="event.stopPropagation(); openTrackInKaraoke('${jsTrackId}')">Проверен</span>`;
     } else if (t.lyricsStatus === "synced") {
-      statusBadge = `<span class="badge-lyric-btn synced" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">Синхронный</span>`;
+      statusBadge = `<span class="badge-lyric-btn synced" onclick="event.stopPropagation(); openTrackInKaraoke('${jsTrackId}')">Синхронный</span>`;
     } else if (t.lyricsStatus === "plain") {
-      statusBadge = `<span class="badge-lyric-btn plain" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(t.id)}')">Обычный</span>`;
+      statusBadge = `<span class="badge-lyric-btn plain" onclick="event.stopPropagation(); openTrackInKaraoke('${jsTrackId}')">Обычный</span>`;
     }
 
     // Честный статус аудита медиатеки
@@ -698,7 +713,7 @@ function renderTracksTable(container, tracks) {
     }
 
     return `
-      <tr class="${rowClass}" onclick="openTrackDrawer('${escapeHtml(t.id)}')" style="cursor: pointer;">
+      <tr class="${rowClass}" onclick="openTrackDrawer('${jsTrackId}')" style="cursor: pointer;">
         <td class="col-num mono">${num}</td>
         <td>
           <div style="font-weight: 600; color: var(--text-primary);">${escapeHtml(t.title || "Без названия")}</div>
@@ -724,7 +739,7 @@ function renderArtistsGrid(container, tracks) {
   container.innerHTML = `
     <div class="artist-grid">
       ${artists.map(([name, count]) => `
-        <div class="artist-card" onclick="filterByArtist('${escapeHtml(name)}')">
+        <div class="artist-card" onclick="filterByArtist('${escapeJsArg(name)}')">
           <div class="artist-avatar-wrap">
             <img 
               src="/api/v1/navidrome/artist-image?artist=${encodeURIComponent(name)}" 
@@ -779,7 +794,7 @@ function renderAlbumsGrid(container, tracks) {
       ${albums.map(alb => {
         const coverSrc = `/api/v1/navidrome/album-cover?album=${encodeURIComponent(alb.album)}&artist=${encodeURIComponent(alb.artist)}&path=${encodeURIComponent(alb.folderPath || "")}`;
         return `
-          <div class="album-card" onclick="filterByAlbum('${escapeHtml(alb.album)}')">
+          <div class="album-card" onclick="filterByAlbum('${escapeJsArg(alb.album)}')">
             <img 
               src="${coverSrc}" 
               class="album-cover-img" 
@@ -892,22 +907,22 @@ async function openTrackDrawer(trackId) {
     </div>
 
     <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-      <button class="btn btn-primary" onclick="openTrackInKaraoke('${escapeHtml(track.id)}'); document.getElementById('drawer-track-detail').classList.add('hidden');">
+      <button class="btn btn-primary" onclick="openTrackInKaraoke('${escapeJsArg(track.id)}'); document.getElementById('drawer-track-detail').classList.add('hidden');">
         Запустить в Караоке-плеере
       </button>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-        <button class="btn btn-secondary" onclick="enqueueSingleTournament('${escapeHtml(track.id)}')">
+        <button class="btn btn-secondary" onclick="enqueueSingleTournament('${escapeJsArg(track.id)}')">
           LRC Турнир
         </button>
-        <button class="btn btn-secondary" onclick="enqueueSingleGroq('${escapeHtml(track.id)}')">
+        <button class="btn btn-secondary" onclick="enqueueSingleGroq('${escapeJsArg(track.id)}')">
           AI Караоке (Groq)
         </button>
       </div>
-      <button class="btn btn-secondary" onclick="auditSingleTrack('${escapeHtml(track.id)}')">
+      <button class="btn btn-secondary" onclick="auditSingleTrack('${escapeJsArg(track.id)}')">
         Проверить трек (MusicBrainz и обложка)
       </button>
       ${(content || (track.lyricsStatus && track.lyricsStatus !== "none")) ? `
-        <button class="btn btn-danger-outline" onclick="deleteTrackLyrics('${escapeHtml(track.id)}')" style="margin-top: 4px;">
+        <button class="btn btn-danger-outline" onclick="deleteTrackLyrics('${escapeJsArg(track.id)}')" style="margin-top: 4px;">
           Удалить текст и .lrc файл
         </button>
       ` : ""}
@@ -915,7 +930,7 @@ async function openTrackDrawer(trackId) {
 
     <details style="margin-top: 10px;">
       <summary style="cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-secondary);">Редактировать теги</summary>
-      <form id="form-track-tags" style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;" onsubmit="event.preventDefault(); saveTrackTags('${escapeHtml(track.id)}');">
+      <form id="form-track-tags" style="display: flex; flex-direction: column; gap: 8px; margin-top: 8px;" onsubmit="event.preventDefault(); saveTrackTags('${escapeJsArg(track.id)}');">
         <div class="form-group"><label class="form-label" for="tag-title">Название</label><input id="tag-title" class="form-input" value="${escapeHtml(track.title || "")}" /></div>
         <div class="form-group"><label class="form-label" for="tag-artist">Исполнитель</label><input id="tag-artist" class="form-input" placeholder="Несколько — через «; »" value="${escapeHtml(track.artist || "")}" /></div>
         <div class="form-group"><label class="form-label" for="tag-album">Альбом</label><input id="tag-album" class="form-input" value="${escapeHtml(track.album || "")}" /></div>
@@ -1044,7 +1059,7 @@ function initPlayerControls() {
   const volSlider = document.getElementById("player-volume-slider");
   const volMuteBtn = document.getElementById("btn-volume-mute");
   const iconVolOn = document.getElementById("icon-vol-on");
-  const iconVolMuted = document.getElementById("icon-vol-mute");
+  const iconVolMuted = document.getElementById("icon-vol-muted");
 
   let savedVol = parseFloat(localStorage.getItem("poisq_player_volume") || "1.0");
   if (isNaN(savedVol) || savedVol < 0 || savedVol > 1) savedVol = 1.0;
@@ -1090,11 +1105,13 @@ function initPlayerControls() {
   });
 
   // Модальное окно подтверждения AI Whisper для создания караоке
-  document.getElementById("btn-whisper-offer-cancel")?.addEventListener("click", () => {
+  const closeWhisperModal = () => {
     document.getElementById("modal-whisper-offer")?.classList.add("hidden");
-  });
+  };
+  document.getElementById("btn-whisper-offer-cancel")?.addEventListener("click", closeWhisperModal);
+  document.getElementById("btn-close-whisper-offer")?.addEventListener("click", closeWhisperModal);
   document.getElementById("btn-whisper-offer-confirm")?.addEventListener("click", () => {
-    document.getElementById("modal-whisper-offer")?.classList.add("hidden");
+    closeWhisperModal();
     const hasGroq = (state.keys || []).some(k => k.provider === "groq" && k.status !== "invalid");
     if (!hasGroq) {
       showToast("Для караоке Whisper требуется добавить бесплатный ключ Groq Cloud во вкладке «Ключи API».", "info");
@@ -1153,7 +1170,7 @@ function renderKaraokeSidebar(filterText = "") {
     }
 
     return `
-      <div class="sidebar-track-item ${isSelected ? "active" : ""}" onclick="openTrackInKaraoke('${escapeHtml(t.id)}')">
+      <div class="sidebar-track-item ${isSelected ? "active" : ""}" onclick="openTrackInKaraoke('${escapeJsArg(t.id)}')">
         <div class="sidebar-track-meta">
           <div class="sidebar-track-title">${escapeHtml(t.title || "Без названия")}</div>
           <div class="sidebar-track-artist">${escapeHtml(t.artist || "—")}</div>
@@ -1169,6 +1186,13 @@ async function openTrackInKaraoke(trackId) {
       state.selectedTrack && state.selectedTrack.id !== trackId &&
       !confirm("В редакторе таймингов есть несохранённые изменения. Перейти к другому треку без сохранения?")) {
     return;
+  }
+  if (state.selectedTrack && state.selectedTrack.id !== trackId) {
+    if (karaokeJobPollTimer) {
+      clearInterval(karaokeJobPollTimer);
+      karaokeJobPollTimer = null;
+    }
+    hideKaraokeJobBanner();
   }
   let track = state.tracks.find(t => t.id === trackId);
   let confidence = null;
@@ -1616,6 +1640,7 @@ async function refreshCurrentKaraokeTrack(trackId) {
           btnDeleteLyrics.classList.toggle("hidden", !hasLyrics);
         }
 
+        window.TimelineEditor?.load(updatedTrack, state.lyrics, hasValidLrcTimestamps, res.confidence || null);
         renderLyricsTeleprompter();
         updatePlayerUI();
         renderKaraokeSidebar();
@@ -1672,24 +1697,6 @@ function openLyricsGenModal(track) {
   if (titleEl) {
     titleEl.textContent = `${track.artist || "Неизвестный артист"} — ${track.title || "Без названия"}`;
   }
-  const confirmBtn = document.getElementById("btn-whisper-offer-confirm");
-  const cancelBtn = document.getElementById("btn-whisper-offer-cancel");
-  const closeBtn = document.getElementById("btn-close-whisper-offer");
-
-  const onConfirm = () => {
-    modal?.classList.add("hidden");
-    confirmBtn?.removeEventListener("click", onConfirm);
-    enqueueWhisperKaraoke();
-  };
-  const onCancel = () => {
-    modal?.classList.add("hidden");
-    confirmBtn?.removeEventListener("click", onConfirm);
-  };
-
-  confirmBtn?.addEventListener("click", onConfirm);
-  cancelBtn?.addEventListener("click", onCancel);
-  closeBtn?.addEventListener("click", onCancel);
-
   modal?.classList.remove("hidden");
 }
 
@@ -1835,14 +1842,14 @@ async function loadStagingData() {
                 <button 
                   class="cover-candidates-toggle-btn" 
                   id="btn-toggle-cand-${item.id}"
-                  onclick="toggleCoverCandidates(${item.id}, '${escapeHtml(propArtist)}', '${escapeHtml(propAlbum)}', '${escapeHtml(path)}')"
+                  onclick="toggleCoverCandidates(${item.id}, '${escapeJsArg(propArtist)}', '${escapeJsArg(propAlbum)}', '${escapeJsArg(path)}')"
                 >
                   Другие варианты обложек <span id="cand-count-${item.id}"></span>
                 </button>
                 <button 
                   class="cover-ai-resolve-btn" 
                   id="btn-ai-resolve-${item.id}"
-                  onclick="resolveCoverViaAI(${item.id}, '${escapeHtml(path)}')"
+                  onclick="resolveCoverViaAI(${item.id}, '${escapeJsArg(path)}')"
                   title="Определить канонический студийный альбом через Gemini 2.5 Flash и найти оригинальную обложку"
                 >
                   Уточнить альбом через AI
@@ -2683,7 +2690,7 @@ function buildJobDetailsRowHtml(j, trackObj) {
             <span><strong>Файл:</strong> ${escapeHtml(filePath)}</span>
             <span><strong>Создана:</strong> ${escapeHtml(createdStr)}</span>
             <span><strong>Обновлена:</strong> ${escapeHtml(updatedStr)}</span>
-            ${trackObj ? `<button class="btn-table-action primary" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeHtml(trackObj.id)}')">Открыть в Караоке</button>` : ""}
+            ${trackObj ? `<button class="btn-table-action primary" onclick="event.stopPropagation(); openTrackInKaraoke('${escapeJsArg(trackObj.id)}')">Открыть в Караоке</button>` : ""}
           </div>
           <div class="job-console">
             <div class="job-console-header mono">Живой журнал выполнения под капотом (Задача #${j.id})</div>

@@ -46,9 +46,12 @@ func (s *AdminServer) handleTrackStream(w http.ResponseWriter, r *http.Request) 
 
 	if found != "" {
 		if s.guard != nil {
-			if validated, err := s.guard.ValidateTarget(found, false); err == nil {
-				found = validated
+			validated, verr := s.guard.ValidateTarget(found, false)
+			if verr != nil {
+				writeJSONError(w, http.StatusForbidden, "forbidden track path")
+				return
 			}
+			found = validated
 		}
 		http.ServeFile(w, r, found)
 		return
@@ -155,19 +158,16 @@ func (s *AdminServer) handleLocalCover(w http.ResponseWriter, r *http.Request) {
 	if coverPath != "" {
 		searchTarget := coverPath
 		if s.guard != nil {
-			if safePath, err := s.guard.ValidateTarget(coverPath, false); err == nil {
-				searchTarget = safePath
-			} else {
-				searchTarget = filepath.Join(root, strings.TrimPrefix(coverPath, "/"))
+			safePath, err := s.guard.ValidateTarget(coverPath, false)
+			if err != nil {
+				writeJSONError(w, http.StatusForbidden, "forbidden cover path")
+				return
 			}
+			searchTarget = safePath
 		}
 
 		if s.serveCoverPathOrEmbedded(w, r, root, searchTarget, "") {
 			logger.Debug("[COVER-API] [LOCAL] Обложка отдана по searchTarget=%q", searchTarget)
-			return
-		}
-		if searchTarget != coverPath && s.serveCoverPathOrEmbedded(w, r, root, coverPath, "") {
-			logger.Debug("[COVER-API] [LOCAL] Обложка отдана по coverPath=%q", coverPath)
 			return
 		}
 
