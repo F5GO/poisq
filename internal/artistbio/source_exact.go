@@ -130,6 +130,10 @@ func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Bi
 		}
 	}
 	article, linkedArticle := exactWikipediaArticle(links.WikipediaURL)
+	if article.Title != "" && s.wikipedias[article.Language] == nil {
+		article = wikipediaArticle{}
+		linkedArticle = false
+	}
 	sourceID := ""
 	evidenceCodes := []string{"id:musicbrainz", "link:wikipedia"}
 	if (article.Language != "ru" || article.Title == "") && links.WikidataID != "" {
@@ -166,7 +170,7 @@ func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Bi
 		if err != nil {
 			return nil, fmt.Errorf("regional wikipedia identity link unavailable")
 		}
-		if linked, ok := exactWikipediaArticle(rawURL); ok {
+		if linked, ok := exactWikipediaArticle(rawURL); ok && s.wikipedias[linked.Language] != nil {
 			article, linkedArticle, sourceID = linked, true, regionalID
 			evidenceCodes = []string{"catalog:yandex", "link:wikipedia"}
 		}
@@ -466,6 +470,7 @@ func (s *LastFMSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Biogr
 	if text == "" {
 		text = cleanProviderText(response.Artist.Bio.Summary)
 	}
+	text = stripLastFMFooter(text)
 	if text == "" {
 		return nil, nil
 	}
@@ -502,4 +507,17 @@ func cleanProviderText(value string) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(output, "\n"))
+}
+
+func stripLastFMFooter(text string) string {
+	for _, marker := range []string{
+		"Read more on Last.fm",
+		"Подробнее на Last.fm",
+		"User-contributed text is available under the Creative Commons",
+	} {
+		if idx := strings.Index(text, marker); idx >= 0 {
+			text = text[:idx]
+		}
+	}
+	return strings.TrimSpace(text)
 }

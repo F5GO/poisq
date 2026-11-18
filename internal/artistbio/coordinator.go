@@ -66,6 +66,13 @@ func (c *Coordinator) Request(ctx context.Context, artistID string, force bool) 
 	if findErr != nil || !found {
 		return nil, JobState{}, fmt.Errorf("artist is not present in inventory")
 	}
+	c.mu.Lock()
+	if existing := c.waiters[artist.ID]; existing != nil {
+		c.mu.Unlock()
+		state, _, _ := c.store.JobState(ctx, artist.ID)
+		return existing, state, nil
+	}
+	c.mu.Unlock()
 	state, admitted, err := c.store.QueueJob(ctx, artist.ID, artist.Name, force, time.Now())
 	if err != nil {
 		return nil, JobState{}, err

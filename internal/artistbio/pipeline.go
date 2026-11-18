@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/db"
@@ -99,13 +100,15 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	}
 	identityContext.MusicBrainzID = resolution.MusicBrainzID
 	stageStarted = time.Now()
-	if _, err := p.ingestion.Ingest(ctx, ResolvedArtist{Context: identityContext, Identity: resolution}); err != nil {
+	ingestReport, err := p.ingestion.Ingest(ctx, ResolvedArtist{Context: identityContext, Identity: resolution})
+	if err != nil {
 		logPipelineStage(artist.ID, artist.Name, "catalog", stageStarted, err)
 		return p.retryable(ctx, artist.ID, "catalog_unavailable", err)
 	}
 	logPipelineStage(artist.ID, artist.Name, "catalog", stageStarted, nil)
 	stageStarted = time.Now()
-	if _, err := p.validator.ValidateArtist(ctx, artist.ID); err != nil {
+	valReport, err := p.validator.ValidateArtist(ctx, artist.ID)
+	if err != nil {
 		logPipelineStage(artist.ID, artist.Name, "source_validation", stageStarted, err)
 		return p.retryable(ctx, artist.ID, "validation_unavailable", err)
 	}
@@ -149,6 +152,12 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	}
 	if ctx.Err() != nil {
 		return p.retryable(context.Background(), artist.ID, "pipeline_timeout", ctx.Err())
+	}
+	if valReport.Retryable > 0 {
+		return p.retryable(ctx, artist.ID, "validation_retryable", fmt.Errorf("biography validation deferred (%d candidates)", valReport.Retryable))
+	}
+	if ingestReport.Stored == 0 && ingestReport.Failed > 0 {
+		return p.retryable(ctx, artist.ID, "catalog_partial_failure", fmt.Errorf("catalog providers failed (%d)", ingestReport.Failed))
 	}
 	return p.store.CompleteNoData(ctx, artist.ID, version, time.Now())
 }
@@ -375,7 +384,11 @@ func boundSynthesisEvidence(input []ai.SynthesisEvidence, limit int) []ai.Synthe
 			break
 		}
 		item.Text = truncateUTF8Bytes(item.Text, remaining)
-		if len(item.Text) < minBiographyLetters {
+		minRunes := minBiographyLetters
+		if strings.HasPrefix(item.ID, "web:") {
+			minRunes = 20
+		}
+		if utf8.RuneCountInString(item.Text) < minRunes {
 			continue
 		}
 		remaining -= len(item.Text)

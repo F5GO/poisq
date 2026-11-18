@@ -332,7 +332,8 @@ func boundReleases(values []IdentityRelease, limit int) ([]IdentityRelease, erro
 }
 
 func normalizeIdentityText(value string) string {
-	return strings.ToLower(strings.Join(strings.Fields(metadata.NormalizeNFC(value)), " "))
+	norm := strings.ToLower(strings.Join(strings.Fields(metadata.NormalizeNFC(value)), " "))
+	return strings.ReplaceAll(norm, "ё", "е")
 }
 
 func comparableIdentityText(value string) string {

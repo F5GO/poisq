@@ -105,7 +105,7 @@ func NewIdentityResolver(store *Store, local LocalIdentityContextSource, source 
 func (r *IdentityResolver) Resolve(ctx context.Context, input IdentityContext) (IdentityResolution, error) {
 	bounded, err := BoundIdentityContext(input)
 	if err != nil {
-		return IdentityResolution{}, err
+		return IdentityResolution{Status: ResolutionUncertain}, nil
 	}
 	if cached, ok, err := r.cached(ctx, bounded.ArtistID); err != nil {
 		return IdentityResolution{}, err
@@ -149,8 +149,7 @@ func (r *IdentityResolver) resolveOnce(ctx context.Context, input IdentityContex
 		return IdentityResolution{}, ctx.Err()
 	}
 	if err != nil {
-		result := IdentityResolution{Status: ResolutionUncertain}
-		return result, r.persist(ctx, input, result)
+		return IdentityResolution{Status: ResolutionUncertain}, nil
 	}
 	if len(candidates) > MaxIdentityCandidates {
 		candidates = candidates[:MaxIdentityCandidates]

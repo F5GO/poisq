@@ -158,16 +158,16 @@ func (s *Store) PutCandidate(ctx context.Context, candidate Candidate) (int64, e
 			match_confidence, status, evidence_json, fetched_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(artist_id, provider, source_artist_id) DO UPDATE SET
-			source_url = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) THEN artist_bio_candidates.source_url ELSE excluded.source_url END,
-			original_text = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) THEN artist_bio_candidates.original_text ELSE excluded.original_text END,
-			russian_text = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) THEN artist_bio_candidates.russian_text ELSE excluded.russian_text END,
-			original_language = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) THEN artist_bio_candidates.original_language ELSE excluded.original_language END,
-			detected_language = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) THEN artist_bio_candidates.detected_language ELSE excluded.detected_language END,
-			language_confidence = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) THEN artist_bio_candidates.language_confidence ELSE excluded.language_confidence END,
-			russian_share = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) THEN artist_bio_candidates.russian_share ELSE excluded.russian_share END,
+			source_url = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) OR (artist_bio_candidates.status = 'accepted' AND artist_bio_candidates.original_text = excluded.original_text) THEN artist_bio_candidates.source_url ELSE excluded.source_url END,
+			original_text = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) OR (artist_bio_candidates.status = 'accepted' AND artist_bio_candidates.original_text = excluded.original_text) THEN artist_bio_candidates.original_text ELSE excluded.original_text END,
+			russian_text = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) OR (artist_bio_candidates.status = 'accepted' AND artist_bio_candidates.original_text = excluded.original_text) THEN artist_bio_candidates.russian_text ELSE excluded.russian_text END,
+			original_language = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) OR (artist_bio_candidates.status = 'accepted' AND artist_bio_candidates.original_text = excluded.original_text) THEN artist_bio_candidates.original_language ELSE excluded.original_language END,
+			detected_language = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) OR (artist_bio_candidates.status = 'accepted' AND artist_bio_candidates.original_text = excluded.original_text) THEN artist_bio_candidates.detected_language ELSE excluded.detected_language END,
+			language_confidence = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) OR (artist_bio_candidates.status = 'accepted' AND artist_bio_candidates.original_text = excluded.original_text) THEN artist_bio_candidates.language_confidence ELSE excluded.language_confidence END,
+			russian_share = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) OR (artist_bio_candidates.status = 'accepted' AND artist_bio_candidates.original_text = excluded.original_text) THEN artist_bio_candidates.russian_share ELSE excluded.russian_share END,
 			match_confidence = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) THEN artist_bio_candidates.match_confidence ELSE excluded.match_confidence END,
-			status = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) THEN artist_bio_candidates.status ELSE excluded.status END,
-			evidence_json = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) THEN artist_bio_candidates.evidence_json ELSE excluded.evidence_json END,
+			status = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) OR (artist_bio_candidates.status = 'accepted' AND artist_bio_candidates.original_text = excluded.original_text) THEN artist_bio_candidates.status ELSE excluded.status END,
+			evidence_json = CASE WHEN artist_bio_candidates.id IN (SELECT automatic_candidate_id FROM artist_biographies) OR (artist_bio_candidates.status = 'accepted' AND artist_bio_candidates.original_text = excluded.original_text) THEN artist_bio_candidates.evidence_json ELSE excluded.evidence_json END,
 			fetched_at = excluded.fetched_at,
 			updated_at = excluded.updated_at
 		RETURNING id`,
