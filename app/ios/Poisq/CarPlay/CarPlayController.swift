@@ -143,7 +143,7 @@ final class CarPlayController: NSObject, CPNowPlayingTemplateObserver {
             item.isExplicitContent = false
             setCover(song.coverArt, on: item)
             item.handler = { [weak self] _, done in
-                self?.model.player?.play(all, startAt: index, continuation: { [] })
+                self?.model.player?.play(all, startAt: index)
                 self?.showNowPlaying()
                 done()
             }

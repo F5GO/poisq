@@ -136,11 +136,15 @@ public final class Equalizer {
     /// Пресет, включённый автоматически по жанру текущего трека.
     public private(set) var autoID: String?
     public private(set) var bands: [EQBand]
-    public var preamp: Float { didSet { changed() } }
-    public var headroom: Bool { didSet { changed() } }
+    public var preamp: Float { didSet { if !applyingAuto { userPreamp = preamp; changed() } } }
+    public var headroom: Bool { didSet { if !applyingAuto { userHeadroom = headroom; changed() } } }
     public var autoByGenre: Bool { didSet { changed(); if !autoByGenre { autoID = nil; reapplyPreset() } } }
     public private(set) var custom: [EQPreset]
 
+    @ObservationIgnored private var userBands: [EQBand]
+    @ObservationIgnored private var userPreamp: Float
+    @ObservationIgnored private var userHeadroom: Bool
+    @ObservationIgnored private var applyingAuto = false
     @ObservationIgnored private weak var engine: PlaybackEngine?
     @ObservationIgnored private let defaults = UserDefaults.standard
     private static let key = "equalizer.v1"
@@ -152,11 +156,17 @@ public final class Equalizer {
 
     public init() {
         let s = UserDefaults.standard.data(forKey: Self.key).flatMap { try? JSONDecoder().decode(Stored.self, from: $0) }
+        let initialBands = s?.bands ?? EQPreset.flatBands
+        let initialPreamp = s?.preamp ?? 0
+        let initialHeadroom = s?.headroom ?? true
         isEnabled = s?.enabled ?? false
         selectedID = s?.selectedID ?? "flat"
-        bands = s?.bands ?? EQPreset.flatBands
-        preamp = s?.preamp ?? 0
-        headroom = s?.headroom ?? true
+        bands = initialBands
+        preamp = initialPreamp
+        headroom = initialHeadroom
+        userBands = initialBands
+        userPreamp = initialPreamp
+        userHeadroom = initialHeadroom
         autoByGenre = s?.autoByGenre ?? false
         custom = s?.custom ?? []
     }
@@ -182,24 +192,50 @@ public final class Equalizer {
     public func select(_ p: EQPreset) {
         autoID = nil
         selectedID = p.id
-        apply(p)
+        applyUser(bands: p.bands, preamp: p.preamp, headroom: p.headroom)
     }
 
-    private func apply(_ p: EQPreset) {
-        bands = p.bands
-        preamp = p.preamp
-        headroom = p.headroom
+    private func applyUser(bands b: [EQBand], preamp p: Float, headroom h: Bool) {
+        applyingAuto = true
+        bands = b
+        preamp = p
+        headroom = h
+        applyingAuto = false
+        userBands = b
+        userPreamp = p
+        userHeadroom = h
         changed()
     }
 
+    private func applyTemporary(_ p: EQPreset) {
+        applyingAuto = true
+        bands = p.bands
+        preamp = p.preamp
+        headroom = p.headroom
+        applyingAuto = false
+        push()
+    }
+
     private func reapplyPreset() {
-        if let p = preset(id: selectedID) { apply(p) }
+        if let p = preset(id: selectedID) {
+            applyUser(bands: p.bands, preamp: p.preamp, headroom: p.headroom)
+        } else {
+            applyingAuto = true
+            bands = userBands
+            preamp = userPreamp
+            headroom = userHeadroom
+            applyingAuto = false
+            push()
+        }
     }
 
     /// Правка одной полосы вручную: пресет становится «своим» (несохранённым).
     public func setGain(_ gain: Float, at index: Int) {
         guard bands.indices.contains(index) else { return }
         bands[index].gain = (gain * 2).rounded() / 2          // шаг 0,5 дБ
+        userBands = bands
+        userPreamp = preamp
+        userHeadroom = headroom
         autoID = nil
         selectedID = "edited"
         changed()
@@ -213,6 +249,9 @@ public final class Equalizer {
                          bands: bands, preamp: preamp, headroom: headroom, builtIn: false)
         custom.append(p)
         selectedID = p.id
+        userBands = bands
+        userPreamp = preamp
+        userHeadroom = headroom
         changed()
         return p
     }
@@ -233,7 +272,7 @@ public final class Equalizer {
         let id = EQPreset.presetID(forGenre: genre)
         guard id != autoID else { return }
         autoID = id
-        if let id, let p = preset(id: id) { apply(p) } else { reapplyPreset() }
+        if let id, let p = preset(id: id) { applyTemporary(p) } else { reapplyPreset() }
     }
 
     private func changed() {
@@ -246,8 +285,8 @@ public final class Equalizer {
     }
 
     private func save() {
-        let s = Stored(enabled: isEnabled, selectedID: selectedID, bands: bands, preamp: preamp,
-                       headroom: headroom, autoByGenre: autoByGenre, custom: custom)
+        let s = Stored(enabled: isEnabled, selectedID: selectedID, bands: userBands, preamp: userPreamp,
+                       headroom: userHeadroom, autoByGenre: autoByGenre, custom: custom)
         if let d = try? JSONEncoder().encode(s) { defaults.set(d, forKey: Self.key) }
     }
 }

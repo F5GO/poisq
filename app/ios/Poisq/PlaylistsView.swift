@@ -111,8 +111,8 @@ struct PlaylistView: View {
                 PlayableSongRow(song: song) { model.player?.play(songs, startAt: index) }
                 .songMenu(song)
             }
-            .onDelete(perform: remove)
-            .onMove(perform: move)
+            .onDelete(perform: canEdit ? { remove($0) } : nil)
+            .onMove(perform: canEdit ? { move($0, $1) } : nil)
         }
         .listStyle(.plain)
         .overlay { if !loaded { ProgressView() } }
@@ -121,7 +121,7 @@ struct PlaylistView: View {
             if canEdit {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu("More", systemImage: "ellipsis") {
-                        Button("Rename…", systemImage: "pencil") { newName = name; renaming = true }
+                        Button("Rename…", systemImage: "pencil") { newName = name.isEmpty ? playlist.name : name; renaming = true }
                         Button("Delete Playlist", systemImage: "trash", role: .destructive) { confirmDelete = true }
                     }
                 }

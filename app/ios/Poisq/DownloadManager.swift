@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import UIKit
 import PoisqCore
 
@@ -183,9 +184,24 @@ extension DownloadManager: URLSessionDownloadDelegate {
             if let key = downloadTask.taskDescription { Task { @MainActor in self.failed(key: key) } }
             return
         }
+        let ct = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+        if ct.contains("json") || ct.contains("xml") || ct.contains("html") {
+            Task { @MainActor in self.failed(key: key) }
+            return
+        }
         let song = item.song
-        let ext = item.quality.fileExtension ?? (song.suffix?.isEmpty == false ? song.suffix! : "audio")
-        let rel = "\(serverID.uuidString)/\(song.id).\(ext)"
+        let rawExt = item.quality.fileExtension ?? (song.suffix ?? "")
+        let cleanExt = String(rawExt.filter { $0.isASCII && ($0.isLetter || $0.isNumber) })
+        let ext = cleanExt.isEmpty ? "audio" : cleanExt
+        let cleanID = String(song.id.map { ($0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-")) ? $0 : "_" })
+        let safeID: String
+        if cleanID == song.id, !cleanID.isEmpty, !cleanID.hasPrefix("."), cleanID.count <= 80 {
+            safeID = cleanID
+        } else {
+            let digest = SHA256.hash(data: Data(song.id.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+            safeID = "\(cleanID.prefix(40))_\(digest)"
+        }
+        let rel = "\(serverID.uuidString)/\(safeID).\(ext)"
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appending(path: "Downloads", directoryHint: .isDirectory)
         let dest = base.appending(path: rel)
         do {
@@ -201,7 +217,10 @@ extension DownloadManager: URLSessionDownloadDelegate {
     }
 
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if error != nil, let key = task.taskDescription { Task { @MainActor in self.failed(key: key) } }
+        if let error, (error as? URLError)?.code != .cancelled,
+           let key = task.taskDescription {
+            Task { @MainActor in self.failed(key: key) }
+        }
     }
 
     nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {

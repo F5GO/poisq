@@ -9,20 +9,23 @@ final class LyricsModel {
     private(set) var isLoading = false
     private var cache: [String: Lyrics] = [:]
     private var missing: Set<String> = []
+    private var activeSongID: String?
 
     /// `force` — запросить заново (кнопка «Обновить текст»).
     func load(song: Song?, client: SubsonicClient?, force: Bool = false) async {
-        guard let song, let client else { lyrics = nil; return }
+        activeSongID = song?.id
+        guard let song, let client else { isLoading = false; lyrics = nil; return }
         if force { cache[song.id] = nil; missing.remove(song.id) }
-        if let hit = cache[song.id] { lyrics = hit; return }
-        if missing.contains(song.id) { lyrics = nil; return }
+        if let hit = cache[song.id] { isLoading = false; lyrics = hit; return }
+        if missing.contains(song.id) { isLoading = false; lyrics = nil; return }
         isLoading = true
         lyrics = nil
         let result = await client.lyrics(for: song)
-        isLoading = false
         // Оформление строк — только для текста с таймингами; обычный текст показываем как есть. Считаем один раз, а не при каждой перерисовке.
         let soft = result.map { $0.isSynced ? Hyphenator.soften($0) : $0 }
-        if let soft { cache[song.id] = soft } else { missing.insert(song.id) }
+        if let soft { cache[song.id] = soft } else if !Task.isCancelled { missing.insert(song.id) }
+        guard !Task.isCancelled, activeSongID == song.id else { return }
+        isLoading = false
         lyrics = soft
     }
 }

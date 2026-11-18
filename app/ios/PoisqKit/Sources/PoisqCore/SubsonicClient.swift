@@ -112,7 +112,7 @@ public final class SubsonicClient: Sendable {
         if let poisq = list.first(where: { $0["name"] as? String == "poisq" }),
            let versions = poisq["versions"] as? [Int] {
             caps.poisqVersion = versions.max()
-            caps.hasCast = (try? await castZones())?.isEmpty == false    // эндпоинты трансляции есть только у poisq
+            caps.hasCast = (try? await castZones()) != nil    // эндпоинты трансляции есть только у poisq
         }
         return caps
     }

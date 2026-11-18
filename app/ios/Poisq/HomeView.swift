@@ -159,27 +159,28 @@ struct HomeView: View {
     @ViewBuilder private var quickActions: some View {
         let actions = model.homeLayout.visibleQuickActions
         if !actions.isEmpty {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: min(actions.count, 4)), spacing: 8) {
+            HStack(spacing: 8) {
                 ForEach(actions) { action in
-                    quickAction(action)
+                    quickAction(action, expanded: actions.count < 4)
                 }
             }
             .padding(.horizontal, 20)
+            .animation(.snappy, value: actions.map(\.rawValue))
         }
     }
 
-    @ViewBuilder private func quickAction(_ action: HomeQuickAction) -> some View {
+    @ViewBuilder private func quickAction(_ action: HomeQuickAction, expanded: Bool) -> some View {
         switch action {
         case .shuffleAll:
-            QuickActionTile(title: action.title, systemImage: action.icon) { shuffleAll() }
+            QuickActionTile(title: action.title, systemImage: action.icon, expanded: expanded) { shuffleAll() }
         case .randomAlbum:
-            QuickActionTile(title: action.title, systemImage: action.icon) { openRandomAlbum() }
+            QuickActionTile(title: action.title, systemImage: action.icon, expanded: expanded) { openRandomAlbum() }
                 .disabled(randomAlbum == nil)
         case .favoriteSongs:
-            QuickActionTile(title: action.title, systemImage: action.icon) { playFavorites() }
+            QuickActionTile(title: action.title, systemImage: action.icon, expanded: expanded) { playFavorites() }
                 .disabled(activeFavoriteSongs.isEmpty)
         case .downloads:
-            QuickActionTile(title: action.title, systemImage: action.icon) {
+            QuickActionTile(title: action.title, systemImage: action.icon, expanded: expanded) {
                 path.append(HomeDestination.downloads)
             }
         }
@@ -330,6 +331,7 @@ struct ServerAvatar: View {
 private struct QuickActionTile: View {
     let title: LocalizedStringKey
     let systemImage: String
+    let expanded: Bool
     let action: () -> Void
 
     var body: some View {
@@ -337,12 +339,15 @@ private struct QuickActionTile: View {
             Button(action: action) {
                 Image(systemName: systemImage)
                     .font(.system(size: 19, weight: .semibold))
-                    .frame(width: 52, height: 52)
+                    .frame(maxWidth: expanded ? .infinity : nil)
+                    .frame(width: expanded ? nil : 52, height: 52)
                     .contentShape(.rect)
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.roundedRectangle(radius: 16))
             .accessibilityLabel(title)
+            .frame(maxWidth: expanded ? .infinity : nil)
+
             Text(title)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -351,6 +356,7 @@ private struct QuickActionTile: View {
                 .minimumScaleFactor(0.8)
                 .frame(maxWidth: .infinity, minHeight: 24, alignment: .top)
         }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -641,13 +647,18 @@ private struct ResumeQueueCard: View {
                     .allowsHitTesting(false)
 
                     Button { player.togglePlayPause() } label: {
-                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.title3.weight(.semibold))
-                            .contentTransition(.symbolEffect(.replace))
-                            .frame(width: 44, height: 44)
+                        Label {
+                            Text(player.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
+                                .font(.subheadline.weight(.semibold))
+                        } icon: {
+                            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                                .font(.subheadline.weight(.bold))
+                                .contentTransition(.symbolEffect(.replace))
+                        }
+                        .frame(width: 108, height: 52)
                     }
                     .buttonStyle(.glassProminent)
-                    .buttonBorderShape(.circle)
+                    .buttonBorderShape(.capsule)
                     .accessibilityLabel(player.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
                 }
             }

@@ -17,4 +17,7 @@ import Foundation
         #expect(ServerURL.candidates(from: "").isEmpty)
         #expect(ServerURL.candidates(from: "ftp://x.com").isEmpty)
     }
+    @Test func uppercaseSchemeIsAccepted() {
+        #expect(ServerURL.candidates(from: "HTTPS://music.example.com").map(\.absoluteString) == ["HTTPS://music.example.com"])
+    }
 }

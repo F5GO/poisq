@@ -189,8 +189,9 @@ final class AppModel {
     static func parseAlternates(_ raw: [String]) -> [URL] {
         var out: [URL] = []
         for r in raw {
-            guard let u = ServerURL.candidates(from: r).first, !out.contains(u) else { continue }
-            out.append(u)
+            for u in ServerURL.candidates(from: r) where !out.contains(u) {
+                out.append(u)
+            }
         }
         return out
     }
@@ -240,7 +241,9 @@ final class AppModel {
 
     func removeServer(_ id: UUID) {
         Keychain.delete(account: id.uuidString)
-        Task { await covers.clear() }          // обложки удалённого сервера не нужны
+        ServerHeaders.save([:], for: id)
+        defaults.removeObject(forKey: "pins." + id.uuidString)
+        covers.clear()                         // обложки удалённого сервера не нужны
         downloads.removeAll(serverID: id)
         cache.clear(serverID: id)
         SessionStore.delete(serverID: id)
@@ -272,7 +275,8 @@ final class AppModel {
         let client = SubsonicClient(baseURL: profile.url, username: profile.username, password: password, headers: headers)
         let engine = AudioStreamingEngine()
         engine.requestHeaders = headers
-        Task { await covers.setHeaders(headers) }
+        covers.setHeaders(headers)
+        prewarmStartupCovers(serverID: profile.id)
         equalizer.attach(engine)
         let player = Player(client: client, engine: engine)
         player.equalizer = equalizer
@@ -397,6 +401,8 @@ final class AppModel {
         guard network.isConnected else { setReachable(false); return }
         do { try await pingClient.ping(); setReachable(true); await returnToPrimaryIfPossible() }
         catch is URLError { setReachable(await failover()) }
+        catch SubsonicError.http(let code) where code >= 500 || code == 404 { setReachable(await failover()) }
+        catch SubsonicError.decoding { setReachable(await failover()) }
         catch { setReachable(true) }
     }
 
@@ -417,7 +423,10 @@ final class AppModel {
 
     /// Ответ сервера (даже «ошибка») — это живой адрес; сетевая ошибка — нет.
     private static func answers(_ c: SubsonicClient) async -> Bool {
-        do { try await c.ping(); return true } catch is URLError { return false } catch { return true }
+        do { try await c.ping(); return true }
+        catch is URLError, SubsonicError.decoding { return false }
+        catch SubsonicError.http(let code) where code >= 500 || code == 404 { return false }
+        catch { return true }
     }
 
     /// Когда работаем на запасном адресе, а основной ожил — возвращаемся на основной.
@@ -501,13 +510,44 @@ final class AppModel {
         }
         guard let chosen, self.player === player else { return }       // за время запроса сервер могли сменить
         player.restore(chosen)
+        let queueCoverKeys = chosen.songs.prefix(6).compactMap(\.coverArt).map { "\(serverID.uuidString)_\($0)_200" }
+        covers.prewarm(keys: queueCoverKeys)
     }
 
     // MARK: Обложки
 
+    func cachedCoverImage(_ id: String, pixels: Int) -> UIImage? {
+        guard let sid = activeID else { return nil }
+        return covers.cachedImage(key: "\(sid.uuidString)_\(id)_\(pixels)")
+    }
+
+    func coverImageResult(_ id: String, pixels: Int) async -> CoverCache.Result {
+        guard let client, let sid = activeID else { return CoverCache.Result(image: nil, fromCache: false) }
+        return await covers.imageResult(key: "\(sid.uuidString)_\(id)_\(pixels)") { try client.coverArtURL(id: id, size: pixels) }
+    }
+
     func coverImage(_ id: String, pixels: Int) async -> UIImage? {
-        guard let client, let sid = activeID else { return nil }
-        return await covers.image(key: "\(sid.uuidString)_\(id)_\(pixels)") { try client.coverArtURL(id: id, size: pixels) }
+        await coverImageResult(id, pixels: pixels).image
+    }
+
+    private func prewarmStartupCovers(serverID: UUID) {
+        var keys: [String] = []
+        for pin in pins.pins {
+            if let coverID = pin.album?.coverArt ?? pin.playlist?.coverArt {
+                keys.append("\(serverID.uuidString)_\(coverID)_200")
+            }
+        }
+        if let local = SessionStore.load(serverID: serverID) {
+            for song in local.songs.prefix(4) {
+                if let coverID = song.coverArt {
+                    keys.append("\(serverID.uuidString)_\(coverID)_200")
+                }
+            }
+            if let currentCover = local.songs.first?.coverArt {
+                keys.append("\(serverID.uuidString)_\(currentCover)_900")
+            }
+        }
+        covers.prewarm(keys: keys)
     }
 
     // MARK: Медиатеки

@@ -10,8 +10,9 @@ public enum ServerURL {
         return raw.compactMap { s in
             var s = s
             while s.hasSuffix("/") { s.removeLast() }
-            guard let u = URL(string: s), let host = u.host(), !host.isEmpty,
-                  u.scheme == "http" || u.scheme == "https" else { return nil }
+            guard let u = URL(string: s), let host = u.host(), !host.isEmpty else { return nil }
+            let scheme = u.scheme?.lowercased()
+            guard scheme == "http" || scheme == "https" else { return nil }
             return u
         }
     }

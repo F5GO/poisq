@@ -152,11 +152,21 @@ public final class Player {
     /// Меняет движок (телефон ↔ колонка). Очередь и место сохраняются, воспроизведение остаётся на паузе.
     public func useEngine(_ new: PlaybackEngine, casting: Bool) {
         let saved = snapshot()
+        let savedHistory = history
+        let savedOriginal = original
+        let savedAutoIDs = autoIDs
+        let savedSpokenIDs = spokenIDs
+        let savedContinuation = continuation
         stop()
         engine = new
         isCasting = casting
         wire(new)
         if let saved { restore(saved) }
+        history = savedHistory
+        original = savedOriginal
+        autoIDs = savedAutoIDs
+        spokenIDs = savedSpokenIDs
+        continuation = savedContinuation
     }
 
     public var isActive: Bool { state == .active }
@@ -187,7 +197,9 @@ public final class Player {
         engine.setReplayGain(Float(db))
     }
 
-    public func isFavorite(_ song: Song) -> Bool { favoriteOverrides[song.id] ?? favoriteIDs.contains(song.id) }
+    public func isFavorite(_ song: Song) -> Bool {
+        favoriteOverrides[song.id] ?? (favoriteIDs.contains(song.id) || song.starred != nil)
+    }
     /// Сверяет локальное состояние со свежим списком сервера, не затирая ещё не отражённые в Song действия пользователя.
     public func synchronizeFavorites(_ songs: [Song]) {
         favoriteIDs.formUnion(songs.map(\.id))
@@ -343,6 +355,10 @@ public final class Player {
 
     public func resume() {
         if restoredPosition != nil { startRestored(); return }
+        if engine.state == .idle, !queue.isEmpty {
+            rebuild(queue, immediate: true)
+            return
+        }
         engine.resume()
     }
     public func pause() { engine.pause() }
@@ -430,10 +446,14 @@ public final class Player {
 
     public func moveUpcoming(from source: IndexSet, to destination: Int) {
         var rest = upcoming
-        let moving = source.sorted().map { rest[$0] }
-        let before = source.filter { $0 < destination }.count
-        rest = rest.enumerated().filter { !source.contains($0.offset) }.map(\.element)
-        rest.insert(contentsOf: moving, at: destination - before)
+        let valid = source.filter { rest.indices.contains($0) }.sorted()
+        guard !valid.isEmpty else { return }
+        let moving = valid.map { rest[$0] }
+        let validSet = Set(valid)
+        let before = valid.filter { $0 < destination }.count
+        rest = rest.enumerated().filter { !validSet.contains($0.offset) }.map(\.element)
+        let target = min(max(0, destination - before), rest.count)
+        rest.insert(contentsOf: moving, at: target)
         replaceUpcoming(with: rest)
         onSessionChange?()
     }
@@ -604,7 +624,7 @@ public final class Player {
     }
 
     private func start(_ songs: [Song]) throws {
-        let first = songs[0]
+        guard let first = songs.first else { return }
         try register(first)
         engine.play(try playbackURL(for: first))
         for s in songs.dropFirst() { try? enqueue(s) }
@@ -661,7 +681,13 @@ public final class Player {
         playingURL = url
         state = .active
         if song.starred != nil { favoriteIDs.insert(song.id) }
-        if let i = queue.firstIndex(of: song) { queue.removeFirst(i) }
+        if let i = queue.firstIndex(of: song), i > 0 {
+            for dropped in queue[..<i] {
+                if let u = queuedURL.removeValue(forKey: dropped.id) { urlToSong[u] = nil }
+                enqueuedIDs.remove(dropped.id)
+            }
+            queue.removeFirst(i)
+        }
         extendForRepeat()
         onTrackChange?(song, upcoming)
         equalizer?.trackChanged(genre: song.genre)

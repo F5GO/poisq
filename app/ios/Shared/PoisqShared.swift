@@ -16,7 +16,7 @@ enum PoisqShared {
         return dir
     }
     static func coverURL(_ file: String?) -> URL? {
-        guard let file, !file.isEmpty else { return nil }
+        guard let file, !file.isEmpty, !file.contains("/"), !file.contains("\\"), file != ".", file != ".." else { return nil }
         return coversDirectory?.appending(path: file)
     }
 }

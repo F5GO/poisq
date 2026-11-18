@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import PoisqCore
 
 /// Кеш прослушивания: текущий и ближайшие треки докачиваются в файлы, чтобы повтор, перемотка и обрыв сети не мешали.
@@ -29,8 +30,20 @@ final class CacheManager {
 
     /// Файлы разного качества лежат отдельно: смена качества не подсовывает старые версии.
     private func file(_ song: Song, _ serverID: UUID, _ quality: StreamQuality) -> URL {
-        let ext = quality.fileExtension ?? (song.suffix?.isEmpty == false ? song.suffix! : "audio")
-        return root.appending(path: serverID.uuidString, directoryHint: .isDirectory).appending(path: "\(song.id)-\(quality.tag).\(ext)")
+        let rawExt = quality.fileExtension ?? (song.suffix ?? "")
+        let ext = String(rawExt.filter { $0.isASCII && ($0.isLetter || $0.isNumber) })
+        let safeExt = ext.isEmpty ? "audio" : ext
+        let safeID = Self.safeID(song.id)
+        return root.appending(path: serverID.uuidString, directoryHint: .isDirectory).appending(path: "\(safeID)-\(quality.tag).\(safeExt)")
+    }
+
+    private static func safeID(_ raw: String) -> String {
+        let clean = String(raw.map { ($0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-")) ? $0 : "_" })
+        if clean == raw, !clean.isEmpty, !clean.hasPrefix("."), clean.count <= 80 {
+            return clean
+        }
+        let digest = SHA256.hash(data: Data(raw.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return "\(clean.prefix(40))_\(digest)"
     }
 
     /// Файл из кеша, если он целиком скачан. Обращение освежает «возраст» файла, чтобы он не уходил в очистку первым.
@@ -53,7 +66,12 @@ final class CacheManager {
             Task { [session] in
                 defer { Task { @MainActor in self.inflight.remove(key) } }
                 guard let (tmp, response) = try? await session.download(for: request),
-                      (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+                      let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
+                let ct = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+                if ct.contains("json") || ct.contains("xml") || ct.contains("html") {
+                    try? FileManager.default.removeItem(at: tmp)
+                    return
+                }
                 try? FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? FileManager.default.removeItem(at: dest)
                 if (try? FileManager.default.moveItem(at: tmp, to: dest)) != nil {

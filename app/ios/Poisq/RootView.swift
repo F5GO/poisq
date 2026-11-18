@@ -83,6 +83,7 @@ struct RootView: View {
     @State private var searchPath = NavigationPath()
     @Environment(\.colorScheme) private var scheme
     @State private var showPlayer = false
+    @State private var pendingOpenPlayer = false
     @Namespace private var playerZoom
     @Environment(\.scenePhase) private var scenePhase
 
@@ -138,7 +139,19 @@ struct RootView: View {
             if !visible.contains(tab) { tab = visible.first ?? .home }
         }
         .onOpenURL { SystemIntegration.shared.open($0) }
-        .onChange(of: model.openPlayerRequest) { if model.player?.isActive == true { showPlayer = true } }       // ссылки из виджетов: poisq://album/…
+        .onChange(of: model.openPlayerRequest) {
+            if model.player?.isActive == true {
+                showPlayer = true
+            } else {
+                pendingOpenPlayer = true
+            }
+        }       // ссылки из виджетов: poisq://album/…
+        .onChange(of: model.player?.isActive) { _, active in
+            if active == true, pendingOpenPlayer {
+                pendingOpenPlayer = false
+                showPlayer = true
+            }
+        }
         .sheet(item: Binding(get: { model.playlistTarget }, set: { model.playlistTarget = $0 })) { AddToPlaylistSheet(target: $0) }
         .sheet(item: Binding(get: { model.shareItems }, set: { model.shareItems = $0 })) { ActivityView(items: $0.items).presentationDetents([.medium, .large]) }
         .fullScreenCover(isPresented: $showPlayer) {

@@ -51,7 +51,8 @@ final class ScrobbleQueue {
         defer { flushing = false }
         while let item = items.first(where: { $0.serverID == serverID }) {
             do { try await client.scrobble(songID: item.songID, time: item.time, submission: true) }
-            catch is URLError { return }
+            catch is URLError, SubsonicError.decoding { return }
+            catch SubsonicError.http(let code) where code >= 500 || code == 429 { return }
             catch { /* сервер не принял (песни нет и т. п.) — повторять бессмысленно */ }
             if let i = items.firstIndex(where: { $0.serverID == item.serverID && $0.songID == item.songID && $0.time == item.time }) { items.remove(at: i) }
             save()

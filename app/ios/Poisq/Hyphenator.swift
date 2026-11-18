@@ -62,14 +62,17 @@ enum Hyphenator {
         let chars = Array(word)
         guard chars.count >= minWord else { return word }
         let cf = word as CFString
-        let range = CFRange(location: 0, length: CFStringGetLength(cf))
+        let utf16Len = CFStringGetLength(cf)
+        let range = CFRange(location: 0, length: utf16Len)
         var points: [Int] = []
-        var from = range.length
+        var from = utf16Len
         while from > 0 {
             let loc = CFStringGetHyphenationLocationBeforeIndex(cf, from, range, 0, locale, nil)
             if loc == kCFNotFound || loc <= 0 { break }
-            if loc >= minPart, range.length - loc >= minPart, (points.last.map { $0 - loc >= minPart } ?? true) {
-                points.append(loc)
+            let utf16Idx = String.Index(utf16Offset: loc, in: word)
+            let charPos = word.distance(from: word.startIndex, to: utf16Idx)
+            if charPos >= minPart, chars.count - charPos >= minPart, (points.last.map { $0 - charPos >= minPart } ?? true) {
+                points.append(charPos)
             }
             from = loc
         }
