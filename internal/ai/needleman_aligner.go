@@ -29,9 +29,9 @@ type refTokenPos struct {
 // между всеми словами эталонного текста песни и всеми откалиброванными словами Whisper.
 // Возвращает готовый синхронизированный LRC-текст с математически выверенными таймкодами [mm:ss.xx].
 func PreAlignReferenceWithWords(referencePlain string, data *AcousticTimelineData) string {
-	refTrimmed := strings.TrimSpace(referencePlain)
+	refTrimmed := strings.TrimSpace(FastCleanStructuralTags(referencePlain))
 	if refTrimmed == "" || data == nil || len(data.Words) == 0 {
-		return refTrimmed
+		return ""
 	}
 
 	rawLines := strings.Split(refTrimmed, "\n")
@@ -52,7 +52,7 @@ func PreAlignReferenceWithWords(referencePlain string, data *AcousticTimelineDat
 	}
 
 	if len(cleanLines) == 0 {
-		return refTrimmed
+		return ""
 	}
 
 	lineTimes := computeGlobalDPLineTimestamps(lineTokensList, data)
@@ -429,7 +429,10 @@ func SnapLRCToAcousticWordsStats(lrcText string, data *AcousticTimelineData) (st
 			finalSec = d
 		case gDist <= trustWindow:
 			finalSec = gSnap
-			if !dpMatched[i] || math.Abs(d-g) > trustWindow {
+			if !dpMatched[i] {
+				stats.Unconfirmed++
+				usedGemini++
+			} else if math.Abs(d-g) > trustWindow {
 				usedGemini++
 			}
 		case dpMatched[i]:

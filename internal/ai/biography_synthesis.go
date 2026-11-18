@@ -595,22 +595,6 @@ func FilterGroundedSummary(summary BiographySummary, verification SynthesisVerif
 	if len(kept) == 0 {
 		return BiographySummary{}, false
 	}
-	if len(kept) >= 2 && len(keptOrigins) < 2 {
-		for _, id := range summary.UsedSourceIDs {
-			origin, ok := allowed[id]
-			if !ok {
-				continue
-			}
-			if _, exists := keptOrigins[origin]; !exists {
-				kept[0].SourceIDs = append(kept[0].SourceIDs, id)
-				usedSet[id] = struct{}{}
-				keptOrigins[origin] = struct{}{}
-				if len(keptOrigins) >= 2 {
-					break
-				}
-			}
-		}
-	}
 	joined := strings.Join(texts, " ")
 	if strings.TrimSpace(artistName) != "" && validateSummaryArtistName(joined, artistName) != nil {
 		kept[0].Text = strings.TrimSpace(artistName) + ": " + kept[0].Text

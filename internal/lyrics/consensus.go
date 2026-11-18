@@ -178,6 +178,9 @@ func medianInt(xs []int) int {
 // PickConsensusWinner выбирает победителя «по большинству». Возвращает nil, если согласия нет
 // (меньше двух источников с текстом или тексты не совпадают) — тогда используется прежний выбор по баллам.
 func PickConsensusWinner(cands []TournamentCandidate, q SearchQuery) (*TournamentCandidate, *ConsensusInfo) {
+	// Дедуплицируем голосующих по ProviderID, оставляя лучшего кандидата от каждого источника,
+	// чтобы один провайдер с разными вариантами ответа не образовывал консенсус сам с собой.
+	bestByProvider := make(map[string]int)
 	var voters []voter
 	for i, c := range cands {
 		if c.Lyrics == nil || c.Lyrics.Instrumental {
@@ -188,7 +191,18 @@ func PickConsensusWinner(cands []TournamentCandidate, q SearchQuery) (*Tournamen
 			logger.Info("[CONSENSUS] %s не участвует в голосовании: в тексте всего %d слов (нужно ≥ %d)", c.ProviderID, len(toks), minVoteTokens)
 			continue
 		}
-		voters = append(voters, voter{idx: i, cand: c, tokens: toks, counts: bagCounts(toks)})
+		v := voter{idx: i, cand: c, tokens: toks, counts: bagCounts(toks)}
+		if existingIdx, exists := bestByProvider[c.ProviderID]; exists {
+			prev := voters[existingIdx]
+			better := c.Score.Total > prev.cand.Score.Total ||
+				(c.Score.Total == prev.cand.Score.Total && c.Lyrics.Kind == KindLRC && prev.cand.Lyrics.Kind != KindLRC)
+			if better {
+				voters[existingIdx] = v
+			}
+			continue
+		}
+		bestByProvider[c.ProviderID] = len(voters)
+		voters = append(voters, v)
 	}
 	if len(voters) < 2 {
 		return nil, &ConsensusInfo{Voters: len(voters), Reason: "недостаточно источников с текстом для голосования"}

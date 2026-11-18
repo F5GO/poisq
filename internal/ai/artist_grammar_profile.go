@@ -76,14 +76,6 @@ func InferArtistGrammarProfile(artistName string, evidence []SynthesisEvidence) 
 		primaryText = fullText
 	}
 
-	// Явные маркеры, которые Collector ставит для целевого артиста
-	if strings.Contains(fullText, "female solo artist") || strings.Contains(fullText, "female singer") || strings.Contains(fullText, "female rapper") || strings.Contains(fullText, "female musician") || strings.Contains(fullText, "певица") || strings.Contains(fullText, "исполнительница") || strings.Contains(fullText, "автор-исполнительница") {
-		return ArtistGrammarProfile{Kind: ArtistEntitySolo, Gender: ArtistGenderFemale}
-	}
-	if strings.Contains(fullText, "musical duo") || strings.Contains(fullText, "electronic duo") || strings.Contains(fullText, "hip-hop duo") || strings.Contains(fullText, "pop duo") || strings.Contains(fullText, "музыкальный дуэт") || strings.Contains(fullText, "электронный дуэт") {
-		return ArtistGrammarProfile{Kind: ArtistEntityDuo}
-	}
-
 	// Нейтрализуем конструкции «участник группы», «солистка группы», «member of the band»,
 	// которые указывают на сольного артиста, состоящего в группе, а не на саму группу.
 	soloMemberPhrases := []string{
@@ -168,6 +160,16 @@ func InferArtistGrammarProfile(artistName string, evidence []SynthesisEvidence) 
 			"выпустил", "записал", "начал", "основал", "получил", "стал", "представил", "выступил", "он",
 		)
 		malePersonalScore += maleVerbHits * 2
+	}
+
+	// Явные маркеры проверяем по primaryText и только при отсутствии сильных противоречий
+	if groupScore == 0 && malePersonalScore == 0 {
+		if strings.Contains(primaryText, "female solo artist") || strings.Contains(primaryText, "female singer") || strings.Contains(primaryText, "female rapper") || strings.Contains(primaryText, "female musician") || strings.Contains(primaryText, "певица") || strings.Contains(primaryText, "исполнительница") || strings.Contains(primaryText, "автор-исполнительница") {
+			return ArtistGrammarProfile{Kind: ArtistEntitySolo, Gender: ArtistGenderFemale}
+		}
+		if strings.Contains(primaryText, "musical duo") || strings.Contains(primaryText, "electronic duo") || strings.Contains(primaryText, "hip-hop duo") || strings.Contains(primaryText, "pop duo") || strings.Contains(primaryText, "музыкальный дуэт") || strings.Contains(primaryText, "электронный дуэт") {
+			return ArtistGrammarProfile{Kind: ArtistEntityDuo}
+		}
 	}
 
 	soloScore := max(femalePersonalScore, malePersonalScore)

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -61,13 +62,14 @@ type Line struct {
 
 // Summary — сводка по треку.
 type Summary struct {
-	Lines     int     `json:"lines"`
-	High      int     `json:"high"`
-	Medium    int     `json:"medium"`
-	Low       int     `json:"low"`
-	Estimated int     `json:"estimated"`
-	LowRatio  float64 `json:"low_ratio"`
-	Seconds   float64 `json:"seconds"`
+	Lines          int     `json:"lines"`
+	High           int     `json:"high"`
+	Medium         int     `json:"medium"`
+	Low            int     `json:"low"`
+	Estimated      int     `json:"estimated"`
+	LowRatio       float64 `json:"low_ratio"`
+	Seconds        float64 `json:"seconds"`
+	MedianGapToMMS float64 `json:"median_gap_to_mms"`
 }
 
 // Result — итог выравнивания.
@@ -137,12 +139,18 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		return 0, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if readErr != nil {
+		return resp.StatusCode, fmt.Errorf("%w: ошибка чтения ответа: %v", ErrUnavailable, readErr)
+	}
 	if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout {
 		return resp.StatusCode, fmt.Errorf("%w: HTTP %d", ErrUnavailable, resp.StatusCode)
 	}
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
+			if resp.StatusCode >= 500 {
+				return resp.StatusCode, fmt.Errorf("%w: HTTP %d", ErrUnavailable, resp.StatusCode)
+			}
 			return resp.StatusCode, fmt.Errorf("некорректный ответ сервиса выравнивания: %w", err)
 		}
 	}
@@ -175,6 +183,9 @@ func (c *Client) Submit(ctx context.Context, req SubmitRequest) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	if code >= 500 && out.ErrorCode == "" {
+		return "", fmt.Errorf("%w: HTTP %d", ErrUnavailable, code)
+	}
 	if code != http.StatusAccepted {
 		return "", &JobError{Code: firstNonEmpty(out.ErrorCode, "failed"), Message: firstNonEmpty(out.Error, fmt.Sprintf("HTTP %d", code))}
 	}
@@ -184,7 +195,7 @@ func (c *Client) Submit(ctx context.Context, req SubmitRequest) (string, error) 
 // Job возвращает состояние задачи; ErrJobLost, если сервис её не знает.
 func (c *Client) Job(ctx context.Context, id string) (*JobStatus, error) {
 	var st JobStatus
-	code, err := c.do(ctx, http.MethodGet, "/v1/jobs/"+id, nil, &st)
+	code, err := c.do(ctx, http.MethodGet, "/v1/jobs/"+url.PathEscape(id), nil, &st)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +210,7 @@ func (c *Client) Job(ctx context.Context, id string) (*JobStatus, error) {
 
 // Cancel отменяет задачу (ошибки не критичны).
 func (c *Client) Cancel(ctx context.Context, id string) {
-	_, _ = c.do(ctx, http.MethodDelete, "/v1/jobs/"+id, nil, nil)
+	_, _ = c.do(ctx, http.MethodDelete, "/v1/jobs/"+url.PathEscape(id), nil, nil)
 }
 
 // Run ставит задачу, опрашивает её до завершения и возвращает результат. onProgress получает новые записи

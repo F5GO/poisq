@@ -449,13 +449,14 @@ func TestFilterGroundedSummaryRecoversDroppedOpeningSentence(t *testing.T) {
 		Sentences: []SummarySentence{
 			{ID: 1, Text: s1, SourceIDs: []string{"web:fact-1"}},
 			{ID: 2, Text: s2, SourceIDs: []string{"web:fact-2"}},
-			{ID: 3, Text: s3, SourceIDs: []string{"web:fact-2"}},
+			{ID: 3, Text: s3, SourceIDs: []string{"web:fact-3"}},
 		},
-		UsedSourceIDs: []string{"web:fact-1", "web:fact-2"},
+		UsedSourceIDs: []string{"web:fact-1", "web:fact-2", "web:fact-3"},
 	}
 	evidence := []SynthesisEvidence{
 		{ID: "web:fact-1", Origin: "origin1.example", Language: "ru", Text: s1},
-		{ID: "web:fact-2", Origin: "origin2.example", Language: "ru", Text: s2 + " " + s3},
+		{ID: "web:fact-2", Origin: "origin2.example", Language: "ru", Text: s2},
+		{ID: "web:fact-3", Origin: "origin3.example", Language: "ru", Text: s3},
 	}
 	verification := SynthesisVerification{
 		Grounded: false,

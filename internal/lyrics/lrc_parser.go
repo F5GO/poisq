@@ -8,16 +8,20 @@ package lyrics
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 var (
-	// Регулярное выражение для поиска временных меток [mm:ss.xx] или [mm:ss.xxx]
-	lrcTimeRegex = regexp.MustCompile(`\[(\d{1,2}):(\d{2})(?:\.(\d{2,3}))?\]`)
+	// Регулярное выражение для поиска временных меток [mm:ss.x], [mm:ss.xx] или [mm:ss.xxx]
+	lrcTimeRegex = regexp.MustCompile(`\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]`)
+	// Регулярное выражение для строк мета-тегов заголовка LRC ([ar:...], [ti:...], [al:...], [by:...], [offset:...])
+	lrcMetaTagRegex = regexp.MustCompile(`^\s*\[[a-zA-Z]{1,10}:[^\]]*\]\s*$`)
 )
 
 // ParseLRC разбирает сырой текст LRC в слайс структурированных строк Line с расчетом миллисекунд.
+// Поддерживает несколько временных меток на одной строке (например, [00:15.00][01:20.00] Припев).
 func ParseLRC(raw string) []Line {
 	if strings.TrimSpace(raw) == "" {
 		return nil
@@ -32,33 +36,44 @@ func ParseLRC(raw string) []Line {
 			continue
 		}
 
-		matches := lrcTimeRegex.FindStringSubmatch(l)
-		if len(matches) < 3 {
+		allMatches := lrcTimeRegex.FindAllStringSubmatch(l, -1)
+		if len(allMatches) == 0 {
 			continue
 		}
 
-		min, _ := strconv.ParseInt(matches[1], 10, 64)
-		sec, _ := strconv.ParseInt(matches[2], 10, 64)
-		var ms int64
-		if len(matches) > 3 && matches[3] != "" {
-			fracStr := matches[3]
-			if len(fracStr) == 2 {
-				fracVal, _ := strconv.ParseInt(fracStr, 10, 64)
-				ms = fracVal * 10
-			} else if len(fracStr) == 3 {
-				ms, _ = strconv.ParseInt(fracStr, 10, 64)
+		text := strings.TrimSpace(lrcTimeRegex.ReplaceAllString(l, ""))
+		for _, matches := range allMatches {
+			if len(matches) < 3 {
+				continue
 			}
+
+			minVal, _ := strconv.ParseInt(matches[1], 10, 64)
+			secVal, _ := strconv.ParseInt(matches[2], 10, 64)
+			var ms int64
+			if len(matches) > 3 && matches[3] != "" {
+				fracStr := matches[3]
+				fracVal, _ := strconv.ParseInt(fracStr, 10, 64)
+				switch len(fracStr) {
+				case 1:
+					ms = fracVal * 100
+				case 2:
+					ms = fracVal * 10
+				case 3:
+					ms = fracVal
+				}
+			}
+
+			startMs := minVal*60*1000 + secVal*1000 + ms
+			result = append(result, Line{
+				Text:    text,
+				StartMs: startMs,
+			})
 		}
-
-		startMs := min*60*1000 + sec*1000 + ms
-		text := lrcTimeRegex.ReplaceAllString(l, "")
-		text = strings.TrimSpace(text)
-
-		result = append(result, Line{
-			Text:    text,
-			StartMs: startMs,
-		})
 	}
+
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].StartMs < result[j].StartMs
+	})
 
 	// Рассчитываем DurationMs как разницу между началом текущей и следующей строки
 	for i := 0; i < len(result); i++ {
@@ -90,16 +105,17 @@ func BuildLRC(lines []Line) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// StripLRCTimestamps удаляет все временные метки из LRC текста, оставляя чистый Plain текст.
+// StripLRCTimestamps удаляет все временные метки и мета-теги заголовка LRC, оставляя чистый Plain текст.
 func StripLRCTimestamps(raw string) string {
 	cleaned := lrcTimeRegex.ReplaceAllString(raw, "")
 	lines := strings.Split(cleaned, "\n")
 	var result []string
 	for _, l := range lines {
 		t := strings.TrimSpace(l)
-		if t != "" {
-			result = append(result, t)
+		if t == "" || lrcMetaTagRegex.MatchString(t) {
+			continue
 		}
+		result = append(result, t)
 	}
 	return strings.Join(result, "\n")
 }

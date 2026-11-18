@@ -68,6 +68,12 @@ func (t *JobTelemetryTracker) ClearJob(jobID int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.entries, jobID)
+	for i, id := range t.order {
+		if id == jobID {
+			t.order = append(t.order[:i], t.order[i+1:]...)
+			break
+		}
+	}
 }
 
 // GetSteps возвращает список всех записанных шагов для указанной задачи.

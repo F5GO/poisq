@@ -136,6 +136,11 @@ func (gw *GroqWhisperClient) TranscribeAudio(ctx context.Context, opusData []byt
 			continue
 		}
 
+		if status >= 500 || (status == 0 && ctx.Err() == nil) {
+			gw.keyPool.ReportUnavailable503(leased.ID, err.Error())
+			continue
+		}
+
 		return nil, err
 	}
 

@@ -51,10 +51,24 @@ func TestBuildLRC(t *testing.T) {
 }
 
 func TestStripLRCTimestamps(t *testing.T) {
-	raw := "[00:01.25] Привет\n[00:05.00] Мир"
+	raw := "[ti:Track Title]\n[00:01.25] Привет\n[00:05.00] Мир"
 	plain := lyrics.StripLRCTimestamps(raw)
 	expected := "Привет\nМир"
 	if plain != expected {
 		t.Errorf("Ожидалось %q, получено %q", expected, plain)
+	}
+}
+
+func TestParseLRCMultiTimestampAndOrder(t *testing.T) {
+	raw := "[00:30.00][00:10.00] Припев\n[00:20.00] Куплет"
+	lines := lyrics.ParseLRC(raw)
+	if len(lines) != 3 {
+		t.Fatalf("Ожидалось 3 строки, получено %d", len(lines))
+	}
+	if lines[0].StartMs != 10000 || lines[1].StartMs != 20000 || lines[2].StartMs != 30000 {
+		t.Fatalf("Ожидалась хронологическая сортировка [10000, 20000, 30000], получено %+v", lines)
+	}
+	if lines[0].Text != "Припев" || lines[2].Text != "Припев" {
+		t.Fatalf("Потерян текст мультитаймкода: %+v", lines)
 	}
 }

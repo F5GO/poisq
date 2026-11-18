@@ -130,10 +130,10 @@ func tryFlexibleUnmarshal(jsonStr string) (*ConsensusOutput, error) {
 	}
 
 	lyricsText = strings.TrimSpace(lyricsText)
-	isSynced := true
+	isSynced := false
 	if raw.IsSynced != nil {
 		isSynced = *raw.IsSynced
-	} else if strings.Contains(lyricsText, "[") && strings.Contains(lyricsText, "]") {
+	} else if lrcLinePattern.MatchString(lyricsText) {
 		isSynced = true
 	}
 

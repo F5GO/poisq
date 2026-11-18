@@ -275,6 +275,9 @@ func (j *LLMArtistJudge) SameArtist(ctx context.Context, original lyrics.SearchQ
 	if j == nil || j.gen == nil {
 		return nil, fmt.Errorf("LLM не настроена")
 	}
+	if len(cands) == 0 {
+		return nil, nil
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Трек из библиотеки: исполнитель=%q, название=%q, альбом=%q, длительность=%v\n\nЗаписи из баз:\n",
 		original.Artist, original.Title, original.Album, original.Duration)
@@ -295,6 +298,18 @@ func (j *LLMArtistJudge) SameArtist(ctx context.Context, original lyrics.SearchQ
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &resp); err != nil {
 		return nil, fmt.Errorf("не удалось разобрать ответ ИИ-судьи: %w", err)
 	}
-	logger.Info("[AI-JUDGE] «%s»: из %d найденных записей подтверждено %v", original.Artist, len(cands), resp.Same)
-	return resp.Same, nil
+	seen := make(map[int]struct{}, len(resp.Same))
+	valid := make([]int, 0, len(resp.Same))
+	for _, idx := range resp.Same {
+		if idx < 0 || idx >= len(cands) {
+			continue
+		}
+		if _, ok := seen[idx]; ok {
+			continue
+		}
+		seen[idx] = struct{}{}
+		valid = append(valid, idx)
+	}
+	logger.Info("[AI-JUDGE] «%s»: из %d найденных записей подтверждено %v", original.Artist, len(cands), valid)
+	return valid, nil
 }

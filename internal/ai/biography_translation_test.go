@@ -74,6 +74,14 @@ func TestBiographyTranslationPreservesMappingAndEntities(t *testing.T) {
 	if strings.Contains(gen.systems[0], source) {
 		t.Fatal("source entered translation system instructions")
 	}
+
+	// Русские типографские кавычки «...» и десятилетия 1990s -> 1990-х должны допускаться
+	decadesSource := `The band “Kino” became popular in the 1990s.`
+	decadesGen := &biographyFakeGenerator{responses: []string{`{"items":[{"id":1,"text":"Группа «Kino» стала популярной в 1990-х годах."}]}`}}
+	decadesRes, err := NewBiographyAI(decadesGen).Translate(context.Background(), decadesSource)
+	if err != nil || !strings.Contains(decadesRes.Text, "1990-х") {
+		t.Fatalf("expected Russian quotes and 1990-х to pass entity preservation, err=%v res=%#v", err, decadesRes)
+	}
 }
 
 func TestBiographyTranslationRejectsMalformedOrInventedData(t *testing.T) {

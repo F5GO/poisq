@@ -341,7 +341,8 @@ func (g *GroqChatClient) GenerateText(ctx context.Context, systemPrompt, userPro
 		switch {
 		case status == http.StatusTooManyRequests || strings.Contains(low, "rate_limit"):
 			if isDailyRateLimitError(err) {
-				g.keyPool.ReportDailyQuotaExhausted(leased.ID, err.Error())
+				// Дневной лимит TPD у чат-модели не должен блокировать ключ целиком (на нём работает Whisper).
+				g.keyPool.ReportRateLimit429(leased.ID, err.Error())
 				continue
 			}
 			// Проверяем, есть ли в пуле другой активный ключ Groq.

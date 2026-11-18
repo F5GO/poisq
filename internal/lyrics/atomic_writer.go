@@ -68,14 +68,23 @@ func (w *AtomicLRCWriter) WriteForAudioFile(audioFilePath string, lrcContent str
 		return "", fmt.Errorf("ошибка создания директории для .lrc: %w", err)
 	}
 
-	base := filepath.Base(safeTarget)
-	tmpPath := filepath.Join(dir, ".poisq_tmp_"+base)
+	tmpFile, err := os.CreateTemp(dir, ".poisq_tmp_*.lrc")
+	if err != nil {
+		return "", fmt.Errorf("ошибка создания временного .lrc файла: %w", err)
+	}
+	tmpPath := tmpFile.Name()
 
 	// Записываем с завершающим переводом строки в UTF-8
 	payload := []byte(content + "\n")
-	if err := os.WriteFile(tmpPath, payload, 0644); err != nil {
+	_, writeErr := tmpFile.Write(payload)
+	_ = tmpFile.Chmod(0644)
+	closeErr := tmpFile.Close()
+	if writeErr != nil || closeErr != nil {
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("ошибка записи временного .lrc файла: %w", err)
+		if writeErr != nil {
+			return "", fmt.Errorf("ошибка записи временного .lrc файла: %w", writeErr)
+		}
+		return "", fmt.Errorf("ошибка закрытия временного .lrc файла: %w", closeErr)
 	}
 
 	if err := os.Rename(tmpPath, safeTarget); err != nil {

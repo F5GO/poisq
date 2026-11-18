@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/F5GO/poisq/internal/keypool"
@@ -105,6 +106,7 @@ type geminiGenerateResponse struct {
 type GeminiClient struct {
 	keyPool *keypool.Manager
 	client  *http.Client
+	modelMu sync.RWMutex
 	model   string
 }
 
@@ -161,8 +163,11 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 		resText, status, apiStatus, err := g.callOnce(ctx, leased.PlainKey, systemPrompt, userPrompt, responseMimeType)
 		if err == nil {
 			g.keyPool.ReportSuccess(leased.ID)
+			g.modelMu.RLock()
+			curModel := g.model
+			g.modelMu.RUnlock()
 			logger.Info("[GEMINI] Успех: попытка %d/%d, ключ #%d, модель %s, %s, промпт %d симв., ответ %d симв.",
-				attempt, maxAttempts, leased.ID, g.model, time.Since(started).Round(time.Millisecond), len(userPrompt), len(resText))
+				attempt, maxAttempts, leased.ID, curModel, time.Since(started).Round(time.Millisecond), len(userPrompt), len(resText))
 			return resText, nil
 		}
 
@@ -182,7 +187,8 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 		}
 
 		// Временная перегрузка или недоступность Google (HTTP 503 UNAVAILABLE / 502 / 504) или сетевой таймаут
-		if status == http.StatusServiceUnavailable || status == http.StatusBadGateway || status == http.StatusGatewayTimeout ||
+		if (status == 0 && ctx.Err() == nil) ||
+			status == http.StatusServiceUnavailable || status == http.StatusBadGateway || status == http.StatusGatewayTimeout ||
 			strings.Contains(errLower, "high demand") || strings.Contains(errLower, "unavailable") ||
 			strings.Contains(errLower, "timeout") || strings.Contains(errLower, "deadline exceeded") {
 			g.keyPool.ReportUnavailable503(leased.ID, err.Error())
@@ -216,7 +222,9 @@ func (g *GeminiClient) GenerateText(ctx context.Context, systemPrompt, userPromp
 
 func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userPrompt, responseMimeType string) (string, int, string, error) {
 	// Фоллбэк только между оптимальными быстрыми моделями: gemini-3.8-flash -> gemini-3.6-flash
+	g.modelMu.RLock()
 	initialModel := g.model
+	g.modelMu.RUnlock()
 	if initialModel == "" || initialModel == "gemini-2.0-flash" || initialModel == "gemini-2.5-flash" {
 		initialModel = defaultGeminiModel
 	}
@@ -240,9 +248,11 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 			}
 			resText, status, apiStatus, err := g.callSingleModel(ctx, m, apiKey, systemPrompt, userPrompt, responseMimeType)
 			if err == nil {
+				g.modelMu.Lock()
 				if m != g.model {
 					g.model = m // Автоматически фиксируем успешно ответившую модель
 				}
+				g.modelMu.Unlock()
 				return resText, status, apiStatus, nil
 			}
 
@@ -252,7 +262,8 @@ func (g *GeminiClient) callOnce(ctx context.Context, apiKey, systemPrompt, userP
 			logger.Debug("[GEMINI] Модель %s, повтор %d: HTTP %d (%s): %v", m, retry+1, status, apiStatus, err)
 
 			errLower := strings.ToLower(err.Error() + " " + apiStatus)
-			isTransient := status == http.StatusServiceUnavailable ||
+			isTransient := (status == 0 && ctx.Err() == nil) ||
+				status == http.StatusServiceUnavailable ||
 				strings.Contains(errLower, "high demand") ||
 				strings.Contains(errLower, "unavailable") ||
 				strings.Contains(errLower, "timeout") ||
@@ -382,7 +393,7 @@ func (g *GeminiClient) callGenerateContent(ctx context.Context, modelName, apiKe
 		return "", 0, "", err
 	}
 
-	endpoint := fmt.Sprintf("%s/%s:generateContent?key=%s", geminiAPIBase, modelName, apiKey)
+	endpoint := fmt.Sprintf("%s/%s:generateContent", geminiAPIBase, modelName)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", 0, "", err

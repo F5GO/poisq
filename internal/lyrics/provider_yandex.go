@@ -161,8 +161,8 @@ func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string
 			continue
 		}
 		req.Header.Set("User-Agent", "YandexMusic/2024.01.1 (Android; Google Pixel)")
-		if p.token != "" {
-			req.Header.Set("Authorization", "OAuth "+p.token)
+		if tok := p.getToken(); tok != "" {
+			req.Header.Set("Authorization", "OAuth "+tok)
 		}
 
 		resp, err := p.client.Do(req)
@@ -176,7 +176,7 @@ func (p *YandexProvider) searchTrack(ctx context.Context, q SearchQuery) (string
 		}
 
 		var data yandexSearchResponse
-		err = json.NewDecoder(resp.Body).Decode(&data)
+		err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&data)
 		resp.Body.Close()
 		if err != nil {
 			continue
@@ -285,7 +285,7 @@ func (p *YandexProvider) fetchLyricsEndpointWithAuth(ctx context.Context, trackI
 	}
 
 	var data yandexTrackLyricsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&data); err != nil {
 		return nil, err
 	}
 
@@ -349,7 +349,7 @@ func (p *YandexProvider) fetchSupplementEndpoint(ctx context.Context, trackID, c
 	}
 
 	var data yandexSupplementResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&data); err != nil {
 		return nil, err
 	}
 

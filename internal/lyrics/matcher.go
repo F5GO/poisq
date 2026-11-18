@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 var (
@@ -125,14 +126,9 @@ func CleanTitle(title string) string {
 		i++
 	}
 
-	result := string(out)
-	// Отсекаем завершающие разделители вида " - " если за ними ничего не осталось
-	parts := dashRegex.Split(result, -1)
-	if len(parts) > 0 {
-		result = parts[0]
-	}
-
-	return strings.TrimSpace(spacesRegex.ReplaceAllString(result, " "))
+	result := strings.TrimSpace(spacesRegex.ReplaceAllString(string(out), " "))
+	result = strings.TrimRight(result, "-‐‒–—― ")
+	return strings.TrimSpace(result)
 }
 
 func matchingCloseBracket(open rune) rune {
@@ -379,10 +375,10 @@ func MatchArtist(queryArtist, candArtist string) bool {
 		return true
 	}
 
-	// Проверка первого исполнителя
-	qFirst := strings.Split(q, " ")[0]
-	cFirst := strings.Split(c, " ")[0]
-	if len(qFirst) >= 4 && qFirst == cFirst {
+	// Проверка основного исполнителя (без второго и последующих участников коллаборации)
+	qPrimary := NormalizeTrackString(PrimaryArtist(queryArtist))
+	cPrimary := NormalizeTrackString(PrimaryArtist(candArtist))
+	if qPrimary != "" && cPrimary != "" && qPrimary == cPrimary && utf8.RuneCountInString(qPrimary) >= 3 {
 		return true
 	}
 
@@ -410,7 +406,7 @@ func MatchTitle(queryTitle, candTitle string) bool {
 	if len(qWords) > 1 && len(cWords) > 1 {
 		matchedWords := 0
 		for _, qw := range qWords {
-			if len(qw) <= 2 {
+			if utf8.RuneCountInString(qw) <= 2 {
 				continue
 			}
 			for _, cw := range cWords {

@@ -123,7 +123,7 @@ func (r *JobRepository) UpdateProgress(id int64, stepMsg string) error {
 	_, err := r.db.Exec(`
 		UPDATE lyrics_jobs
 		SET error_log = ?, updated_at = ?
-		WHERE id = ?
+		WHERE id = ? AND status = 'running'
 	`, stepMsg, time.Now().Unix(), id)
 	return err
 }
@@ -133,7 +133,7 @@ func (r *JobRepository) MarkWaitingQuota(id int64, retryAtUnix int64, reason str
 	_, err := r.db.Exec(`
 		UPDATE lyrics_jobs
 		SET status = 'waiting_quota', next_retry_at = ?, error_log = ?, updated_at = ?
-		WHERE id = ?
+		WHERE id = ? AND status != 'paused'
 	`, retryAtUnix, reason, time.Now().Unix(), id)
 	return err
 }
@@ -145,7 +145,7 @@ func (r *JobRepository) MarkRetryOrFailed(id int64, attempt int, maxAttempts int
 		_, err := r.db.Exec(`
 			UPDATE lyrics_jobs
 			SET status = 'failed', error_log = ?, updated_at = ?
-			WHERE id = ?
+			WHERE id = ? AND status != 'paused'
 		`, errMsg, now, id)
 		return err
 	}
@@ -154,7 +154,7 @@ func (r *JobRepository) MarkRetryOrFailed(id int64, attempt int, maxAttempts int
 	_, err := r.db.Exec(`
 		UPDATE lyrics_jobs
 		SET status = 'pending', next_retry_at = ?, error_log = ?, updated_at = ?
-		WHERE id = ?
+		WHERE id = ? AND status != 'paused'
 	`, now+backoffSec, errMsg, now, id)
 	return err
 }

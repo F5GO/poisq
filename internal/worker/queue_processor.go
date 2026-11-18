@@ -182,6 +182,10 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 		jobStarted := time.Now()
 
 		if err := qp.executeJob(ctx, job); err != nil {
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+				logger.Info("[WORKER] Задача #%d прервана остановкой контекста", job.ID)
+				return
+			}
 			var qw *QuotaWaitError
 			if errors.As(err, &qw) {
 				retryAt := time.Now().Add(qw.Wait).Unix()
@@ -191,17 +195,34 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 				return
 			}
 			if errors.Is(err, db.ErrNoAvailableKeys) {
-				if job.JobType == "whisper_karaoke" && (qp.keyPool == nil || !qp.keyPool.HasKeys("groq")) {
+				if qp.keyPool == nil {
+					msg := "Пул API-ключей не настроен."
+					qp.tracker.RecordStep(job.ID, "error", "✖ "+msg)
+					_ = qp.jobRepo.MarkRetryOrFailed(job.ID, 3, 3, msg)
+					logger.Warn("[WORKER] Задача #%d отклонена: пул API-ключей не инициализирован", job.ID)
+					return
+				}
+				if job.JobType == "whisper_karaoke" && !qp.keyPool.HasKeys("groq") {
 					msg := "Отсутствует ключ Groq Cloud в пуле. Добавьте его во вкладке «Ключи API»."
 					qp.tracker.RecordStep(job.ID, "error", "✖ "+msg)
 					_ = qp.jobRepo.MarkRetryOrFailed(job.ID, 3, 3, msg)
 					logger.Warn("[WORKER] Задача #%d отклонена: в пуле нет ключа Groq Cloud для AI Whisper караоке", job.ID)
 					return
 				}
+				if !qp.keyPool.HasKeys("groq") && !qp.keyPool.HasKeys("gemini") {
+					msg := "В пуле отсутствуют активные API-ключи (Gemini / Groq). Добавьте их во вкладке «Ключи API»."
+					qp.tracker.RecordStep(job.ID, "error", "✖ "+msg)
+					_ = qp.jobRepo.MarkRetryOrFailed(job.ID, 3, 3, msg)
+					logger.Warn("[WORKER] Задача #%d отклонена: отсутствуют активные API-ключи", job.ID)
+					return
+				}
 				retryAt := qp.keyPool.NextRetryTimestamp("gemini")
 				groqRetry := qp.keyPool.NextRetryTimestamp("groq")
 				if groqRetry > retryAt {
 					retryAt = groqRetry
+				}
+				if retryAt <= time.Now().Unix() {
+					retryAt = time.Now().Add(60 * time.Second).Unix()
 				}
 				waitMsg := "Ожидание освобождения API-ключей: " + err.Error()
 				qp.tracker.RecordStep(job.ID, "waiting", "⏳ "+waitMsg)
@@ -254,8 +275,8 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 	}
 
 	var tRes *lyrics.TournamentResult
-	// Если уже есть кэш Whisper v3 (повтор с этапа Gemini) или уже есть текст при запросе whisper_karaoke — не тратим время на повторный турнир!
-	skipTournament := (job.JobType == "whisper_karaoke") && (acousticJSON != "" || refPlain != "")
+	// Если уже есть текст при запросе whisper_karaoke — не тратим время на повторный турнир.
+	skipTournament := (job.JobType == "whisper_karaoke") && refPlain != ""
 	if !skipTournament {
 		q := lyrics.SearchQuery{
 			TrackID:  track.ID,
@@ -455,6 +476,14 @@ func (qp *QueueProcessor) executeJob(ctx context.Context, job *db.LyricsJobRecor
 
 func (qp *QueueProcessor) saveWinningLyrics(track *db.TrackRecord, source string, kind lyrics.LyricsKind, content string, langCode string, isVerified bool) error {
 	trimmed := strings.TrimSpace(content)
+	if kind == lyrics.KindInstrumental {
+		if trimmed == "" {
+			trimmed = "[Instrumental]"
+		}
+		logger.Info("[WORKER] Текст для «%s — %s» сохранен в базу (статус: instrumental, источник: %s, lrc_file: false)",
+			track.Artist, track.Title, source)
+		return qp.trackRepo.UpdateLyrics(track.ID, "instrumental", source, trimmed, langCode, false)
+	}
 	if trimmed == "" {
 		return nil
 	}
@@ -464,12 +493,10 @@ func (qp *QueueProcessor) saveWinningLyrics(track *db.TrackRecord, source string
 		status = "verified"
 	} else if kind == lyrics.KindLRC || len(lyrics.ParseLRC(trimmed)) > 0 {
 		status = "synced"
-	} else if kind == lyrics.KindInstrumental {
-		status = "instrumental"
 	}
 
 	lrcWritten := false
-	if qp.lrcWriter != nil && track.FilePath != "" {
+	if (status == "synced" || status == "verified") && qp.lrcWriter != nil && track.FilePath != "" {
 		if _, err := qp.lrcWriter.WriteForAudioFile(track.FilePath, trimmed); err == nil {
 			lrcWritten = true
 			logger.Info("[WORKER] Файл .lrc успешно записан на диск рядом с %s", track.FilePath)

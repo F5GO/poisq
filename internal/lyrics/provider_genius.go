@@ -105,7 +105,7 @@ func (p *GeniusProvider) searchSongURL(ctx context.Context, q SearchQuery) (stri
 	}
 
 	var data geniusMultiSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&data); err != nil {
 		return "", "", "", err
 	}
 
@@ -146,7 +146,12 @@ func (p *GeniusProvider) searchSongURL(ctx context.Context, q SearchQuery) (stri
 }
 
 func (p *GeniusProvider) scrapeLyrics(ctx context.Context, pageURL, candArtist, candTitle string) (*Lyrics, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	parsedURL, err := url.Parse(pageURL)
+	if err != nil || parsedURL.Scheme != "https" ||
+		(!strings.EqualFold(parsedURL.Host, "genius.com") && !strings.HasSuffix(strings.ToLower(parsedURL.Host), ".genius.com")) {
+		return nil, ErrNotFound
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsedURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +167,7 @@ func (p *GeniusProvider) scrapeLyrics(ctx context.Context, pageURL, candArtist, 
 		return nil, httpStatusError("genius", resp.StatusCode)
 	}
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
 	}

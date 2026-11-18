@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -114,7 +115,7 @@ func (p *CustomLrclibProvider) getExact(ctx context.Context, q SearchQuery) (*lr
 	}
 
 	var rec lrclibResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rec); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rec); err != nil {
 		return nil, err
 	}
 
@@ -153,7 +154,7 @@ func (p *CustomLrclibProvider) searchFallback(ctx context.Context, q SearchQuery
 		}
 
 		var results []lrclibResponse
-		err = json.NewDecoder(resp.Body).Decode(&results)
+		err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&results)
 		resp.Body.Close()
 		if err != nil || len(results) == 0 {
 			continue

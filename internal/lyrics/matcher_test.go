@@ -280,3 +280,15 @@ func TestScoreCandidateWeakArtistNeedsStrongDuration(t *testing.T) {
 		t.Fatalf("чужой трек не должен приниматься, score=%+v", other)
 	}
 }
+
+func TestCleanTitleAndMatchArtistEdgeCases(t *testing.T) {
+	if got := CleanTitle("Rock - Acoustic Version (Remastered 2020)"); got != "Rock - Acoustic Version" {
+		t.Errorf("CleanTitle не должен обрезать смысловую часть после дефиса: %q", got)
+	}
+	if got := CleanTitle("One - Two (Deluxe Edition)"); got != "One - Two" {
+		t.Errorf("CleanTitle должен сохранять дефис и удалять скобки издания: %q", got)
+	}
+	if !MatchArtist("Kino", "Kino feat. Guest") {
+		t.Errorf("MatchArtist должен матчить основного артиста до feat.")
+	}
+}
