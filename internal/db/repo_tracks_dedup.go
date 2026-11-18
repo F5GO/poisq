@@ -110,7 +110,7 @@ func (r *TrackRepository) DeduplicateTracks() (int64, error) {
 	for _, t := range allTracks {
 		normArtist := normalizeDedupText(t.Artist)
 		normTitle := normalizeDedupText(t.Title)
-		if normArtist == "" && normTitle == "" {
+		if normTitle == "" {
 			continue
 		}
 		key := trackGroupKey{artist: normArtist, title: normTitle}
@@ -144,9 +144,11 @@ func (r *TrackRepository) DeduplicateTracks() (int64, error) {
 				sameAlbum := (normAlb1 != "" && normAlb1 == normAlb2)
 				diffDur := math.Abs(float64(list[i].Duration - list[j].Duration))
 				closeDuration := (list[i].Duration > 0 && list[j].Duration > 0 && diffDur <= 3.0)
+				sameTrackNumWithZeroDur := (list[i].Duration == 0 || list[j].Duration == 0) &&
+					list[i].TrackNumber > 0 && list[i].TrackNumber == list[j].TrackNumber
 
-				// Если альбомы совпадают, или длительность практически идентична (разница <= 3 сек) — это дубликат!
-				if sameAlbum || closeDuration {
+				// Дубликатом считаем записи с близкой длительностью или в одном альбоме (при совпадении длительности или номера трека, если длительность неизвестна)
+				if closeDuration || (sameAlbum && sameTrackNumWithZeroDur) {
 					cluster = append(cluster, list[j])
 					used[j] = true
 				}
@@ -199,8 +201,30 @@ func (r *TrackRepository) DeduplicateTracks() (int64, error) {
 	}
 	defer stmt.Close()
 
+	stmtJobs, _ := tx.Prepare(`DELETE FROM lyrics_jobs WHERE track_id = ?`)
+	if stmtJobs != nil {
+		defer stmtJobs.Close()
+	}
+	stmtCache, _ := tx.Prepare(`DELETE FROM provider_cache WHERE track_id = ?`)
+	if stmtCache != nil {
+		defer stmtCache.Close()
+	}
+	stmtConf, _ := tx.Prepare(`DELETE FROM lrc_confidence WHERE track_id = ?`)
+	if stmtConf != nil {
+		defer stmtConf.Close()
+	}
+
 	for _, id := range toDeleteIDs {
 		_, _ = stmt.Exec(id)
+		if stmtJobs != nil {
+			_, _ = stmtJobs.Exec(id)
+		}
+		if stmtCache != nil {
+			_, _ = stmtCache.Exec(id)
+		}
+		if stmtConf != nil {
+			_, _ = stmtConf.Exec(id)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

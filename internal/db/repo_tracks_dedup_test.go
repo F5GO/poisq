@@ -99,4 +99,18 @@ func TestDeduplicateTracks(t *testing.T) {
 	if !foundOriginal {
 		t.Errorf("оригинальный трек Creep не найден среди оставшихся")
 	}
+
+	// Треки с пустым названием или с разной длительностью (>10 сек) не должны склеиваться
+	_ = repo.UpsertTrack(TrackRecord{ID: "empty_1", FilePath: "/music/a1.flac", Artist: "A", Title: "", Duration: 180})
+	_ = repo.UpsertTrack(TrackRecord{ID: "empty_2", FilePath: "/music/a2.flac", Artist: "A", Title: "", Duration: 180})
+	_ = repo.UpsertTrack(TrackRecord{ID: "dur_short", FilePath: "/music/s1.flac", Artist: "B", Album: "Alb", Title: "Intro", Duration: 60})
+	_ = repo.UpsertTrack(TrackRecord{ID: "dur_long", FilePath: "/music/s2.flac", Artist: "B", Album: "Alb", Title: "Intro", Duration: 220})
+
+	deleted2, err := repo.DeduplicateTracks()
+	if err != nil {
+		t.Fatalf("ошибка повторной дедупликации: %v", err)
+	}
+	if deleted2 != 0 {
+		t.Fatalf("треки без названия или с разной длительностью не должны удаляться, удалено: %d", deleted2)
+	}
 }

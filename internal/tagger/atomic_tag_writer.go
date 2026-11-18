@@ -52,9 +52,12 @@ func (w *AtomicTagWriter) WriteTagsAtomically(ctx context.Context, audioFilePath
 	}
 
 	dir := filepath.Dir(safeTarget)
-	base := filepath.Base(safeTarget)
-	tmpPath := filepath.Join(dir, ".poisq_tmp_"+base)
-	_ = os.Remove(tmpPath)
+	tmpFile, err := os.CreateTemp(dir, ".poisq_tmp_*"+ext)
+	if err != nil {
+		return fmt.Errorf("не удалось создать временный файл для записи тегов: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
 
 	tCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

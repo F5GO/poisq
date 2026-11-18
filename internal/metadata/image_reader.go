@@ -54,7 +54,22 @@ func DetectImageDimensions(filePath string) ImageMeta {
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		return ImageMeta{}
 	}
-	buf := header[:n]
+	return DetectImageBytes(header[:n])
+}
+
+// DetectImageBytes определяет формат и размеры изображения по заголовку байтового буфера.
+func DetectImageBytes(buf []byte) ImageMeta {
+	if len(buf) == 0 {
+		return ImageMeta{}
+	}
+	if cfg, fmtName, err := image.DecodeConfig(bytes.NewReader(buf)); err == nil && cfg.Width > 0 && cfg.Height > 0 {
+		return ImageMeta{
+			Width:  cfg.Width,
+			Height: cfg.Height,
+			Format: fmtName,
+			Valid:  true,
+		}
+	}
 
 	// 2a. Проверка WebP (RIFF....WEBP)
 	if len(buf) >= 30 && bytes.Equal(buf[0:4], []byte("RIFF")) && bytes.Equal(buf[8:12], []byte("WEBP")) {
@@ -116,8 +131,8 @@ func parseWebPDimensions(buf []byte) (int, int, bool) {
 		}
 	case "VP8X": // Extended
 		if len(buf) >= 30 {
-			w := int(buf[24]) | (int(buf[25]) << 8) | (int(buf[26]) << 16) + 1
-			h := int(buf[27]) | (int(buf[28]) << 8) | (int(buf[29]) << 16) + 1
+			w := (int(buf[24]) | (int(buf[25]) << 8) | (int(buf[26]) << 16)) + 1
+			h := (int(buf[27]) | (int(buf[28]) << 8) | (int(buf[29]) << 16)) + 1
 			if w > 0 && h > 0 {
 				return w, h, true
 			}

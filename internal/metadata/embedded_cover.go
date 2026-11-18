@@ -9,12 +9,14 @@ package metadata
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ExtractCoverFromAudioOrDir проверяет путь (аудиофайл или директорию с аудиофайлами)
@@ -310,7 +312,9 @@ func extractCoverViaFFmpeg(audioPath string) ([]byte, string) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return nil, ""
 	}
-	cmd := exec.Command("ffmpeg", "-nostdin", "-v", "error", "-i", audioPath, "-an", "-vcodec", "mjpeg", "-vframes", "1", "-f", "image2pipe", "-")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-i", audioPath, "-an", "-vcodec", "mjpeg", "-vframes", "1", "-f", "image2pipe", "-")
 	out, err := cmd.Output()
 	if err == nil && len(out) > 64 {
 		return out, "image/jpeg"

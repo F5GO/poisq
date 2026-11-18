@@ -162,8 +162,9 @@ func (mb *MusicBrainzClient) SearchArtists(ctx context.Context, artistName strin
 		limit = 8
 	}
 
+	escapedQ := escapeLuceneQuery(q)
 	endpoint := fmt.Sprintf("%s/artist?query=%s&fmt=json&limit=%d",
-		mb.baseURL, url.QueryEscape(fmt.Sprintf(`artist:"%s" OR alias:"%s"`, q, q)), limit)
+		mb.baseURL, url.QueryEscape(fmt.Sprintf(`artist:"%s" OR alias:"%s"`, escapedQ, escapedQ)), limit)
 
 	body, status, _, err := mb.rc.DoWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -406,6 +407,10 @@ func (mb *MusicBrainzClient) LookupArtistLinks(ctx context.Context, artistMBID s
 	return result, nil
 }
 
+func escapeLuceneQuery(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)
+}
+
 func validMusicBrainzID(value string) bool {
 	if len(value) < 8 || len(value) > 64 {
 		return false
@@ -438,7 +443,7 @@ func (mb *MusicBrainzClient) LookupRelease(ctx context.Context, artist, album st
 		return nil, fmt.Errorf("необходимо указать артиста и альбом")
 	}
 
-	lucene := fmt.Sprintf(`artist:"%s" AND release:"%s"`, cleanArtist, cleanAlbum)
+	lucene := fmt.Sprintf(`artist:"%s" AND release:"%s"`, escapeLuceneQuery(cleanArtist), escapeLuceneQuery(cleanAlbum))
 	endpoint := fmt.Sprintf("%s/release?query=%s&fmt=json&limit=5",
 		mb.baseURL, url.QueryEscape(lucene))
 

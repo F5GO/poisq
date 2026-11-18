@@ -450,8 +450,10 @@ func (r *TrackRepository) ListByFolder(folderPath string) ([]TrackRecord, error)
 
 // ListTracks возвращает список треков с фильтрацией по статусу текста, кодировке и поисковому запросу.
 func (r *TrackRepository) ListTracks(statusFilter string, searchQuery string, limit int) ([]TrackRecord, error) {
-	if limit <= 0 || limit > 500 {
+	if limit <= 0 {
 		limit = 100
+	} else if limit > 2000 {
+		limit = 2000
 	}
 
 	query := `

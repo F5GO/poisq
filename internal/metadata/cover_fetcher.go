@@ -10,11 +10,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -67,6 +69,12 @@ func NewCoverFetcher(guard *security.PathGuard) *CoverFetcher {
 		guard: guard,
 		client: &http.Client{
 			Timeout: 15 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return errors.New("слишком много перенаправлений при скачивании обложки")
+				}
+				return validatePublicCoverURL(req.URL.String())
+			},
 		},
 	}
 }
@@ -276,6 +284,10 @@ func (cf *CoverFetcher) DownloadAndSaveAtomically(ctx context.Context, folderPat
 		return 0, 0, fmt.Errorf("ошибка создания директории альбома: %w", err)
 	}
 
+	if err := validatePublicCoverURL(imageURL); err != nil {
+		return 0, 0, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 	if err != nil {
 		return 0, 0, err
@@ -300,14 +312,27 @@ func (cf *CoverFetcher) DownloadAndSaveAtomically(ctx context.Context, folderPat
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(imgBytes))
 	w, h := cfg.Width, cfg.Height
 	if err != nil || w == 0 || h == 0 {
-		// Фоллбэк на побайтовый анализатор
-		w, h = 3000, 3000 // Оптимальный дефолт для 3000x3000bb
+		meta := DetectImageBytes(imgBytes)
+		if !meta.Valid {
+			return 0, 0, errors.New("полученный файл не является допустимым изображением (JPEG/PNG/WebP)")
+		}
+		w, h = meta.Width, meta.Height
 	}
 
-	tmpPath := filepath.Join(dir, ".poisq_tmp_cover.jpg")
-	if err := os.WriteFile(tmpPath, imgBytes, 0644); err != nil {
+	tmpFile, err := os.CreateTemp(dir, ".poisq_tmp_cover_*.jpg")
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка создания временного файла обложки: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	_, wErr := tmpFile.Write(imgBytes)
+	_ = tmpFile.Chmod(0644)
+	cErr := tmpFile.Close()
+	if wErr != nil || cErr != nil {
 		_ = os.Remove(tmpPath)
-		return 0, 0, fmt.Errorf("ошибка записи временного файла обложки: %w", err)
+		if wErr != nil {
+			return 0, 0, fmt.Errorf("ошибка записи временного файла обложки: %w", wErr)
+		}
+		return 0, 0, fmt.Errorf("ошибка закрытия временного файла обложки: %w", cErr)
 	}
 
 	if err := os.Rename(tmpPath, safeTarget); err != nil {
@@ -316,4 +341,28 @@ func (cf *CoverFetcher) DownloadAndSaveAtomically(ctx context.Context, folderPat
 	}
 
 	return w, h, nil
+}
+
+func validatePublicCoverURL(rawURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("некорректный URL обложки: %w", err)
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("недопустимая схема URL обложки: %q", parsed.Scheme)
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
+		return fmt.Errorf("недопустимый хост URL обложки: %q", host)
+	}
+	if ip := net.ParseIP(host); ip != nil && isDisallowedCoverIP(ip) {
+		return fmt.Errorf("запрещен запрос обложки к локальному или частному IP: %s", host)
+	}
+	return nil
+}
+
+func isDisallowedCoverIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
 }

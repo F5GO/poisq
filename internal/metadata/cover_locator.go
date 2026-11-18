@@ -315,7 +315,7 @@ func ResolveFuzzyDirectory(musicRoot, targetPath string) string {
 
 	// Пробуем обойти дерево от startRoot
 	current := startRoot
-	for i, seg := range segments {
+	for _, seg := range segments {
 		seg = strings.TrimSpace(seg)
 		if seg == "" {
 			continue
@@ -399,8 +399,8 @@ func ResolveFuzzyDirectory(musicRoot, targetPath string) string {
 			}
 		}
 
-		if !foundMatch && i == len(segments)-1 {
-			return current
+		if !foundMatch {
+			return ""
 		}
 	}
 
