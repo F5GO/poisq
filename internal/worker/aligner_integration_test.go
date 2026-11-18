@@ -200,3 +200,21 @@ func TestSplitLyricsLinesStripsTimestampsAndBlanks(t *testing.T) {
 		t.Fatalf("splitLyricsLines: %q", got)
 	}
 }
+
+func TestPanickingJobDoesNotCrashWorker(t *testing.T) {
+	env := newTestEnv(t, false)
+	if err := env.qp.jobRepo.Enqueue("t1", "full_pipeline", 1); err != nil {
+		t.Fatal(err)
+	}
+	env.qp.trackRepo = nil // GetByID на nil-репозитории паникует
+
+	env.qp.processBatch(context.Background())
+
+	jobs, err := env.qp.jobRepo.ListRecent(10)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs=%v err=%v", jobs, err)
+	}
+	if jobs[0].Status != "pending" || !strings.Contains(jobs[0].ErrorLog, "внутренняя ошибка") {
+		t.Fatalf("паника не превратилась в повторную попытку: %+v", jobs[0])
+	}
+}

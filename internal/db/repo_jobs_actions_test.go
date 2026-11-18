@@ -96,7 +96,7 @@ func TestJobsSurviveRestartAndRequeue(t *testing.T) {
 		t.Fatal(err)
 	}
 	// процесс «упал»: задача осталась running
-	if n, err := repo.RequeueOrphaned(); err != nil || n != 1 {
+	if n, err := repo.RequeueOrphaned(3); err != nil || n != 1 {
 		t.Fatalf("RequeueOrphaned = %d, %v", n, err)
 	}
 	if got, _ := repo.GetByID(job.ID); got.Status != "pending" {
@@ -108,5 +108,34 @@ func TestJobsSurviveRestartAndRequeue(t *testing.T) {
 	_ = repo.MarkDone(job.ID)
 	if got, _ := repo.GetByID(job.ID); got.Status != "pending" || got.JobType != "whisper_karaoke" {
 		t.Fatalf("повторная постановка потеряна: %+v", got)
+	}
+}
+
+func TestRequeueOrphanedFailsCrashLoopingJob(t *testing.T) {
+	db, err := OpenPoisqDatabase(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := NewJobRepository(db)
+	_ = repo.Enqueue("t1", "full_pipeline", 1)
+
+	var id int64
+	for i := 1; i <= 3; i++ { // процесс падает на задаче три раза подряд
+		job, err := repo.ClaimNext(1 << 40)
+		if err != nil {
+			t.Fatalf("claim %d: %v", i, err)
+		}
+		id = job.ID
+		if _, err := repo.RequeueOrphaned(3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := repo.GetByID(id)
+	if got.Status != "failed" || got.ErrorLog == "" {
+		t.Fatalf("задача должна стать failed после 3 падений: %+v", got)
+	}
+	if _, err := repo.ClaimNext(1 << 40); err != ErrNoPendingJobs {
+		t.Fatalf("failed-задача снова взята в работу: %v", err)
 	}
 }

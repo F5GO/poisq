@@ -110,8 +110,15 @@ func (r *JobRepository) MarkDone(id int64) error {
 }
 
 // RequeueOrphaned возвращает в очередь задачи, брошенные остановкой процесса посреди работы. Вызывать до старта обработчика.
-func (r *JobRepository) RequeueOrphaned() (int64, error) {
-	res, err := r.db.Exec(`UPDATE lyrics_jobs SET status = 'pending', updated_at = ? WHERE status = 'running'`, time.Now().Unix())
+// Задача, на которой процесс падал уже maxAttempts раз, становится failed: иначе она роняет сервис при каждом перезапуске.
+func (r *JobRepository) RequeueOrphaned(maxAttempts int) (int64, error) {
+	res, err := r.db.Exec(`
+		UPDATE lyrics_jobs
+		SET status = CASE WHEN attempt_count >= ? THEN 'failed' ELSE 'pending' END,
+		    error_log = CASE WHEN attempt_count >= ? THEN 'Процесс завершался во время обработки задачи (попыток: ' || attempt_count || ')' ELSE error_log END,
+		    updated_at = ?
+		WHERE status = 'running'
+	`, maxAttempts, maxAttempts, time.Now().Unix())
 	if err != nil {
 		return 0, err
 	}

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -141,7 +142,7 @@ func (qp *QueueProcessor) IsPaused() bool {
 // Start запускает фоновый цикл обработки очереди до отмены контекста.
 func (qp *QueueProcessor) Start(ctx context.Context) {
 	// Обработчик один, поэтому любая задача «выполняется» на старте брошена прошлым процессом (например, при обновлении контейнера)
-	if n, err := qp.jobRepo.RequeueOrphaned(); err != nil {
+	if n, err := qp.jobRepo.RequeueOrphaned(maxJobAttempts); err != nil {
 		logger.Warn("[WORKER] Не удалось вернуть в очередь брошенные задачи: %v", err)
 	} else if n > 0 {
 		logger.Info("[WORKER] Возвращено в очередь брошенных задач: %d", n)
@@ -181,7 +182,7 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 		logger.Info("[WORKER] Взята задача #%d в обработку: тип=%s, трекId=%s, попытка=%d", job.ID, job.JobType, job.TrackID, job.AttemptCount)
 		jobStarted := time.Now()
 
-		if err := qp.executeJob(ctx, job); err != nil {
+		if err := qp.runJob(ctx, job); err != nil {
 			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 				logger.Info("[WORKER] Задача #%d прервана остановкой контекста", job.ID)
 				return
@@ -233,7 +234,7 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 			}
 
 			qp.tracker.RecordStep(job.ID, "error", "✖ Ошибка: "+err.Error())
-			_ = qp.jobRepo.MarkRetryOrFailed(job.ID, job.AttemptCount, 3, err.Error())
+			_ = qp.jobRepo.MarkRetryOrFailed(job.ID, job.AttemptCount, maxJobAttempts, err.Error())
 			logger.Warn("[WORKER] Задача #%d (трек %s) завершилась ошибкой через %s (попытка %d): %v",
 				job.ID, job.TrackID, time.Since(jobStarted).Round(time.Millisecond), job.AttemptCount, err)
 			continue
@@ -243,6 +244,20 @@ func (qp *QueueProcessor) processBatch(ctx context.Context) {
 		_ = qp.jobRepo.MarkDone(job.ID)
 		logger.Info("[WORKER] Задача #%d успешно завершена за %s!", job.ID, time.Since(jobStarted).Round(time.Millisecond))
 	}
+}
+
+// maxJobAttempts — сколько раз задача берётся в работу, прежде чем стать failed.
+const maxJobAttempts = 3
+
+// runJob превращает панику задачи в обычную ошибку: иначе один трек роняет весь процесс вместе с публичным прокси.
+func (qp *QueueProcessor) runJob(ctx context.Context, job *db.LyricsJobRecord) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("[WORKER] Паника в задаче #%d (трек %s): %v\n%s", job.ID, job.TrackID, r, debug.Stack())
+			err = fmt.Errorf("внутренняя ошибка обработки задачи: %v", r)
+		}
+	}()
+	return qp.executeJob(ctx, job)
 }
 
 // ExecuteSingleTrack выполняет полный или специализированный пайплайн для одного трека.
