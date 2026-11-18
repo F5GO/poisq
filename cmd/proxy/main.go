@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -270,7 +271,10 @@ func main() {
 	bioCoordinator.Start(ctx)
 
 	// Первичная фоновая синхронизация и периодический цикл обновления
+	var syncWG sync.WaitGroup
+	syncWG.Add(1)
 	go func() {
+		defer syncWG.Done()
 		if sqliteDB, err := db.OpenDatabase(cfg.NavidromeDBPath); err == nil {
 			enricher := db.NewEnricher(sqliteDB, cfg.EnrichSQLiteFullText)
 			if err := enricher.InitSchema(); err != nil {
@@ -291,6 +295,8 @@ func main() {
 
 	_ = publicHTTPServer.Shutdown(shutdownCtx)
 	_ = adminHTTPServer.Shutdown(shutdownCtx)
+	syncWG.Wait()
+	_ = castService.Close()
 
 	log.Println("[INFO] Сервис poisq успешно остановлен")
 }

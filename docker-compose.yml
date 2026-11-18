@@ -59,6 +59,7 @@ services:
     image: ghcr.io/f5go/poisq-aligner:latest
     container_name: poisq-aligner
     profiles: ["aligner"]
+    init: true
     restart: unless-stopped
     environment:
       MUSIC_ROOT: "/music"

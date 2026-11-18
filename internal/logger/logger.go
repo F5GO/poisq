@@ -85,7 +85,6 @@ func Error(format string, v ...any) {
 func logWithLevel(lvl Level, prefix string, format string, v ...any) {
 	mu.RLock()
 	activeLevel := currentLevel
-	w := outputWriter
 	mu.RUnlock()
 
 	if lvl < activeLevel {
@@ -96,9 +95,12 @@ func logWithLevel(lvl Level, prefix string, format string, v ...any) {
 	msg := fmt.Sprintf(format, v...)
 	line := fmt.Sprintf("%s [%s] %s\n", timestamp, prefix, msg)
 
+	mu.Lock()
+	w := outputWriter
 	if w != nil {
 		_, _ = io.WriteString(w, line)
 	} else {
 		log.Print(line)
 	}
+	mu.Unlock()
 }
