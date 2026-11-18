@@ -13,9 +13,11 @@ API (JSON):
 Задачи выполняются по одной (конвейер нагружает процессор). Путь к аудио должен лежать внутри MUSIC_ROOT.
 Если задан ALIGNER_TOKEN, нужен заголовок Authorization: Bearer <token>.
 """
+import hmac
 import json
 import os
 import queue
+import signal
 import sys
 import threading
 import time
@@ -101,8 +103,28 @@ class Service:
             except (OSError, ValueError, KeyError):
                 continue
 
+    def _prune_expired(self):
+        cutoff = time.time() - RESULT_TTL
+        with self.lock:
+            expired = [jid for jid, j in self.jobs.items()
+                       if j.status not in ("queued", "running") and (j.finished or j.created) < cutoff]
+            for jid in expired:
+                self.jobs.pop(jid, None)
+        for jid in expired:
+            try:
+                os.remove(self._path(jid))
+            except OSError:
+                pass
+
     # --- API -----------------------------------------------------------------------------------------------------
     def submit(self, req):
+        if not isinstance(req, dict):
+            raise runner_mod.AlignError("bad_request", "тело запроса должно быть JSON-объектом")
+        for field in ("audio_path", "track_id", "lang", "groq_key"):
+            val = req.get(field)
+            if val is not None and not isinstance(val, str):
+                raise runner_mod.AlignError("bad_request", field + " должен быть строкой")
+        self._prune_expired()
         lines = req.get("lines")
         if not isinstance(lines, list) or not lines or not all(isinstance(x, str) for x in lines):
             raise runner_mod.AlignError("bad_request", "lines должен быть непустым списком строк")
@@ -132,41 +154,51 @@ class Service:
             job.cancel.set()
             if job.status == "queued":
                 job.status, job.finished = "cancelled", time.time()
+                job.req = {k: v for k, v in job.req.items() if k != "groq_key"}
             proc = job.proc_holder.get("proc")
         if proc is not None and proc.poll() is None:
             try:
-                import signal
                 os.killpg(proc.pid, signal.SIGTERM)
             except (ProcessLookupError, OSError):
                 pass
         return job
 
     def stats(self):
-        return {"ok": True, "version": VERSION, "queue": self.q.qsize(), "running": self.running_id}
+        with self.lock:
+            running = self.running_id
+        return {"ok": True, "version": VERSION, "queue": self.q.qsize(), "running": running}
 
     # --- рабочий цикл --------------------------------------------------------------------------------------------
     def _loop(self):
         while True:
             jid = self.q.get()
-            job = self.get(jid)
-            if job is None or job.status != "queued":
-                continue
-            self.running_id = jid
-            job.status, job.started = "running", time.time()
+            with self.lock:
+                job = self.jobs.get(jid)
+                if job is None or job.status != "queued" or job.cancel.is_set():
+                    continue
+                self.running_id = jid
+                job.status, job.started = "running", time.time()
+                req_snapshot = dict(job.req)
             try:
-                job.result = self.runner.run({**job.req, "cancel": job.cancel, "proc_holder": job.proc_holder}, job.add_progress)
-                job.status = "done"
-                job.add_progress("Готово: строк %d, неуверенных %d" % (job.result["summary"]["lines"], job.result["summary"]["low"]))
+                res = self.runner.run({**req_snapshot, "cancel": job.cancel, "proc_holder": job.proc_holder}, job.add_progress)
+                with self.lock:
+                    job.result = res
+                    job.status = "done"
+                    job.add_progress("Готово: строк %d, неуверенных %d" % (res["summary"]["lines"], res["summary"]["low"]))
             except runner_mod.Cancelled:
-                job.status = "cancelled"
+                with self.lock:
+                    job.status = "cancelled"
             except runner_mod.AlignError as e:
-                job.status, job.error, job.error_code = "error", e.message, e.code
+                with self.lock:
+                    job.status, job.error, job.error_code = "error", e.message, e.code
             except Exception as e:  # noqa: BLE001
-                job.status, job.error, job.error_code = "error", "%s: %s" % (type(e).__name__, e), "failed"
+                with self.lock:
+                    job.status, job.error, job.error_code = "error", "%s: %s" % (type(e).__name__, e), "failed"
             finally:
-                job.finished = time.time()
-                job.req = {k: v for k, v in job.req.items() if k != "groq_key"}  # ключ не хранится после задачи
-                self.running_id = None
+                with self.lock:
+                    job.finished = time.time()
+                    job.req = {k: v for k, v in job.req.items() if k != "groq_key"}  # ключ не хранится после задачи
+                    self.running_id = None
                 try:
                     self._persist(job)
                 except OSError:
@@ -191,7 +223,7 @@ def make_handler(service, token):
         def _authorized(self):
             if not token:
                 return True
-            return self.headers.get("Authorization", "") == "Bearer " + token
+            return hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + token)
 
         def _guard(self):
             if not self._authorized():
@@ -218,6 +250,8 @@ def make_handler(service, token):
                 return
             try:
                 n = int(self.headers.get("Content-Length", "0"))
+                if n < 0 or n > 2 * 1024 * 1024:
+                    return self._send(413, {"error": "слишком большой запрос", "error_code": "bad_request"})
                 req = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
                 job = service.submit(req)
             except runner_mod.AlignError as e:
@@ -259,9 +293,11 @@ def main():
     port = int(os.environ.get("ALIGNER_PORT", "4540"))
     httpd = ThreadingHTTPServer((addr, port), make_handler(svc, os.environ.get("ALIGNER_TOKEN", "")))
     print("poisq-aligner %s слушает %s:%d (музыка: %s, кэш: %s)" % (VERSION, addr, port, rn.music_root, cache), flush=True)
+    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
+        httpd.shutdown()
         sys.exit(0)
 
 

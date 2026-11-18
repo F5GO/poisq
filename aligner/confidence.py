@@ -100,8 +100,12 @@ def estimate_missing(times, texts):
         total_w = float(sum(weights))
         prev_end = times[i - 1][1] if i > 0 else None
         next_start = times[j + 1][0] if j + 1 < n else None
-        if prev_end is not None and next_start is not None and next_start - prev_end > 0.2 * len(weights):
-            lo, hi = prev_end + 0.1, next_start - 0.1
+        if prev_end is not None and next_start is not None:
+            if next_start - prev_end > 0.2 * len(weights):
+                lo, hi = prev_end + 0.1, next_start - 0.1
+            else:
+                lo = prev_end
+                hi = max(prev_end + 0.01 * len(weights), next_start)
         elif next_start is not None:
             hi = next_start - 0.3
             lo = max(0.0, hi - EST_LINE_SEC * len(weights))

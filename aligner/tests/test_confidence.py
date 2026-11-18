@@ -74,6 +74,12 @@ class Estimate(unittest.TestCase):
         c.estimate_missing(times, ["a", "b"])
         self.assertLess(times[0][0], times[1][0])
 
+    def test_tight_gap_does_not_regress_before_prev_end(self):
+        times = [[10.0, 11.0], [None, None], [11.1, 13.0]]
+        c.estimate_missing(times, ["a", "missed", "b"])
+        self.assertGreaterEqual(times[1][0], 11.0)
+        self.assertGreater(times[1][1], times[1][0])
+
 
 class Build(unittest.TestCase):
     def test_lrc_uses_lead_and_original_indices(self):

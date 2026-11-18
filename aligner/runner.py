@@ -99,10 +99,17 @@ class Runner:
         return os.path.join(self.work_root, key)
 
     def cleanup_workdir(self, wd):
-        for name in os.listdir(wd):
+        try:
+            names = os.listdir(wd)
+        except OSError:
+            return
+        for name in names:
             if any(re.match(p, name) for p in TEMP_PATTERNS):
                 full = os.path.join(wd, name)
-                shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
+                try:
+                    shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
+                except OSError:
+                    pass
 
     def evict_old_workdirs(self):
         dirs = [os.path.join(self.work_root, d) for d in os.listdir(self.work_root)]
@@ -169,8 +176,19 @@ class Runner:
                     timed_out["v"] = True
                 try:
                     os.killpg(proc.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
+                except (ProcessLookupError, OSError):
+                    return
+
+                def force_kill():
+                    if proc.poll() is None:
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except (ProcessLookupError, OSError):
+                            pass
+
+                kt = threading.Timer(5.0, force_kill)
+                kt.daemon = True
+                kt.start()
 
         timer = threading.Timer(self.timeout, kill, args=("timeout",))
         timer.daemon = True
@@ -190,6 +208,7 @@ class Runner:
             timer.cancel()
             if proc.poll() is None:
                 kill("cancel")
+            self.cleanup_workdir(wd)
         if job["cancel"].is_set():
             raise Cancelled()
         if timed_out["v"]:
@@ -204,7 +223,6 @@ class Runner:
         result = confidence.build_result(lines, dump, self.lead)
         result["summary"]["seconds"] = round(time.time() - t0, 1)
         try:
-            self.cleanup_workdir(wd)
             self.evict_old_workdirs()
         except OSError:
             pass

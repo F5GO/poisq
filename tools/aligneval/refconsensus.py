@@ -60,11 +60,11 @@ def main():
         if len(mp) >= 0.5 * len(ours):
             recs.append(mp)
     used = len(recs)
-    # у каждой записи свой постоянный сдвиг (другая версия трека): убираем его по медиане относительно нашего итога
-    fin = {l["line"]: l["final"] for l in lines if l.get("final") is not None}
+    # у каждой записи свой постоянный сдвиг (другая версия трека): убираем его по медиане относительно основной записи эталона
+    anchor = recs[0]
     norm = []
     for mp in recs:
-        diffs = [mp[k] - fin[k] for k in mp if k in fin]
+        diffs = [mp[k] - anchor[k] for k in mp if k in anchor]
         off = statistics.median(diffs) if diffs else 0.0
         norm.append({k: v - off for k, v in mp.items()})
     out = []

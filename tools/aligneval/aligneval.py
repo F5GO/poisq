@@ -15,11 +15,18 @@ import statistics
 import subprocess
 import sys
 import time
+import unicodedata
 
 LANG_ISO = {"Russian": "ru", "English": "en", "German": "de", "French": "fr", "Spanish": "es", "Italian": "it",
             "Portuguese": "pt", "Ukrainian": "uk", "Polish": "pl", "Dutch": "nl", "Turkish": "tr", "Swedish": "sv",
             "Japanese": "ja", "Korean": "ko", "Chinese": "zh"}
 MAX_SEC = 295.0  # лимит Qwen3-ForcedAligner: 300 сек на вызов
+
+
+def _fmt_lrc_ts(q):
+    cs = round(max(0.0, q) * 100)
+    m, rem = divmod(cs, 6000)
+    return "[%02d:%05.2f]" % (m, rem / 100.0)
 
 
 def parse_lrc(text):
@@ -556,7 +563,8 @@ def ctx_ok(r, key="ctx_start", thr=CTX_TRUST):
 
 _RU_TO_LAT = {"а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh", "з": "z", "и": "i", "й": "y",
               "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f",
-              "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sh", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya"}
+              "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sh", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+              "є": "ye", "і": "i", "ї": "yi", "ґ": "g"}
 
 
 class MmsAligner:
@@ -581,7 +589,10 @@ class MmsAligner:
 
     def _romanize(self, word):
         out = []
-        for ch in word.lower():
+        norm = unicodedata.normalize("NFKD", word.lower())
+        for ch in norm:
+            if unicodedata.combining(ch):
+                continue
             for c in _RU_TO_LAT.get(ch, ch):
                 if c in self.dict and c != "-":
                     out.append(c)
@@ -599,7 +610,7 @@ class MmsAligner:
         chars = [self._romanize(w) for w in words]
         targets_list = [self.dict[c] for w in chars for c in w]
         if not targets_list or wave.size(1) < sr // 5:
-            return [[self._Item(w, 0.0, 0.0) for w in words]]
+            return [[]]
         with torch.inference_mode():
             emission, _ = self.model(wave.to(self.device))
             emission = torch.log_softmax(emission, dim=-1)
@@ -1207,7 +1218,7 @@ def main():
                 errors.append(p - g_sec)
                 rows.append((abs(p - g_sec), g_sec, p, g_line))
             q = max(0.0, p - args.lead)
-            pred_lrc.append("[%02d:%05.2f] %s" % (int(q // 60), q % 60, g_line))
+            pred_lrc.append("%s %s" % (_fmt_lrc_ts(q), g_line))
         if no_gold:
             print(f"[{name}] строки с временем (с учётом --lead {args.lead}):")
             for l in pred_lrc:
@@ -1298,7 +1309,7 @@ def main():
                 print("   строка %2d  НЕТ В ЗАПИСИ  (слов найдено %d из %d)  %s" % (r["line"] + 1, r["matched"], r["of"], line_text[:40]))
                 continue
             q = max(0.0, r["start"] - args.lead)
-            lrc_lines.append("[%02d:%05.2f] %s" % (int(q // 60), q % 60, gold[r["line"]][1]))
+            lrc_lines.append("%s %s" % (_fmt_lrc_ts(q), gold[r["line"]][1]))
             err_txt = ""
             if has_ref:
                 e_ = r["start"] - gold[r["line"]][0]
