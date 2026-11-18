@@ -3,9 +3,8 @@ import Foundation
 @testable import PoisqCore
 
 @Suite struct ServerURLTests {
-    @Test func bareHostTriesHTTPSThenHTTP() {
-        #expect(ServerURL.candidates(from: " music.example.com/ ").map(\.absoluteString)
-                == ["https://music.example.com", "http://music.example.com"])
+    @Test func bareHostTriesOnlyHTTPS() {
+        #expect(ServerURL.candidates(from: " music.example.com/ ").map(\.absoluteString) == ["https://music.example.com"])
     }
     @Test func explicitSchemeIsKept() {
         #expect(ServerURL.candidates(from: "http://192.168.1.5:4533").map(\.absoluteString) == ["http://192.168.1.5:4533"])

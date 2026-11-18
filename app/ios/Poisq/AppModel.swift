@@ -3,7 +3,7 @@ import PoisqCore
 import PoisqPlayback
 
 enum SignInError: LocalizedError {
-    case emptyFields, badAddress, badCredentials, unreachable, notSubsonic
+    case emptyFields, badAddress, badCredentials, unreachable, httpsUnreachable, notSubsonic
 
     var errorDescription: String? {
         switch self {
@@ -11,6 +11,7 @@ enum SignInError: LocalizedError {
         case .badAddress: String(localized: "Check the server address")
         case .badCredentials: String(localized: "Wrong username or password")
         case .unreachable: String(localized: "Couldn't connect to the server")
+        case .httpsUnreachable: String(localized: "Couldn't connect over https. If the server has no encryption, enter the address with http://")
         case .notSubsonic: String(localized: "This doesn't look like a Subsonic server")
         }
     }
@@ -161,7 +162,7 @@ final class AppModel {
     }
 
     /// Проверяет доступность и логин/пароль, возвращает рабочий адрес.
-    /// Без схемы в адресе пробуем https, затем http.
+    /// Без схемы в адресе пробуем только https.
     private func verify(address: String, user: String, password: String, headers: [String: String] = [:]) async throws -> URL {
         let candidates = ServerURL.candidates(from: address)
         guard !candidates.isEmpty else { throw SignInError.badAddress }
@@ -177,7 +178,8 @@ final class AppModel {
                 default: lastError = .notSubsonic
                 }
             } catch is URLError {
-                lastError = .unreachable      // пробуем следующий вариант (http после https)
+                // Схему подставили сами — подсказываем, как явно выбрать http, но сами на него не переходим.
+                lastError = address.contains("://") ? .unreachable : .httpsUnreachable
             } catch {
                 lastError = .notSubsonic
             }

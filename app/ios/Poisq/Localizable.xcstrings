@@ -861,6 +861,16 @@
         }
       }
     },
+    "Couldn't connect over https. If the server has no encryption, enter the address with http://": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подключиться по https. Если сервер без шифрования, введите адрес с http://"
+          }
+        }
+      }
+    },
     "Couldn't find anything to play.": {
       "extractionState": "stale",
       "localizations": {
