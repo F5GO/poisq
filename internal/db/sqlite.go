@@ -72,6 +72,7 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 	db.SetConnMaxLifetime(1 * time.Hour)
 
 	if err := db.Ping(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("не удалось выполнить ping к SQLite: %w", err)
 	}
 

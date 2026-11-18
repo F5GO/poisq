@@ -41,7 +41,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	method := strings.TrimSuffix(path.Base(r.URL.Path), ".view")
 	if method == "poisqCastPlay" || method == "poisqCastControl" { // опрос состояния не пишем: он идёт раз в секунду
-		logger.Info("[CAST] %s zone=%s action=%s position=%s offset=%s ids=%d client=%s from=%s",
+		logger.Info("[CAST] %s zone=%q action=%q position=%q offset=%q ids=%d client=%q from=%s",
 			method, zone, f.Get("action"), f.Get("position"), f.Get("offset"), len(f["id"]), f.Get("c"), r.RemoteAddr)
 	}
 
@@ -105,8 +105,11 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrUnknownZone):
 		WriteError(w, 70, err.Error())
-	default:
+	case errors.Is(err, ErrNotConfigured):
 		WriteError(w, 0, err.Error())
+	default:
+		logger.Warn("[CAST] Ошибка операции трансляции: %v", err)
+		WriteError(w, 0, "ошибка выполнения команды трансляции")
 	}
 }
 

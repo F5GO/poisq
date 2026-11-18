@@ -61,17 +61,17 @@ func isSameHostOrLocal(originHost, reqHost string) bool {
 	return false
 }
 
-// isAdminHost: IP-адрес, имя без точки или локальная зона — их не выдаст публичный DNS; плюс имена из ADMIN_HOSTS.
+// isAdminHost: локальный/частный IP-адрес, имя без точки или локальная зона — их не выдаст публичный DNS; плюс имена из ADMIN_HOSTS.
 func isAdminHost(hostport string, extra []string) bool {
-	host := hostport
-	if h, _, err := net.SplitHostPort(hostport); err == nil {
-		host = h
-	}
-	host = strings.ToLower(strings.Trim(host, "[]"))
+	host := normalizeAdminHost(hostport)
 	if host == "" {
 		return false
 	}
-	if net.ParseIP(host) != nil || !strings.Contains(host, ".") {
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+			return true
+		}
+	} else if !strings.Contains(host, ".") {
 		return true
 	}
 	for _, zone := range []string{".localhost", ".local", ".lan", ".internal", ".home.arpa"} {
@@ -80,9 +80,20 @@ func isAdminHost(hostport string, extra []string) bool {
 		}
 	}
 	for _, e := range extra {
-		if e = strings.ToLower(strings.TrimSpace(e)); e != "" && e == host {
+		if normalized := normalizeAdminHost(e); normalized != "" && normalized == host {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeAdminHost(hostport string) string {
+	host := strings.TrimSpace(hostport)
+	if host == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.ToLower(strings.Trim(host, "[]"))
 }

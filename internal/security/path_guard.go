@@ -89,8 +89,9 @@ func (g *PathGuard) ValidateTarget(targetPath string, checkWriteExt bool) (strin
 			prefixes := []string{"/music", "/data/music", "/media/music", "/media"}
 			matched := false
 			for _, p := range prefixes {
-				if strings.HasPrefix(absTarget, p) {
-					candidate := filepath.Join(g.rootAbs, strings.TrimPrefix(absTarget, p))
+				if absTarget == p || strings.HasPrefix(absTarget, p+"/") {
+					rel := strings.TrimPrefix(absTarget, p)
+					candidate := filepath.Join(g.rootAbs, rel)
 					if isSubpath(g.rootAbs, candidate) {
 						absTarget = candidate
 						matched = true
@@ -121,7 +122,10 @@ func (g *PathGuard) ValidateTarget(targetPath string, checkWriteExt bool) (strin
 	}
 
 	// Разрешаем симлинки по ближайшему существующему родительскому каталогу
-	absTarget = resolveExistingAncestor(absTarget)
+	absTarget, err = resolveExistingAncestor(absTarget)
+	if err != nil {
+		return "", ErrPathTraversal
+	}
 
 	// Если сам целевой файл существует, проверяем, не является ли он симлинком наружу
 	if info, err := os.Lstat(absTarget); err == nil {
@@ -155,16 +159,24 @@ func (g *PathGuard) ValidateTarget(targetPath string, checkWriteExt bool) (strin
 
 // resolveExistingAncestor находит ближайший существующий родительский каталог,
 // разрешает для него символические ссылки (например, /var -> /private/var на macOS)
-// и достраивает оставшийся относительный хвост пути.
-func resolveExistingAncestor(absPath string) string {
+// и достраивает оставшийся относительный хвост пути. При обнаружении висячего симлинка возвращает ошибку.
+func resolveExistingAncestor(absPath string) (string, error) {
 	cur := absPath
 	var tail []string
 	for cur != "/" && cur != "." {
-		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+		if info, lerr := os.Lstat(cur); lerr == nil {
+			resolved, err := filepath.EvalSymlinks(cur)
+			if err != nil {
+				// Существующий симлинк, цель которого недоступна или отсутствует (висячий симлинк), — отклоняем.
+				if info.Mode()&os.ModeSymlink != 0 {
+					return "", ErrPathTraversal
+				}
+				return "", err
+			}
 			for i := len(tail) - 1; i >= 0; i-- {
 				resolved = filepath.Join(resolved, tail[i])
 			}
-			return resolved
+			return resolved, nil
 		}
 		tail = append(tail, filepath.Base(cur))
 		parent := filepath.Dir(cur)
@@ -173,7 +185,7 @@ func resolveExistingAncestor(absPath string) string {
 		}
 		cur = parent
 	}
-	return absPath
+	return absPath, nil
 }
 
 // IsAudioFile проверяет, является ли файл поддерживаемым аудиоформатом.

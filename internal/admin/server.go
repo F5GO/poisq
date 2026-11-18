@@ -144,6 +144,9 @@ func NewAdminServer(
 
 // ServeHTTP реализует интерфейс http.Handler.
 func (s *AdminServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Body != nil && (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete) {
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+	}
 	s.handler.ServeHTTP(w, r)
 }
 

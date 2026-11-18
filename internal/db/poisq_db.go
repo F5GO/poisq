@@ -251,7 +251,7 @@ func ResetDatabase(db *sql.DB, keepAPIKeys bool) error {
 
 	tables := []string{
 		"artist_bio_jobs", "artist_bio_web_cache", "artist_biographies", "artist_bio_candidates", "artist_bio_identity",
-		"staging_changes", "tracks", "lyrics_jobs", "provider_cache", "lrc_confidence", "lrc_corrections",
+		"staging_changes", "tracks", "lyrics_jobs", "provider_cache", "lrc_confidence", "lrc_corrections", "ai_alias_cache",
 	}
 	if !keepAPIKeys {
 		tables = append(tables, "api_keys")

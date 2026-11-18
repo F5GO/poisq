@@ -72,9 +72,10 @@ func (m *MA) Call(ctx context.Context, command string, args map[string]any, out 
 		return fmt.Errorf("Music Assistant %s: HTTP %d: %s", command, resp.StatusCode, strings.TrimSpace(string(text)))
 	}
 	if out == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(out)
 }
 
 // Players возвращает все плееры MA.

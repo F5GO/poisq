@@ -76,16 +76,31 @@ func TestPathGuardPreventsTraversalAndForbiddenExts(t *testing.T) {
 			t.Fatalf("expected symlink escape to be blocked")
 		}
 	}
+
+	// Висячий симлинк наружу тоже должен блокироваться
+	danglingTarget := filepath.Join(outsideDir, "nonexistent", "escape.lrc")
+	danglingLink := filepath.Join(musicRoot, "dangling_escape.lrc")
+	if err := os.Symlink(danglingTarget, danglingLink); err == nil {
+		if _, err := guard.ValidateTarget(danglingLink, true); err == nil {
+			t.Fatalf("expected dangling symlink escape to be blocked")
+		}
+	}
+
+	// Соседняя директория с тем же строковым префиксом (/music_other) не должна проходить проверку границ
+	siblingPath := filepath.Clean(musicRoot) + "_evil/song.lrc"
+	if _, err := guard.ValidateTarget(siblingPath, true); err == nil {
+		t.Fatalf("expected sibling prefix directory %s to be blocked", siblingPath)
+	}
 }
 
 func TestIsAdminHost(t *testing.T) {
 	cases := map[string]bool{
 		"localhost:4535": true, "127.0.0.1:4535": true, "[::1]:4535": true, "192.168.1.10:4535": true,
 		"nas:4535": true, "nas.local:4535": true, "studio.example.com": true,
-		"evil.com:4535": false, "localhost.evil.com:4535": false, "": false,
+		"evil.com:4535": false, "localhost.evil.com:4535": false, "8.8.8.8:4535": false, "": false,
 	}
 	for host, want := range cases {
-		if got := isAdminHost(host, []string{" Studio.Example.com "}); got != want {
+		if got := isAdminHost(host, []string{" Studio.Example.com:4535 "}); got != want {
 			t.Errorf("isAdminHost(%q) = %v, want %v", host, got, want)
 		}
 	}

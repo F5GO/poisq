@@ -102,24 +102,28 @@ func (m *Manager) AcquireExcluding(provider string, excludeKeyID int64) (*Leased
 	defer m.mu.Unlock()
 
 	cleanProvider := strings.ToLower(strings.TrimSpace(provider))
-	rec, err := m.repo.AcquireLRUKeyExcluding(cleanProvider, time.Now().Unix(), excludeKeyID)
-	if err != nil {
-		return nil, err
-	}
+	for attempt := 0; attempt < 5; attempt++ {
+		rec, err := m.repo.AcquireLRUKeyExcluding(cleanProvider, time.Now().Unix(), excludeKeyID)
+		if err != nil {
+			return nil, err
+		}
 
-	plain, err := m.cipher.Decrypt(rec.KeyEncrypted)
-	if err != nil {
-		_ = m.repo.MarkStatus(rec.ID, "invalid", 0, "ошибка расшифровки ключа: "+err.Error())
-		return nil, fmt.Errorf("ключ #%d поврежден: %w", rec.ID, err)
-	}
+		plain, err := m.cipher.Decrypt(rec.KeyEncrypted)
+		if err != nil {
+			_ = m.repo.MarkStatus(rec.ID, "invalid", 0, "ошибка расшифровки ключа: "+err.Error())
+			excludeKeyID = rec.ID
+			continue
+		}
 
-	return &LeasedKey{
-		ID:       rec.ID,
-		Provider: rec.Provider,
-		Label:    rec.Label,
-		PlainKey: plain,
-		KeyMask:  rec.KeyMask,
-	}, nil
+		return &LeasedKey{
+			ID:       rec.ID,
+			Provider: rec.Provider,
+			Label:    rec.Label,
+			PlainKey: plain,
+			KeyMask:  rec.KeyMask,
+		}, nil
+	}
+	return nil, db.ErrNoAvailableKeys
 }
 
 // ReportSuccess фиксирует успешное выполнение запроса с данным ключом.
@@ -180,7 +184,7 @@ func (m *Manager) ReportInvalid(keyID int64, httpCode int, details string) {
 	_ = m.repo.MarkStatus(keyID, "invalid", 0, msg)
 }
 
-// HasKeys возвращает true, если для данного провайдера в пуле есть хотя бы один зарегистрированный ключ.
+// HasKeys возвращает true, если для данного провайдера в пуле есть хотя бы один рабочий (не invalid) ключ.
 func (m *Manager) HasKeys(provider string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -191,7 +195,7 @@ func (m *Manager) HasKeys(provider string) bool {
 	}
 	clean := strings.ToLower(strings.TrimSpace(provider))
 	for _, k := range keys {
-		if strings.ToLower(k.Provider) == clean {
+		if strings.ToLower(k.Provider) == clean && k.Status != "invalid" {
 			return true
 		}
 	}

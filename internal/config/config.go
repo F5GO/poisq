@@ -90,12 +90,12 @@ func Load() (*Config, error) {
 	rawBiographyWait := getEnv("BIO_FIRST_REQUEST_WAIT", "25s")
 
 	parsedURL, err := url.Parse(rawNavidromeURL)
-	if err != nil {
-		return nil, fmt.Errorf("некорректный NAVIDROME_URL %q: %w", rawNavidromeURL, err)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || parsedURL.Host == "" {
+		return nil, fmt.Errorf("некорректный NAVIDROME_URL %q: ожидается http:// или https:// URL с хостом", rawNavidromeURL)
 	}
 
 	syncInterval, err := time.ParseDuration(rawSyncInterval)
-	if err != nil {
+	if err != nil || syncInterval <= 0 {
 		log.Printf("[WARN] Некорректный SYNC_INTERVAL %q, используется 2m: %v", rawSyncInterval, err)
 		syncInterval = 2 * time.Minute
 	}

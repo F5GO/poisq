@@ -83,6 +83,18 @@ func (s *Service) navDB() (*sql.DB, error) {
 	return s.nav, nil
 }
 
+// Close закрывает внутреннее подключение к navidrome.db при остановке сервиса.
+func (s *Service) Close() error {
+	s.mu.Lock()
+	nav := s.nav
+	s.nav = nil
+	s.mu.Unlock()
+	if nav != nil {
+		return nav.Close()
+	}
+	return nil
+}
+
 // zoneState — состояние колонки между запросами.
 type zoneState struct {
 	play sync.Mutex // запуск и стоп по очереди: два телефона не перемешают команды одной колонки
@@ -294,6 +306,8 @@ func relativePath(p string, roots []string) (string, bool) {
 	return "", false
 }
 
+const maxCastQueueIDs = 2000
+
 // Play заменяет очередь колонки песнями и запускает воспроизведение с index и offset (секунды).
 func (s *Service) Play(ctx context.Context, zone string, ids []string, offset int) error {
 	ma, st, err := s.zoneClient(zone)
@@ -302,6 +316,9 @@ func (s *Service) Play(ctx context.Context, zone string, ids []string, offset in
 	}
 	if len(ids) == 0 {
 		return errors.New("пустая очередь")
+	}
+	if len(ids) > maxCastQueueIDs {
+		ids = ids[:maxCastQueueIDs]
 	}
 	uris, err := s.URIs(st.Provider, ids)
 	if err != nil {
@@ -331,7 +348,11 @@ func (s *Service) Play(ctx context.Context, zone string, ids []string, offset in
 		s.mu.Lock()
 		z.tail = t
 		s.mu.Unlock()
-		go s.appendTail(context.WithoutCancel(ctx), ma, zone, t, uris[1:])
+		tailCtx, cancelTail := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		go func() {
+			defer cancelTail()
+			s.appendTail(tailCtx, ma, zone, t, uris[1:])
+		}()
 	}
 	return nil
 }
@@ -372,8 +393,14 @@ func (s *Service) Control(ctx context.Context, zone, action string, position, vo
 		defer z.play.Unlock()
 		err = s.waitTail(ctx, zone, -1, true)
 	case "add", "remove":
+		z := s.zoneState(zone)
+		z.play.Lock()
+		defer z.play.Unlock()
 		err = s.waitTail(ctx, zone, -1, false)
 	case "index":
+		z := s.zoneState(zone)
+		z.play.Lock()
+		defer z.play.Unlock()
 		err = s.waitTail(ctx, zone, int64(position), false)
 	}
 	if err != nil {
@@ -403,6 +430,9 @@ func (s *Service) Control(ctx context.Context, zone, action string, position, vo
 	case "volume":
 		return ma.Call(ctx, "players/cmd/volume_set", map[string]any{"player_id": zone, "volume_level": min(max(volume, 0), 100)}, nil)
 	case "add":
+		if len(ids) > maxCastQueueIDs {
+			ids = ids[:maxCastQueueIDs]
+		}
 		uris, err := s.URIs(st.Provider, ids)
 		if err != nil {
 			return err

@@ -102,15 +102,33 @@ func MaskKey(plainKey string) string {
 }
 
 func loadOrCreateSecretFile(dbPath string) (string, error) {
-	dir := filepath.Dir(dbPath)
-	if dir == "" || dir == "." {
-		dir = os.TempDir()
+	trimmedPath := strings.TrimSpace(dbPath)
+	if trimmedPath == "" {
+		return "", errors.New("путь к базе данных для хранения мастер-ключа не задан")
 	}
-	_ = os.MkdirAll(dir, 0755)
+	absPath, err := filepath.Abs(trimmedPath)
+	if err != nil {
+		return "", fmt.Errorf("не удалось определить абсолютный путь для мастер-ключа: %w", err)
+	}
+	dir := filepath.Dir(absPath)
+	if info, statErr := os.Stat(absPath); statErr == nil && info.IsDir() {
+		dir = absPath
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("не удалось создать каталог для мастер-ключа: %w", err)
+	}
 
 	keyFile := filepath.Join(dir, ".poisq_master_key")
-	if data, err := os.ReadFile(keyFile); err == nil && len(strings.TrimSpace(string(data))) >= 32 {
-		return strings.TrimSpace(string(data)), nil
+	data, err := os.ReadFile(keyFile)
+	if err == nil {
+		secret := strings.TrimSpace(string(data))
+		if len(secret) < 32 {
+			return "", fmt.Errorf("файл мастер-ключа %s повреждён (длина менее 32 символов)", keyFile)
+		}
+		return secret, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("не удалось прочитать файл мастер-ключа %s: %w", keyFile, err)
 	}
 
 	buf := make([]byte, 32)
@@ -118,8 +136,28 @@ func loadOrCreateSecretFile(dbPath string) (string, error) {
 		return "", err
 	}
 	encoded := base64.RawURLEncoding.EncodeToString(buf)
-	if err := os.WriteFile(keyFile, []byte(encoded), 0600); err != nil {
+	f, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			retryData, readErr := os.ReadFile(keyFile)
+			if readErr != nil {
+				return "", readErr
+			}
+			secret := strings.TrimSpace(string(retryData))
+			if len(secret) < 32 {
+				return "", fmt.Errorf("файл мастер-ключа %s повреждён", keyFile)
+			}
+			return secret, nil
+		}
 		return "", err
+	}
+	_, writeErr := f.WriteString(encoded)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return "", writeErr
+	}
+	if closeErr != nil {
+		return "", closeErr
 	}
 	return encoded, nil
 }

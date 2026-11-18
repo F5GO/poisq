@@ -6,6 +6,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,10 +30,20 @@ func newNavidromeAuth(target *url.URL, transport http.RoundTripper) *navidromeAu
 var authParams = []string{"u", "t", "s", "p", "apiKey"}
 
 func (a *navidromeAuth) check(r *http.Request) bool {
+	if r.Method == http.MethodPost && r.Form == nil && r.Body != nil {
+		r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
+		_ = r.ParseForm()
+	}
 	q := r.URL.Query()
+	getParam := func(k string) string {
+		if v := q.Get(k); v != "" {
+			return v
+		}
+		return r.FormValue(k)
+	}
 	parts := make([]string, len(authParams))
 	for i, k := range authParams {
-		parts[i] = q.Get(k)
+		parts[i] = getParam(k)
 	}
 	key := strings.Join(parts, "\x00")
 	if strings.Trim(key, "\x00") == "" {
@@ -48,8 +59,8 @@ func (a *navidromeAuth) check(r *http.Request) bool {
 	}
 
 	ping := url.Values{}
-	for _, k := range append(authParams, "v", "c") {
-		if v := q.Get(k); v != "" {
+	for _, k := range append(append([]string(nil), authParams...), "v", "c") {
+		if v := getParam(k); v != "" {
 			ping.Set(k, v)
 		}
 	}
@@ -77,16 +88,19 @@ func (a *navidromeAuth) check(r *http.Request) bool {
 			Status string `json:"status"`
 		} `json:"subsonic-response"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&body) != nil || body.R.Status != "ok" {
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body) != nil || body.R.Status != "ok" {
 		return false
 	}
 
 	a.mu.Lock()
-	if len(a.valid) > 1000 { // чистим просроченные, чтобы карта не росла бесконечно
+	if len(a.valid) >= 1000 { // чистим просроченные; если всё ещё >= 1000, сбрасываем карту целиком
 		for k, t := range a.valid {
 			if now.After(t) {
 				delete(a.valid, k)
 			}
+		}
+		if len(a.valid) >= 1000 {
+			clear(a.valid)
 		}
 	}
 	a.valid[key] = now.Add(navAuthTTL)
