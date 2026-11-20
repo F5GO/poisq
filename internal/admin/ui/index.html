@@ -168,10 +168,6 @@
               <div>
                 <h1 class="panel-title" id="player-title">Выберите трек из списка слева</h1>
                 <p class="panel-desc" id="player-artist">Нажмите на любой трек для запуска воспроизведения и текста</p>
-                <div id="karaoke-job-banner" class="karaoke-job-banner hidden">
-                  <span class="spinner-small"></span>
-                  <span id="karaoke-job-text">Поиск текста в источниках...</span>
-                </div>
               </div>
             </div>
 
@@ -180,6 +176,12 @@
               <button class="btn btn-secondary" id="btn-enqueue-tournament">Найти текст</button>
               <button class="btn btn-secondary" id="btn-toggle-editor">Редактор таймингов</button>
               <button class="btn btn-danger-outline hidden" id="btn-delete-lyrics" title="Удалить текст песни и файл .lrc с диска">Удалить текст</button>
+            </div>
+
+            <!-- Состояние задачи: отдельный ряд под кнопками, чтобы его появление ничего не сдвигало -->
+            <div id="karaoke-job-banner" class="karaoke-job-banner hidden" role="status" aria-live="polite">
+              <span class="spinner-small"></span>
+              <span id="karaoke-job-text">Поиск текста в источниках...</span>
             </div>
           </div>
 
