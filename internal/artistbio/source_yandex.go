@@ -74,8 +74,9 @@ func (s *YandexBiographySource) FindIdentityCandidates(ctx context.Context, inpu
 		var albums struct {
 			Result struct {
 				Albums []struct {
-					Title string `json:"title"`
-					Year  int    `json:"year"`
+					Title   string `json:"title"`
+					Version string `json:"version"`
+					Year    int    `json:"year"`
 				} `json:"albums"`
 			} `json:"result"`
 		}
@@ -88,8 +89,9 @@ func (s *YandexBiographySource) FindIdentityCandidates(ctx context.Context, inpu
 		}
 		for _, album := range albums.Result.Albums {
 			for _, local := range input.Albums {
-				if normalizeIdentityText(album.Title) == normalizeIdentityText(local.Title) {
-					candidate.Albums = append(candidate.Albums, IdentityRelease{Title: album.Title, Year: album.Year})
+				if yandexTitleMatches(album.Title, album.Version, local.Title) {
+					// Keep the local spelling so release scoring compares equal titles.
+					candidate.Albums = append(candidate.Albums, IdentityRelease{Title: local.Title, Year: album.Year})
 					break
 				}
 			}
@@ -98,7 +100,8 @@ func (s *YandexBiographySource) FindIdentityCandidates(ctx context.Context, inpu
 			var tracks struct {
 				Result struct {
 					Tracks []struct {
-						Title string `json:"title"`
+						Title   string `json:"title"`
+						Version string `json:"version"`
 					} `json:"tracks"`
 				} `json:"result"`
 			}
@@ -106,8 +109,8 @@ func (s *YandexBiographySource) FindIdentityCandidates(ctx context.Context, inpu
 			if _, err := s.http.getJSON(ctx, "/artists/"+id+"/tracks", trackQuery, nil, &tracks); err == nil {
 				for _, track := range tracks.Result.Tracks {
 					for _, local := range input.Tracks {
-						if normalizeIdentityText(track.Title) == normalizeIdentityText(local) {
-							candidate.Tracks = append(candidate.Tracks, track.Title)
+						if yandexTitleMatches(track.Title, track.Version, local) {
+							candidate.Tracks = append(candidate.Tracks, local)
 							break
 						}
 					}
@@ -199,4 +202,23 @@ func (s *YandexBiographySource) ExactWikipediaLink(ctx context.Context, artist R
 	linked.Host = "en.wikipedia.org"
 	linked.RawQuery, linked.Fragment, linked.User = "", "", nil
 	return linked.String(), "yandex:" + id, nil
+}
+
+// yandexTitleMatches compares a local tag title with a Yandex Music title.
+// Yandex stores versions such as «ремикс» or «Radio Edit» in a separate field,
+// while local tags usually append them as "Title (version)".
+func yandexTitleMatches(title, version, local string) bool {
+	want := normalizeIdentityText(local)
+	if want == "" {
+		return false
+	}
+	if normalizeIdentityText(title) == want {
+		return true
+	}
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return false
+	}
+	return normalizeIdentityText(title+" ("+version+")") == want || normalizeIdentityText(title+" ["+version+"]") == want ||
+		normalizeIdentityText(title+" - "+version) == want
 }

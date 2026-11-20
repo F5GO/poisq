@@ -37,7 +37,47 @@ type artistBiographyDetail struct {
 	Automatic    *artistBiographyView `json:"automatic,omitempty"`
 	JobStatus    artistbio.JobStatus  `json:"jobStatus,omitempty"`
 	LastError    string               `json:"lastError,omitempty"`
-	NextRetryAt  time.Time            `json:"nextRetryAt,omitempty"`
+	// LastErrorText is a human-readable explanation of LastError.
+	LastErrorText string    `json:"lastErrorText,omitempty"`
+	NextRetryAt   time.Time `json:"nextRetryAt,omitempty"`
+	// JobStage* describe what a running job is doing right now.
+	JobStage       string    `json:"jobStage,omitempty"`
+	JobStageText   string    `json:"jobStageText,omitempty"`
+	JobStageDetail string    `json:"jobStageDetail,omitempty"`
+	JobStageSince  time.Time `json:"jobStageSince,omitempty"`
+}
+
+var biographyStageText = map[string]string{
+	artistbio.StageIdentity:       "Определяем исполнителя в MusicBrainz и Яндекс Музыке",
+	artistbio.StageCatalog:        "Запрашиваем описания в каталогах: Википедия, Яндекс Музыка, Deezer, Apple Music, Discogs",
+	artistbio.StageValidation:     "Проверяем язык и качество описаний из каталогов",
+	artistbio.StageEvidence:       "Отбираем факты из каталогов",
+	artistbio.StageWebDiscovery:   "Ищем дополнительные источники в интернете",
+	artistbio.StageSummaryEdit:    "ИИ пишет описание по найденным фактам",
+	artistbio.StageSummaryRewrite: "ИИ переписывает описание: проверка отклонила часть предложений",
+	artistbio.StageSummaryVerify:  "Сверяем каждое предложение с источниками",
+	artistbio.StageSummaryStore:   "Сохраняем описание",
+}
+
+func biographyErrorText(code string) string {
+	switch {
+	case code == "":
+		return ""
+	case strings.HasPrefix(code, "identity"):
+		return "Не удалось связаться с MusicBrainz или Яндекс Музыкой"
+	case strings.HasPrefix(code, "catalog"):
+		return "Каталоги не ответили"
+	case strings.HasPrefix(code, "validation"):
+		return "Проверка описаний из каталогов отложена"
+	case strings.HasPrefix(code, "search"):
+		return "Поиск в интернете недоступен или исчерпан лимит"
+	case strings.HasPrefix(code, "summary"):
+		return "ИИ не смог написать описание, которое прошло бы проверку по источникам"
+	case code == "pipeline_timeout":
+		return "Сбор занял слишком много времени"
+	default:
+		return "Внутренняя ошибка"
+	}
 }
 
 // SetBiographyStore attaches the already constructed local store. It performs
@@ -258,7 +298,16 @@ func (s *AdminServer) writeArtistBiographyDetail(w http.ResponseWriter, ctx cont
 	} else if found {
 		detail.JobStatus = state.Status
 		detail.LastError = state.LastError
+		detail.LastErrorText = biographyErrorText(state.LastError)
 		detail.NextRetryAt = state.NextRetryAt
+		if state.Status == artistbio.JobRunning {
+			if progress, ok := s.biographies.JobProgress(artist.ID); ok {
+				detail.JobStage = progress.Stage
+				detail.JobStageText = biographyStageText[progress.Stage]
+				detail.JobStageDetail = progress.Detail
+				detail.JobStageSince = progress.StartedAt
+			}
+		}
 	}
 	if effective, found, err := s.biographies.EffectiveBiography(ctx, artist.ID); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to read artist biography")

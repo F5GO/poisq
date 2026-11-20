@@ -614,3 +614,39 @@ func TestBiographyPromptsContainNoRealArtistExamples(t *testing.T) {
 		}
 	}
 }
+
+func TestEnglishDateOrUnitDetection(t *testing.T) {
+	for _, leaked := range []string{"выпущен 12 September 2025", "релиз September 12", "длительностью 6 minutes", "6 min"} {
+		if !englishDateOrUnit.MatchString(leaked) {
+			t.Errorf("not detected: %q", leaked)
+		}
+	}
+	for _, fine := range []string{"альбом «May» вышел в 2020 году", "сингл September Rain", "выпущен 12 сентября 2025 года", "трек длится шесть минут"} {
+		if englishDateOrUnit.MatchString(fine) {
+			t.Errorf("false positive: %q", fine)
+		}
+	}
+}
+
+func TestBiographyEditorRejectsEnglishDatesInRussianSummary(t *testing.T) {
+	evidence := []SynthesisEvidence{
+		{ID: "web:a", Origin: "apple_music", Language: "en", Text: "Talemates released the single on 12 September 2025 with Izhevski and Сироткин; genre Dance."},
+		{ID: "web:b", Origin: "music.yandex.ru", Language: "ru", Text: "Talemates — исполнитель в жанрах хаус и электроника, выпускает синглы и участвует в сборниках."},
+	}
+	s2 := "Talemates — исполнитель в жанрах хаус и электроника, который выпускает синглы и участвует в сборниках."
+	bad := "Совместный сингл с Izhevski и Сироткиным вышел 12 September 2025 года в жанре дэнс."
+	good := "Совместный сингл с Izhevski и Сироткиным вышел 12 сентября 2025 года в жанре дэнс."
+	makeResponse := func(first string) string {
+		raw, _ := json.Marshal(BiographySummary{
+			Summary:       s2 + " " + first,
+			Sentences:     []SummarySentence{{ID: 1, Text: s2, SourceIDs: []string{"web:b"}}, {ID: 2, Text: first, SourceIDs: []string{"web:a"}}},
+			UsedSourceIDs: []string{"web:a", "web:b"},
+		})
+		return string(raw)
+	}
+	gen := &synthesisSequenceGenerator{responses: []string{makeResponse(bad), makeResponse(good)}}
+	res, err := NewBiographySynthesisAI(gen).Edit(context.Background(), evidence)
+	if err != nil || gen.calls != 2 || strings.Contains(res.Summary, "September") {
+		t.Fatalf("expected English date to trigger a retry, calls=%d err=%v summary=%q", gen.calls, err, res.Summary)
+	}
+}

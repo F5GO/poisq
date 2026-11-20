@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,9 @@ var (
 
 type Store struct {
 	db *sql.DB
+	// progress holds the current stage of running jobs (artist ID ->
+	// JobProgress). It is process-local and only describes live work.
+	progress sync.Map
 }
 
 type AutomaticCacheReset struct {

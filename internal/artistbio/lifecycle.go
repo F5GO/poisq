@@ -309,3 +309,55 @@ func unixTime(value int64) time.Time {
 	}
 	return time.Unix(value, 0)
 }
+
+// Job stage codes reported while a biography job runs. Studio maps them to
+// human-readable text; they never contain source or generated prose.
+const (
+	StageIdentity       = "identity"
+	StageCatalog        = "catalog"
+	StageValidation     = "source_validation"
+	StageEvidence       = "evidence"
+	StageWebDiscovery   = "web_discovery"
+	StageSummaryEdit    = "summary_edit"
+	StageSummaryRewrite = "summary_rewrite"
+	StageSummaryVerify  = "summary_verify"
+	StageSummaryStore   = "summary_store"
+)
+
+// JobProgress describes the stage a running job is in right now.
+type JobProgress struct {
+	Stage     string
+	Detail    string
+	StartedAt time.Time
+}
+
+const maxJobProgressDetailBytes = 256
+
+// SetJobProgress records the stage a running job has just entered. detail is
+// a short, bounded, non-sensitive note such as a count of found sources.
+func (s *Store) SetJobProgress(artistID, stage, detail string, now time.Time) {
+	if s == nil || artistID == "" || stage == "" {
+		return
+	}
+	s.progress.Store(artistID, JobProgress{Stage: stage, Detail: truncateUTF8Bytes(detail, maxJobProgressDetailBytes), StartedAt: now})
+}
+
+// ClearJobProgress removes the live stage once a job has finished.
+func (s *Store) ClearJobProgress(artistID string) {
+	if s != nil {
+		s.progress.Delete(artistID)
+	}
+}
+
+// JobProgress returns the live stage of a running job, if any.
+func (s *Store) JobProgress(artistID string) (JobProgress, bool) {
+	if s == nil {
+		return JobProgress{}, false
+	}
+	value, ok := s.progress.Load(artistID)
+	if !ok {
+		return JobProgress{}, false
+	}
+	progress, ok := value.(JobProgress)
+	return progress, ok
+}

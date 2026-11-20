@@ -334,3 +334,33 @@ func TestArtistBiographyAPIConcurrentReads(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestArtistBiographyAPIDetailShowsLiveStageAndErrorText(t *testing.T) {
+	server, store := biographyAPIServer(t)
+	ctx := context.Background()
+	if _, _, err := store.QueueJob(ctx, "kino", "Кино", false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkJobRunning(ctx, "kino", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	store.SetJobProgress("kino", artistbio.StageWebDiscovery, "из каталогов мало данных", time.Now())
+	detail := httptest.NewRecorder()
+	server.ServeHTTP(detail, biographyRequest(http.MethodGet, "/api/v1/artist-biographies/detail?id=kino", ""))
+	body := detail.Body.String()
+	if detail.Code != http.StatusOK || !strings.Contains(body, `"jobStage":"web_discovery"`) ||
+		!strings.Contains(body, `"jobStageText":"Ищем дополнительные источники в интернете"`) ||
+		!strings.Contains(body, `"jobStageDetail":"из каталогов мало данных"`) {
+		t.Fatalf("running detail: code=%d body=%s", detail.Code, body)
+	}
+
+	if err := store.MarkJobRetryable(ctx, "kino", "summary_unavailable", time.Now().Add(time.Minute), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	retry := httptest.NewRecorder()
+	server.ServeHTTP(retry, biographyRequest(http.MethodGet, "/api/v1/artist-biographies/detail?id=kino", ""))
+	body = retry.Body.String()
+	if strings.Contains(body, `"jobStage"`) || !strings.Contains(body, `"lastErrorText":"ИИ не смог написать описание`) {
+		t.Fatalf("retryable detail must drop live stage and explain error: %s", body)
+	}
+}

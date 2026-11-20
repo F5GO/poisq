@@ -441,3 +441,60 @@ func TestCompactBiographyEvidenceKeepsSentenceBoundaries(t *testing.T) {
 		t.Fatalf("compactBiographyEvidence = %q, want %q", got, want)
 	}
 }
+
+type stageRecordingAI struct {
+	pipelineSynthesisAI
+	store  *Store
+	stages []string
+}
+
+func (f *stageRecordingAI) record() {
+	if progress, ok := f.store.JobProgress("artist"); ok {
+		f.stages = append(f.stages, progress.Stage+"|"+progress.Detail)
+	}
+}
+
+func (f *stageRecordingAI) Edit(ctx context.Context, evidence []ai.SynthesisEvidence) (ai.BiographySummary, error) {
+	f.record()
+	return f.pipelineSynthesisAI.Edit(ctx, evidence)
+}
+
+func (f *stageRecordingAI) Verify(ctx context.Context, summary ai.BiographySummary, evidence []ai.SynthesisEvidence) (ai.SynthesisVerification, error) {
+	f.record()
+	return f.pipelineSynthesisAI.Verify(ctx, summary, evidence)
+}
+
+func TestSynthesisPipelineReportsLiveStagesAndClearsThem(t *testing.T) {
+	store := openPipelineStore(t)
+	model := &stageRecordingAI{store: store}
+	pipeline, err := NewSynthesisPipeline(store, nil, pipelineResolver{store}, pipelineIngestion{store, []Provider{ProviderYandexMusic, ProviderWikipedia}}, pipelineValidator{}, nil, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, admitted, err := store.QueueJob(context.Background(), "artist", "Артист", false, time.Now()); err != nil || !admitted {
+		t.Fatalf("queue admitted=%v err=%v", admitted, err)
+	}
+	if err := pipeline.Run(context.Background(), db.LibraryArtist{ID: "artist", Name: "Артист"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{StageSummaryEdit + "|источников: 2, фактов: 2", StageSummaryVerify + "|предложений: 2"}
+	if !slices.Equal(model.stages, want) {
+		t.Fatalf("stages=%q want=%q", model.stages, want)
+	}
+	if progress, ok := store.JobProgress("artist"); ok {
+		t.Fatalf("progress must be cleared after the job, got %#v", progress)
+	}
+}
+
+func TestJobProgressBoundsDetail(t *testing.T) {
+	store := openPipelineStore(t)
+	store.SetJobProgress("artist", StageCatalog, strings.Repeat("я", 400), time.Unix(10, 0))
+	progress, ok := store.JobProgress("artist")
+	if !ok || progress.Stage != StageCatalog || len(progress.Detail) > maxJobProgressDetailBytes || !progress.StartedAt.Equal(time.Unix(10, 0)) {
+		t.Fatalf("progress=%#v ok=%v", progress, ok)
+	}
+	store.ClearJobProgress("artist")
+	if _, ok := store.JobProgress("artist"); ok {
+		t.Fatal("progress not cleared")
+	}
+}

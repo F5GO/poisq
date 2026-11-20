@@ -59,6 +59,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	if err := p.store.MarkJobRunning(ctx, artist.ID, started); err != nil {
 		return err
 	}
+	defer p.store.ClearJobProgress(artist.ID)
 	defer func() {
 		if err != nil {
 			logger.Debug("[BIO] artist_id=%q artist=%q pipeline_duration=%s outcome=%s error=%v", artist.ID, artist.Name, time.Since(started).Round(time.Millisecond), pipelineOutcome(err), err)
@@ -68,6 +69,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	}()
 
 	identityContext := p.localContext(ctx, artist)
+	p.stage(artist.ID, StageIdentity, "")
 	stageStarted := time.Now()
 	resolution, err := p.resolver.Resolve(ctx, identityContext)
 	logPipelineStage(artist.ID, artist.Name, "identity", stageStarted, err)
@@ -77,6 +79,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	if resolution.Status != ResolutionResolved {
 		logger.Debug("[BIO] artist_id=%q artist=%q stage=identity_unresolved status=%s confidence=%.2f albums=%d tracks=%d", artist.ID, artist.Name, resolution.Status, resolution.Confidence, len(identityContext.Albums), len(identityContext.Tracks))
 		if p.search != nil && (len(identityContext.Albums) > 0 || len(identityContext.Tracks) > 0) {
+			p.stage(artist.ID, StageWebDiscovery, "исполнитель не подтверждён в каталогах — ищем только в интернете")
 			stageStarted = time.Now()
 			web, webErr := p.collectWebEvidence(ctx, identityContext, resolution, false, true)
 			logPipelineStage(artist.ID, artist.Name, "web_discovery", stageStarted, webErr)
@@ -99,6 +102,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 		return p.store.CompleteNoData(ctx, artist.ID, "identity-unresolved", time.Now())
 	}
 	identityContext.MusicBrainzID = resolution.MusicBrainzID
+	p.stage(artist.ID, StageCatalog, fmt.Sprintf("исполнитель подтверждён через %s (%.0f%%)", displayEvidenceOrigin(string(resolution.Provider)), resolution.Confidence*100))
 	stageStarted = time.Now()
 	ingestReport, err := p.ingestion.Ingest(ctx, ResolvedArtist{Context: identityContext, Identity: resolution})
 	if err != nil {
@@ -107,6 +111,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	}
 	logPipelineStage(artist.ID, artist.Name, "catalog", stageStarted, nil)
 	logger.Debug("[BIO] artist_id=%q artist=%q catalog_stored=%d catalog_empty=%d catalog_failed=%d", artist.ID, artist.Name, ingestReport.Stored, ingestReport.Empty, ingestReport.Failed)
+	p.stage(artist.ID, StageValidation, fmt.Sprintf("описаний из каталогов: %d", ingestReport.Stored))
 	stageStarted = time.Now()
 	valReport, err := p.validator.ValidateArtist(ctx, artist.ID)
 	if err != nil {
@@ -115,6 +120,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	}
 	logPipelineStage(artist.ID, artist.Name, "source_validation", stageStarted, nil)
 
+	p.stage(artist.ID, StageEvidence, "")
 	stageStarted = time.Now()
 	prepared, err := p.store.PrepareCatalogEvidence(ctx, artist.ID)
 	logPipelineStage(artist.ID, artist.Name, "evidence", stageStarted, err)
@@ -124,6 +130,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 	evidence := catalogSynthesisEvidence(prepared.Items)
 	var discoveryErr error
 	if !prepared.Sufficient && p.search != nil {
+		p.stage(artist.ID, StageWebDiscovery, fmt.Sprintf("из каталогов мало данных: источников %d, символов %d", prepared.Origins, prepared.TotalRunes))
 		stageStarted = time.Now()
 		if web, webErr := p.collectWebEvidence(ctx, identityContext, resolution, hasRussianCatalogEvidence(prepared.Items), true); len(web) > 0 {
 			evidence = append(evidence, web...)
@@ -206,6 +213,11 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 		var synthesisErr error
 		stageStarted := time.Now()
 		var editErr error
+		editStage := StageSummaryEdit
+		if attempt > 0 {
+			editStage = StageSummaryRewrite
+		}
+		p.stage(artist.ID, editStage, fmt.Sprintf("источников: %d, фактов: %d", countEvidenceOrigins(evidence), len(evidence)))
 		summary, editErr = p.ai.Edit(editCtx, evidence)
 		if editErr != nil {
 			synthesisErr = synthesisStageFailure("summary_edit_failed", editErr)
@@ -218,6 +230,7 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 			}
 			return false, p.retryable(ctx, artist.ID, "summary_unavailable", synthesisErr)
 		}
+		p.stage(artist.ID, StageSummaryVerify, fmt.Sprintf("предложений: %d", len(summary.Sentences)))
 		stageStarted = time.Now()
 		verification, verifyErr := p.ai.Verify(ctx, summary, evidence)
 		if verifyErr != nil {
@@ -258,6 +271,7 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 		Sentences []ai.SummarySentence  `json:"sentences"`
 		Evidence  []storedSummarySource `json:"evidence"`
 	}{version, summary.UsedSourceIDs, summary.Sentences, storedSummarySources(summary.UsedSourceIDs, evidence)})
+	p.stage(artist.ID, StageSummaryStore, "")
 	stageStarted := time.Now()
 	_, storeErr := p.store.CommitAISummary(ctx, artist.ID, version, finalText, string(proof), time.Now())
 	logPipelineStage(artist.ID, artist.Name, "summary_store", stageStarted, storeErr)
@@ -357,6 +371,10 @@ func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity Ide
 		output = append(output, ai.SynthesisEvidence{ID: "web:" + card.ID, Origin: evidenceOriginForDomain(result.Domain), URL: result.URL, Language: card.Language, Text: card.Fact})
 	}
 	return output, nil
+}
+
+func (p *SynthesisPipeline) stage(artistID, stage, detail string) {
+	p.store.SetJobProgress(artistID, stage, detail, time.Now())
 }
 
 func (p *SynthesisPipeline) retryable(ctx context.Context, artistID, code string, cause error) error {
@@ -476,6 +494,8 @@ func displayEvidenceOrigin(value string) string {
 		return "Discogs"
 	case ProviderOfficial:
 		return "официальный сайт"
+	case ProviderMusicBrainz:
+		return "MusicBrainz"
 	default:
 		return value
 	}

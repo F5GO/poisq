@@ -559,10 +559,7 @@ function renderBiographyDetail(detail) {
   if (automaticPreview) automaticPreview.textContent = detail.automatic?.text || "Нет автоматического описания.";
   if (manualText) manualText.value = detail.manualActive ? (detail.manualText || "") : "";
   if (sourceURL) sourceURL.value = detail.manualActive ? (detail.manualSourceUrl || "") : "";
-	if (jobStatus) {
-		const labels = { queued: "В очереди", running: "Собираем и проверяем источники", ready: "Готово", no_data: "Недостаточно подтверждённых данных", retryable: "Временная ошибка — можно повторить позже" };
-		jobStatus.textContent = detail.jobStatus ? `Состояние: ${labels[detail.jobStatus] || detail.jobStatus}` : "Описание ещё не запрашивалось.";
-	}
+	if (jobStatus) jobStatus.textContent = biographyJobStatusText(detail);
   const reset = document.getElementById("btn-reset-biography");
   if (reset) reset.disabled = !detail.manualActive;
 	const rebuild = document.getElementById("btn-rebuild-biography");
@@ -574,6 +571,25 @@ function renderBiographyDetail(detail) {
 			if (state.selectedBiography?.artistId === detail.artistId) loadBiographyDetail(detail.artistId);
 		}, 2000);
 	}
+}
+
+function biographyJobStatusText(detail) {
+	if (!detail.jobStatus) return "Описание ещё не запрашивалось.";
+	const labels = { queued: "В очереди", running: "Собираем и проверяем источники", ready: "Готово", no_data: "Недостаточно подтверждённых данных", retryable: "Временная ошибка" };
+	const parts = [detail.jobStatus === "running" && detail.jobStageText ? detail.jobStageText : (labels[detail.jobStatus] || detail.jobStatus)];
+	if (detail.jobStatus === "running") {
+		if (detail.jobStageDetail) parts.push(detail.jobStageDetail);
+		const since = Date.parse(detail.jobStageSince || "");
+		if (Number.isFinite(since) && since > 0) parts.push(`${Math.max(0, Math.round((Date.now() - since) / 1000))} с`);
+	}
+	if (detail.jobStatus === "retryable") {
+		if (detail.lastErrorText) parts.push(detail.lastErrorText);
+		const retry = Date.parse(detail.nextRetryAt || "");
+		if (Number.isFinite(retry) && retry > Date.now()) {
+			parts.push(`повтор после ${new Date(retry).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`);
+		}
+	}
+	return `Состояние: ${parts.join(" · ")}`;
 }
 
 function setBiographyBusy(busy) {

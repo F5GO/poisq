@@ -182,3 +182,49 @@ func TestYandexBiographySourceEmptyDescriptionReturnsNoCandidate(t *testing.T) {
 		t.Fatalf("empty description: result=%#v err=%v", result, err)
 	}
 }
+
+func TestYandexTitleMatchesVersionField(t *testing.T) {
+	cases := []struct {
+		title, version, local string
+		want                  bool
+	}{
+		{"Лучший город на земле", "ремикс", "Лучший город на земле (ремикс)", true},
+		{"Лучший город на земле", "ремикс", "Лучший город на земле", true},
+		{"Track", "Radio Edit", "Track - Radio Edit", true},
+		{"Track", "Radio Edit", "track [radio edit]", true},
+		{"Лучший город на земле", "", "Лучший город на земле (ремикс)", false},
+		{"Лучший город на земле", "ремикс", "Лучший город на земле (Live)", false},
+		{"Track", "", "", false},
+	}
+	for _, tc := range cases {
+		if got := yandexTitleMatches(tc.title, tc.version, tc.local); got != tc.want {
+			t.Errorf("yandexTitleMatches(%q, %q, %q) = %v, want %v", tc.title, tc.version, tc.local, got, tc.want)
+		}
+	}
+}
+
+func TestYandexIdentityCandidatesMatchVersionedLocalAlbum(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/search":
+			_, _ = w.Write([]byte(`{"result":{"artists":{"results":[{"id":15691790,"name":"Talemates"}]}}}`))
+		case "/artists/15691790/direct-albums":
+			_, _ = w.Write([]byte(`{"result":{"albums":[{"title":"Лучший город на земле","version":"ремикс","year":2025}]}}`))
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	source, err := newYandexBiographySource(server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := IdentityContext{ArtistID: "a", Name: "Talemates", Albums: []IdentityRelease{{Title: "Лучший город на земле (ремикс)", Year: 2025}}}
+	candidates, err := source.FindIdentityCandidates(context.Background(), input)
+	if err != nil || len(candidates) != 1 || len(candidates[0].Albums) != 1 {
+		t.Fatalf("candidates=%#v err=%v", candidates, err)
+	}
+	if !identityScoreEligibleForAI(ScoreIdentityCandidate(input, candidates[0])) {
+		t.Fatalf("versioned album match must make the candidate eligible for confirmation: %#v", ScoreIdentityCandidate(input, candidates[0]))
+	}
+}
