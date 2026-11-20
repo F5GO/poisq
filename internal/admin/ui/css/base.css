@@ -131,7 +131,7 @@ body {
 
 .panel-title {
   font-size: 22px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-primary);
   line-height: 1.2;
   letter-spacing: -0.02em;

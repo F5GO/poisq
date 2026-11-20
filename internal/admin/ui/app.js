@@ -97,6 +97,111 @@ async function fetchApi(endpoint, method = "GET", payload = null, timeoutMs = 20
   }
 }
 
+// -----------------------------------------------------------------------------
+// Диалог подтверждения: замена системного window.confirm
+// -----------------------------------------------------------------------------
+
+const DIALOG_ICONS = {
+  danger: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  default: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>'
+};
+
+let dialogQueue = Promise.resolve();
+
+/**
+ * Показывает модальное окно подтверждения и возвращает Promise<boolean>.
+ * Параметры: title, message, details (список коротких пунктов), confirmLabel,
+ * cancelLabel, tone ("danger" — необратимое действие, фокус на «Отмене»).
+ * Окна встают в очередь, поэтому два вызова подряд не перекрывают друг друга.
+ * Весь текст вставляется через textContent, HTML из данных не исполняется.
+ */
+function confirmDialog({ title, message = "", details = [], confirmLabel = "Подтвердить", cancelLabel = "Отмена", tone = "default" }) {
+  const run = () => new Promise((resolve) => {
+    const danger = tone === "danger";
+    const opener = document.activeElement;
+    const uid = "dlg" + Date.now().toString(36);
+    const make = (tag, cls, text) => {
+      const el = document.createElement(tag);
+      if (cls) el.className = cls;
+      if (text !== undefined) el.textContent = text;
+      return el;
+    };
+
+    const overlay = make("div", "modal-overlay dialog-overlay");
+    const card = make("div", "modal-card dialog-card" + (danger ? " dialog-danger" : ""));
+    card.setAttribute("role", danger ? "alertdialog" : "dialog");
+    card.setAttribute("aria-modal", "true");
+    card.setAttribute("aria-labelledby", uid + "-t");
+
+    const body = make("div", "dialog-body");
+    const icon = make("div", "dialog-icon");
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = `<svg viewBox="0 0 24 24">${DIALOG_ICONS[danger ? "danger" : "default"]}</svg>`;
+    const text = make("div", "dialog-text");
+    const heading = make("h2", "dialog-title", title);
+    heading.id = uid + "-t";
+    text.appendChild(heading);
+    if (message) {
+      const p = make("p", "dialog-message", message);
+      p.id = uid + "-d";
+      card.setAttribute("aria-describedby", p.id);
+      text.appendChild(p);
+    }
+    if (details.length) {
+      const ul = make("ul", "dialog-list");
+      details.forEach((d) => ul.appendChild(make("li", "", d)));
+      text.appendChild(ul);
+    }
+    body.append(icon, text);
+
+    const actions = make("div", "dialog-actions");
+    const cancelBtn = make("button", "btn btn-secondary", cancelLabel + " ");
+    cancelBtn.type = "button";
+    cancelBtn.appendChild(make("kbd", "", "Esc"));
+    const okBtn = make("button", "btn " + (danger ? "btn-danger" : "btn-primary"), confirmLabel);
+    okBtn.type = "button";
+    actions.append(cancelBtn, okBtn);
+
+    card.append(body, actions);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    let done = false;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("keydown", onKey, true);
+      overlay.classList.add("closing");
+      setTimeout(() => overlay.remove(), 130);
+      if (opener && typeof opener.focus === "function" && document.contains(opener)) opener.focus();
+      resolve(result);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        finish(false);
+      } else if (e.key === "Tab") {
+        const first = cancelBtn, last = okBtn;
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        else if (!card.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    cancelBtn.addEventListener("click", () => finish(false));
+    okBtn.addEventListener("click", () => finish(true));
+    overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) finish(false); });
+
+    // Для необратимых действий по умолчанию стоит безопасный выбор
+    (danger ? cancelBtn : okBtn).focus();
+  });
+  const result = dialogQueue.then(run);
+  dialogQueue = result.catch(() => {});
+  return result;
+}
+window.confirmDialog = confirmDialog;
+
 function showToast(message, type = "info") {
   const container = document.getElementById("toast-container");
   if (!container) return;
@@ -483,7 +588,11 @@ function setBiographyBusy(busy) {
 
 async function rebuildBiography() {
 	if (state.biographyBusy || !state.selectedBiography) return;
-	if (!confirm("Заново собрать описание этого исполнителя из проверенных источников?")) return;
+	if (!await confirmDialog({
+		title: "Пересобрать описание?",
+		message: "Описание исполнителя будет заново собрано из проверенных источников.",
+		confirmLabel: "Пересобрать"
+	})) return;
 	setBiographyBusy(true);
 	try {
 		await fetchApi("/artist-biographies/rebuild", "POST", { artistId: state.selectedBiography.artistId });
@@ -518,7 +627,12 @@ async function saveManualBiography(event) {
 
 async function resetManualBiography() {
   if (state.biographyBusy || !state.selectedBiography?.manualActive) return;
-  if (!confirm("Удалить ручное описание и снова использовать автоматическое?")) return;
+  if (!await confirmDialog({
+    title: "Удалить ручное описание?",
+    message: "Снова будет использоваться автоматическое описание.",
+    confirmLabel: "Удалить",
+    tone: "danger"
+  })) return;
   setBiographyBusy(true);
   try {
     const detail = await fetchApi(`/artist-biographies/detail?id=${encodeURIComponent(state.selectedBiography.artistId)}`, "DELETE");
@@ -533,11 +647,16 @@ async function resetManualBiography() {
 
 async function resetBiographyCache() {
   if (state.biographyBusy) return;
-  if (!confirm(
-    "Полностью сбросить автоматическую проверку всех артистов?\n\n" +
-    "Будут удалены найденные идентичности, кандидаты, переводы и автоматический выбор. " +
-    "Ручные описания сохранятся. Новая проверка начнётся при открытии страницы исполнителя или ручной пересборке."
-  )) return;
+  if (!await confirmDialog({
+    title: "Сбросить автоматическую проверку?",
+    message: "Проверка будет сброшена у всех исполнителей. Новая начнётся при открытии страницы исполнителя или ручной пересборке.",
+    details: [
+      "Удалятся найденные идентичности, кандидаты, переводы и автоматический выбор",
+      "Ручные описания сохранятся"
+    ],
+    confirmLabel: "Сбросить проверку",
+    tone: "danger"
+  })) return;
   setBiographyBusy(true);
   const button = document.getElementById("btn-reset-biography-cache");
   if (button) button.disabled = true;
@@ -741,7 +860,7 @@ function renderTracksTable(container, tracks) {
     }
 
     // Честный статус аудита медиатеки
-    let auditBadge = `<span class="badge-audit-ok">✓ Готов</span>`;
+    let auditBadge = `<span class="badge-audit-ok">Готов</span>`;
     let rowClass = "";
     if (t.isMojibake) {
       auditBadge = `<span class="badge-audit-queued">Mojibake</span>`;
@@ -750,7 +869,7 @@ function renderTracksTable(container, tracks) {
     } else if (t.lyricsStatus === "none" || !t.lyricsStatus) {
       auditBadge = `<span class="badge-audit-queued">Нужен текст</span>`;
     } else if (t.lyricsStatus === "plain") {
-      auditBadge = `<span class="badge-audit-queued">⏱ Нужен LRC</span>`;
+      auditBadge = `<span class="badge-audit-queued">Нужен LRC</span>`;
     }
 
     return `
@@ -903,7 +1022,7 @@ async function openTrackDrawer(trackId) {
   const coverUrl = `/api/v1/navidrome/album-cover?album=${encodeURIComponent(track.album || "")}&artist=${encodeURIComponent(track.artist || "")}&path=${encodeURIComponent(track.folderPath || "")}&trackId=${encodeURIComponent(track.id || "")}`;
 
   let lyricsStatusDesc = "Отсутствует";
-  if (track.lyricsStatus === "verified") lyricsStatusDesc = "✓ Проверен";
+  if (track.lyricsStatus === "verified") lyricsStatusDesc = "Проверен";
   else if (track.lyricsStatus === "synced") lyricsStatusDesc = "Синхронизирован (.lrc)";
   else if (track.lyricsStatus === "plain") lyricsStatusDesc = "Обычный текст (без таймкодов)";
 
@@ -1006,13 +1125,18 @@ async function deleteTrackLyrics(trackId) {
   const track = state.tracks.find(t => t.id === trackId) || state.selectedTrack;
   const titleName = track ? `«${track.artist || ""} — ${track.title || ""}»` : trackId;
 
-  if (!confirm(`Удалить текст песни и файл .lrc с диска для трека ${titleName}?`)) {
+  if (!await confirmDialog({
+    title: "Удалить текст песни?",
+    message: `Текст и файл .lrc будут удалены с диска для трека ${titleName}.`,
+    confirmLabel: "Удалить",
+    tone: "danger"
+  })) {
     return;
   }
 
   try {
     await fetchApi("/lyrics/delete", "POST", { trackId });
-    showToast("✓ Текст песни и файл .lrc успешно удалены", "success");
+    showToast("Текст песни и файл .lrc успешно удалены", "success");
 
     if (state.selectedTrack && state.selectedTrack.id === trackId) {
       state.selectedTrack.activeLyrics = "";
@@ -1050,7 +1174,7 @@ async function saveTrackTags(trackId) {
   try {
     const res = await fetchApi("/tracks/tags", "POST", payload, 60000);
     state.lastAppliedStagingId = res.stagingId; // правку можно откатить кнопкой Undo в Staging
-    showToast("✓ Теги записаны в файл", "success");
+    showToast("Теги записаны в файл", "success");
     document.getElementById("drawer-track-detail")?.classList.add("hidden");
     await loadTracks();
   } catch (err) {
@@ -1071,7 +1195,7 @@ async function auditSingleTrack(trackId) {
 async function enqueueSingleTournament(trackId) {
   try {
     await fetchApi("/lyrics/enqueue", "POST", { trackId, jobType: "tournament" });
-    showToast("✓ Задача турнира поставлена в очередь воркера", "success");
+    showToast("Задача турнира поставлена в очередь воркера", "success");
     loadJobsData();
   } catch (err) {
     showToast(`Ошибка: ${err.message}`, "error");
@@ -1225,7 +1349,13 @@ function renderKaraokeSidebar(filterText = "") {
 async function openTrackInKaraoke(trackId, fromRoute = false) {
   if (window.TimelineEditor && window.TimelineEditor.isDirty() &&
       state.selectedTrack && state.selectedTrack.id !== trackId &&
-      !confirm("В редакторе таймингов есть несохранённые изменения. Перейти к другому треку без сохранения?")) {
+      !await confirmDialog({
+        title: "Есть несохранённые изменения",
+        message: "Если перейти к другому треку, правки таймингов будут потеряны.",
+        confirmLabel: "Перейти без сохранения",
+        cancelLabel: "Остаться",
+        tone: "danger"
+      })) {
     return;
   }
   if (state.selectedTrack && state.selectedTrack.id !== trackId) {
@@ -1530,7 +1660,7 @@ async function persistLrcContent(content, extra = {}) {
     });
 
     if (res.lrcWritten) {
-      showToast(`✓ Файл .lrc сохранен рядом с аудиофайлом!`, "success");
+      showToast(`Файл .lrc сохранён рядом с аудиофайлом`, "success");
     } else if (res.writeError) {
       showToast(`Текст сохранен в базу, но не удалось записать .lrc: ${res.writeError}`, "info");
     }
@@ -1621,7 +1751,7 @@ function startPollingKaraokeJob(trackId, initialText) {
       } else if (job.status === "paused") {
         showKaraokeJobBanner("Задача на паузе. Возобновить можно в очереди задач.");
       } else if (job.status === "done") {
-        stop("✓ Текст успешно обновлен (Источник: poisq)!", 2500);
+        stop("Текст успешно обновлен (источник: poisq)", 2500);
         await refreshCurrentKaraokeTrack(trackId);
       } else if (job.status === "failed") {
         stop(job.errorLog ? `Не получилось: ${job.errorLog}` : "Текст не найден или ошибка провайдера", 5000);
@@ -1713,7 +1843,7 @@ async function enqueueLrcTournament() {
       trackId,
       jobType: "tournament"
     });
-    showToast("✓ Поиск текста запущен", "info");
+    showToast("Поиск текста запущен", "info");
     startPollingKaraokeJob(trackId, "Поиск текста в LRCLIB, Яндекс Музыке, Genius...");
     loadJobsData();
   } catch (err) {
@@ -1758,7 +1888,7 @@ async function enqueueWhisperKaraoke() {
       trackId,
       jobType: "whisper_karaoke"
     });
-    showToast("✓ Задача AI Караоке (Groq Whisper Large v3) запущена", "info");
+    showToast("Задача AI Караоке (Groq Whisper Large v3) запущена", "info");
     startPollingKaraokeJob(trackId, "Создание синхронного караоке через AI Whisper...");
     loadJobsData();
   } catch (err) {
@@ -1990,7 +2120,7 @@ async function applyStaging(id) {
     }
     await fetchApi("/staging/apply", "POST", payload);
     state.lastAppliedStagingId = id;
-    showToast("✓ Изменения успешно применены в файл", "success");
+    showToast("Изменения успешно применены в файл", "success");
     await loadStagingData();
   } catch (err) {
     showToast(`Ошибка применения: ${err.message}`, "error");
@@ -2087,7 +2217,7 @@ function renderCoverCandidatesGrid(itemId, candidates, defaultAlbum = "", defaul
         <div class="cover-cand-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
         <div class="cover-cand-meta">${escapeHtml(artist)}</div>
         <div class="cover-cand-meta">${resText} · ${srcText}</div>
-        <button class="btn btn-secondary cover-cand-btn" onclick="selectCoverCandidate(${itemId}, ${idx})">${isSel ? '✓ Выбрано' : 'Выбрать'}</button>
+        <button class="btn btn-secondary cover-cand-btn" onclick="selectCoverCandidate(${itemId}, ${idx})">${isSel ? 'Выбрано' : 'Выбрать'}</button>
       </div>
     `;
   }).join("");
@@ -2201,7 +2331,7 @@ function selectCoverCandidate(itemId, candIndex) {
       if (idx === candIndex) {
         el.classList.add("active");
         const btn = el.querySelector(".cover-cand-btn");
-        if (btn) btn.innerText = "✓ Выбрано";
+        if (btn) btn.innerText = "Выбрано";
       } else {
         el.classList.remove("active");
         const btn = el.querySelector(".cover-cand-btn");
@@ -2416,14 +2546,18 @@ async function applyAllStaging() {
     return;
   }
 
-  if (!confirm(`Применить все ${state.stagingItems.length} предложений в файлы медиатеки?`)) {
+  if (!await confirmDialog({
+    title: "Применить все предложения?",
+    message: `Изменения (${state.stagingItems.length}) будут записаны в файлы медиатеки.`,
+    confirmLabel: "Применить все"
+  })) {
     return;
   }
 
   const ids = state.stagingItems.map(item => item.id);
   try {
     const res = await fetchApi("/staging/apply", "POST", { ids });
-    showToast(`✓ Успешно применено изменений: ${res.applied}`, "success");
+    showToast(`Успешно применено изменений: ${res.applied}`, "success");
     await loadStagingData();
     await loadLibraryData();
   } catch (err) {
@@ -2432,14 +2566,18 @@ async function applyAllStaging() {
 }
 
 async function resetFullDatabase() {
-  const confirmed = confirm(
-    "ВНИМАНИЕ: Вы уверены, что хотите выполнить ПОЛНЫЙ СБРОС БД?\n\n" +
-    "• Будут удалены все предложения исправлений;\n" +
-    "• Будут сброшены кэш треков и текстов;\n" +
-    "• Все API-ключи (Gemini / Groq) будут сохранены;\n" +
-    "• Сразу после сброса запустится свежее сканирование из Navidrome.\n\n" +
-    "Выполнить полный сброс базы данных?"
-  );
+  const confirmed = await confirmDialog({
+    title: "Полностью сбросить базу poisq?",
+    message: "После сброса каталог будет заново прочитан из Navidrome.",
+    details: [
+      "Удалятся все предложения исправлений",
+      "Сбросятся кэш треков и текстов",
+      "API-ключи сохранятся",
+      "Сразу запустится новое сканирование Navidrome"
+    ],
+    confirmLabel: "Сбросить базу",
+    tone: "danger"
+  });
   if (!confirmed) return;
 
   const btn = document.getElementById("btn-reset-db");
@@ -2452,7 +2590,7 @@ async function resetFullDatabase() {
   try {
     showToast("Выполняется сброс базы данных и синхронизация из Navidrome...", "info");
     const res = await fetchApi("/db/reset", "POST", { keepKeys: true });
-    showToast(`✓ База успешно сброшена! Синхронизировано треков: ${res.syncedTracks || 0}`, "success");
+    showToast(`База успешно сброшена! Синхронизировано треков: ${res.syncedTracks || 0}`, "success");
     await loadStagingData();
     await loadLibraryData();
   } catch (err) {
@@ -2467,7 +2605,12 @@ async function resetFullDatabase() {
 
 async function discardAllStaging() {
   if (state.stagingItems.length === 0) return;
-  if (!confirm("Отклонить все текущие исправления?")) return;
+  if (!await confirmDialog({
+    title: "Отклонить все исправления?",
+    message: "Все текущие предложения исчезнут из очереди.",
+    confirmLabel: "Отклонить все",
+    tone: "danger"
+  })) return;
 
   for (const item of state.stagingItems) {
     try {
@@ -2486,7 +2629,7 @@ async function undoStaging() {
 
   try {
     await fetchApi("/staging/undo", "POST", { id: state.lastAppliedStagingId });
-    showToast("✓ Последнее изменение успешно откатано", "success");
+    showToast("Последнее изменение успешно откатано", "success");
     state.lastAppliedStagingId = null;
     await loadStagingData();
     await loadLibraryData();
@@ -2536,7 +2679,7 @@ async function loadJobsData() {
       const isExpanded = state.expandedJobIds.has(j.id);
       let statusBadge = `<span class="badge-audit-queued">Ожидание</span>`;
       if (j.status === "running") statusBadge = `<span class="badge-audit-processing">Выполняется...</span>`;
-      else if (j.status === "done" || j.status === "completed") statusBadge = `<span class="text-emerald" style="font-weight: 500;">✓ Завершена</span>`;
+      else if (j.status === "done" || j.status === "completed") statusBadge = `<span class="text-emerald" style="font-weight: 500;">Завершена</span>`;
       else if (j.status === "failed") statusBadge = `<span class="text-crimson" style="color:var(--color-crimson, #f43f5e);">Ошибка</span>`;
       else if (j.status === "waiting_quota") statusBadge = `<span class="text-amber">Ждет квоту API</span>`;
       else if (j.status === "paused") statusBadge = `<span class="badge-audit-queued" style="background: var(--bg-subtle); color: var(--text-secondary);">На паузе</span>`;
@@ -2561,7 +2704,7 @@ async function loadJobsData() {
       const rawStepOrErr = j.errorLog || j.lastError || "";
       let stepSummaryHtml = `<span class="text-muted">—</span>`;
       if (j.status === "done" || j.status === "completed") {
-        stepSummaryHtml = `<span class="text-emerald">✓ Текст сохранен (.lrc · poisq)</span>`;
+        stepSummaryHtml = `<span class="text-emerald">Текст сохранен (.lrc · poisq)</span>`;
       } else if (j.status === "running") {
         stepSummaryHtml = `<span style="color: var(--color-primary, #38bdf8); font-weight: 500;">${escapeHtml(rawStepOrErr || "Обработка этапа...")}</span>`;
       } else if (rawStepOrErr) {
@@ -2694,7 +2837,7 @@ function buildJobDetailsRowHtml(j, trackObj) {
   } else if (rawStep) {
     logLinesHtml = `<div class="job-log-line">${escapeHtml(rawStep)}</div>`;
   } else if (isDone) {
-    logLinesHtml = `<div class="job-log-line text-emerald">✓ Задача успешно выполнена. Синхронный .lrc файл записан рядом с треком.</div>`;
+    logLinesHtml = `<div class="job-log-line text-emerald">Задача успешно выполнена. Синхронный .lrc файл записан рядом с треком.</div>`;
   } else {
     logLinesHtml = `<div class="job-log-line text-muted">Ожидание захвата задачи фоновым воркером...</div>`;
   }
@@ -2787,7 +2930,7 @@ async function jobAction(jobId, action, stage = "resume") {
     else if (action === "retry") {
       msg = stage === "resume" ? `Задача #${jobId} возобновлена с этапа Gemini` : `Задача #${jobId} перезапущена с 1 этапа`;
     } else if (action === "delete") msg = `Задача #${jobId} удалена`;
-    showToast(`✓ ${msg}`, "success");
+    showToast(`${msg}`, "success");
     await loadJobsData();
   } catch (err) {
     showToast(`Ошибка: ${err.message}`, "error");
@@ -2849,7 +2992,7 @@ function initKeyModal() {
 
     try {
       await fetchApi("/keys", "POST", { provider, label, apiKey });
-      showToast("✓ Ключ зашифрован (AES-256-GCM) и добавлен в пул ротации", "success");
+      showToast("Ключ зашифрован (AES-256-GCM) и добавлен в пул ротации", "success");
       closeModal();
       await loadKeysData();
     } catch (err) {
@@ -2915,7 +3058,12 @@ async function loadKeysData() {
 }
 
 async function deleteKey(id) {
-  if (!confirm("Удалить данный API-ключ из пула ротации?")) return;
+  if (!await confirmDialog({
+    title: "Удалить API-ключ?",
+    message: "Ключ будет удалён из пула ротации.",
+    confirmLabel: "Удалить",
+    tone: "danger"
+  })) return;
 
   try {
     await fetchApi(`/keys?id=${id}`, "DELETE");
@@ -2955,14 +3103,19 @@ function initCastForm() {
     if (res && tokenInput) tokenInput.value = "";
     if (res) {
       showToast(
-        res.error ? "Настройки сохранены, но сервер MA не ответил" : "✓ Настройки Music Assistant сохранены",
+        res.error ? "Настройки сохранены, но сервер MA не ответил" : "Настройки Music Assistant сохранены",
         res.error ? "info" : "success"
       );
     }
   });
 
   document.getElementById("btn-clear-cast-token")?.addEventListener("click", async () => {
-    if (!confirm("Удалить сохранённый токен доступа Music Assistant?")) return;
+    if (!await confirmDialog({
+      title: "Удалить токен Music Assistant?",
+      message: "Сохранённый токен доступа будет удалён.",
+      confirmLabel: "Удалить",
+      tone: "danger"
+    })) return;
     const tokenInput = document.getElementById("cast-token");
     if (tokenInput) tokenInput.value = "";
     const payload = collectCastFormPayload({ token: "", clearToken: true });
@@ -2982,10 +3135,15 @@ function initNavidromeAccountForm() {
       password: document.getElementById("navidrome-password")?.value || ""
     });
     if (btn) btn.disabled = false;
-    if (res) showToast("✓ Учётная запись Navidrome сохранена", "success");
+    if (res) showToast("Учётная запись Navidrome сохранена", "success");
   });
   document.getElementById("btn-clear-navidrome-account")?.addEventListener("click", async () => {
-    if (!confirm("Удалить служебную учётную запись Navidrome?")) return;
+    if (!await confirmDialog({
+      title: "Удалить учётную запись Navidrome?",
+      message: "Сохранённые данные служебной учётной записи будут удалены.",
+      confirmLabel: "Удалить",
+      tone: "danger"
+    })) return;
     const res = await loadNavidromeAccount({ clear: true });
     if (res) showToast("Учётная запись Navidrome удалена", "info");
   });
@@ -3039,7 +3197,7 @@ async function loadCastSettings(payload = null) {
 
   if (tokenBadge) {
     if (res.hasToken) {
-      tokenBadge.textContent = `✓ Сохранён (${res.tokenMask || "••••"})`;
+      tokenBadge.textContent = `Сохранён (${res.tokenMask || "••••"})`;
       tokenBadge.className = "cast-token-meta text-success";
     } else {
       tokenBadge.textContent = "Не задан";
@@ -3102,7 +3260,7 @@ async function loadCastSettings(payload = null) {
       statusBadge.textContent = "Выберите источник";
     }
   } else {
-    status.textContent = `✓ Подключено к Music Assistant. Активных колонок в приложении: ${state.castPlayers.length}.`;
+    status.textContent = `Подключено к Music Assistant. Активных колонок в приложении: ${state.castPlayers.length}.`;
     if (statusBadge) {
       statusBadge.className = "badge badge-success";
       statusBadge.textContent = "Подключено";
@@ -3123,7 +3281,7 @@ async function syncNavidrome() {
 
   try {
     const res = await fetchApi("/scan/sync", "POST");
-    showToast(`✓ Синхронизация завершена: обновлено ${res.syncedTracks} треков`, "success");
+    showToast(`Синхронизация завершена: обновлено ${res.syncedTracks} треков`, "success");
     await loadLibraryData();
   } catch (err) {
     showToast(`Ошибка синхронизации: ${err.message}`, "error");

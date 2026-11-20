@@ -498,9 +498,15 @@
     }
   }
 
-  function revert() {
+  async function revert() {
     if (!isDirty() && ed.histIdx === 0) return;
-    if (isDirty() && !confirm("Отменить все несохранённые изменения этого трека?")) return;
+    if (isDirty() && !await confirmDialog({
+      title: "Отменить несохранённые правки?",
+      message: "Все изменения этого трека вернутся к сохранённой версии.",
+      confirmLabel: "Отменить правки",
+      cancelLabel: "Оставить",
+      tone: "danger"
+    })) return;
     if (ed.synthetic) {
       // вернуть исходный (синтетический) вид: первая запись истории
       ed.lines = JSON.parse(ed.history[0]);
@@ -585,6 +591,7 @@
       accent: v("--poisq-blue", "#2563EB"),
       violet: v("--poisq-violet", "#7C3AED"),
       surface: v("--bg-surface", "#FFFFFF"),
+      onAccent: v("--text-inverse", "#FFFFFF"),
       red: v("--color-red", "#EF4444"),
       amber: v("--color-amber", "#F59E0B"),
     };
@@ -629,8 +636,10 @@
 
     ed.viewStart = clampView(ed.viewStart);
     const total = duration();
-    const midY = RULER_H + (H - RULER_H) / 2;
-    const amp = (H - RULER_H) / 2 - 6;
+    // Волна растёт вверх от базовой линии; под ней остаётся место для подписей меток
+    const baseY = H - 24;
+    const amp = baseY - RULER_H - 8;
+    const midY = (RULER_H + baseY) / 2;
 
     // Линейка времени
     ctx.font = "11px ui-monospace, Menlo, monospace";
@@ -649,7 +658,15 @@
       ctx.fillText(fmtTime(t).replace(/\.00$/, ""), x + 4, RULER_H / 2 - 2);
     }
 
-    // Волна
+    // Базовая линия волны
+    ctx.strokeStyle = col.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, Math.round(baseY) + 0.5);
+    ctx.lineTo(W, Math.round(baseY) + 0.5);
+    ctx.stroke();
+
+    // Волна: только верхняя половина, высота столбика — пиковая амплитуда
     if (ed.waveState === "ready" && ed.wave) {
       const { rate, min, max } = ed.wave;
       ctx.strokeStyle = col.wave;
@@ -669,10 +686,10 @@
           if (min[i] < lo) lo = min[i];
           if (max[i] > hi) hi = max[i];
         }
-        const y0 = midY - (hi / 127) * amp;
-        const y1 = midY - (lo / 127) * amp;
-        ctx.moveTo(x + 0.5, y0);
-        ctx.lineTo(x + 0.5, Math.max(y1, y0 + 1));
+        const peak = Math.max(hi, -lo, 0);
+        const y = baseY - (peak / 127) * amp;
+        ctx.moveTo(x + 0.5, baseY);
+        ctx.lineTo(x + 0.5, Math.min(y, baseY - 1));
       }
       ctx.stroke();
       ctx.globalAlpha = 1;
@@ -688,11 +705,6 @@
           : "";
       if (msg) ctx.fillText(msg, W / 2, midY);
       ctx.textAlign = "left";
-      ctx.strokeStyle = col.grid;
-      ctx.beginPath();
-      ctx.moveTo(0, midY + 0.5);
-      ctx.lineTo(W, midY + 0.5);
-      ctx.stroke();
     }
 
     // Метки строк
@@ -745,12 +757,12 @@
       ctx.beginPath();
       ctx.roundRect(fx, 2, fw, 20, [3, 6, 6, 3]);
       ctx.fill();
-      ctx.fillStyle = "#fff";
+      ctx.fillStyle = col.onAccent;
       ctx.fillText(label, fx + 7, 12.5);
       // ручка
       ctx.fillStyle = col.accent;
       ctx.beginPath();
-      ctx.arc(x, midY, 5, 0, Math.PI * 2);
+      ctx.arc(x, baseY, 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = col.surface;
       ctx.lineWidth = 2;

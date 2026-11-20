@@ -17,7 +17,7 @@
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 500;
-  height: 34px;
+  height: 36px;
   padding: 0 14px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
@@ -84,4 +84,14 @@
 .modal-close-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+/* Необратимое действие: единственная сплошная красная кнопка в интерфейсе */
+.btn-danger {
+  background: var(--color-red);
+  color: var(--text-inverse);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-red) 88%, var(--text-primary));
 }

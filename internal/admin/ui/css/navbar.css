@@ -29,7 +29,7 @@
 .nav-brand {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   cursor: pointer;
   user-select: none;
   flex-shrink: 0;
@@ -106,7 +106,7 @@
 
 .nav-tab.active {
   color: var(--text-primary);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .nav-tab.active::after {
@@ -121,11 +121,11 @@
 
 .badge-count {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   min-width: 20px;
   height: 18px;
-  padding: 0 5px;
+  padding: 0 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -159,7 +159,7 @@
 
 .status-dot {
   width: 7px;
-  height: 7px;
+  height: 8px;
   border-radius: var(--radius-round);
   background-color: var(--color-emerald);
 }

@@ -24,7 +24,7 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  transition: all 0.16s ease;
+  transition: color 0.14s var(--ease-out), background-color 0.14s var(--ease-out), border-color 0.14s var(--ease-out), opacity 0.14s var(--ease-out), transform 0.14s var(--ease-out);
 }
 
 .staging-card:hover {
@@ -41,7 +41,7 @@
 
 .staging-path {
   font-size: 13.5px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-primary);
   word-break: break-all;
 }
@@ -52,8 +52,8 @@
   gap: 6px;
   padding: 2px 10px;
   border-radius: var(--radius-pill);
-  font-size: 11.5px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   background: var(--color-amber-bg);
   color: var(--color-amber);
   border: 1px solid color-mix(in srgb, var(--color-amber) 25%, transparent);
@@ -73,10 +73,8 @@
 .diff-cell-head {
   background: var(--bg-subtle);
   color: var(--text-secondary);
-  font-weight: 600;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 500;
+  font-size: 12px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -107,7 +105,7 @@
   padding: 2px 6px;
   border-radius: var(--radius-xs);
   display: inline-block;
-  font-weight: 600;
+  font-weight: 500;
   word-break: break-word;
 }
 
@@ -130,7 +128,7 @@
   text-align: center;
   position: relative;
   cursor: pointer;
-  transition: all 0.16s ease;
+  transition: color 0.14s var(--ease-out), background-color 0.14s var(--ease-out), border-color 0.14s var(--ease-out), opacity 0.14s var(--ease-out), transform 0.14s var(--ease-out);
 }
 
 .cover-side-card:hover {
@@ -139,10 +137,8 @@
 }
 
 .cover-side-title {
-  font-size: 11.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text-secondary);
   margin-bottom: 8px;
 }
@@ -157,13 +153,13 @@
 }
 
 .cover-side-meta {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
   margin-top: 8px;
 }
 
 .cover-side-zoom-hint {
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--poisq-blue);
   margin-top: 4px;
 }
@@ -189,7 +185,7 @@
   text-align: center;
   position: relative;
   cursor: pointer;
-  transition: all 0.14s ease;
+  transition: color 0.14s var(--ease-out), background-color 0.14s var(--ease-out), border-color 0.14s var(--ease-out), opacity 0.14s var(--ease-out), transform 0.14s var(--ease-out);
 }
 
 .cover-cand-card:hover {
@@ -206,7 +202,7 @@
 }
 
 .cover-cand-meta {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-muted);
   margin-top: 4px;
 }
@@ -216,7 +212,7 @@
   background: var(--brand-gradient-soft);
   color: var(--poisq-violet);
   border: 1px solid color-mix(in srgb, var(--signal) 25%, transparent);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .cover-ai-resolve-btn:hover {

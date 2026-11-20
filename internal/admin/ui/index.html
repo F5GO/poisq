@@ -30,7 +30,7 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   
   <!-- Модульная дизайн-система -->
-  <link rel="stylesheet" href="/styles.css?v=4.0.0" />
+  <link rel="stylesheet" href="/styles.css?v=4.2.0" />
 </head>
 <body>
   
@@ -93,7 +93,7 @@
       <!-- Фильтр и счетчик -->
       <div class="filter-row">
         <div class="search-input-wrap">
-          <input type="text" id="track-search-input" placeholder="Поиск по артисту, треку или альбому..." class="search-field" autocomplete="off" />
+          <input type="text" id="track-search-input" placeholder="Исполнитель, трек или альбом" class="search-field" autocomplete="off" />
           <button type="button" id="btn-clear-track-search" class="search-clear-btn hidden" title="Очистить поиск (Esc)">✕</button>
         </div>
         <span class="meta-label mono" id="tracks-count-label">Показано: 0 треков</span>
@@ -147,7 +147,7 @@
         <!-- Сайдбар списка треков в караоке -->
         <aside class="karaoke-sidebar">
           <div class="sidebar-header">
-            <input type="text" id="karaoke-search-input" placeholder="Поиск песни для караоке..." class="search-field search-compact" autocomplete="off" />
+            <input type="text" id="karaoke-search-input" placeholder="Найти песню" class="search-field search-compact" autocomplete="off" />
           </div>
           <div class="sidebar-tracks" id="karaoke-tracks-list">
             <div class="cell-empty">Загрузка треков...</div>
@@ -355,7 +355,7 @@
         <aside class="biography-picker">
           <div class="search-input-wrap biography-search-wrap">
             <input type="search" id="biography-search-input" class="search-field search-compact" maxlength="100"
-              placeholder="Найти исполнителя..." autocomplete="off" />
+              placeholder="Найти исполнителя" autocomplete="off" />
           </div>
           <div id="biography-artist-list" class="biography-artist-list" aria-live="polite">
             <p class="biography-empty">Загрузка исполнителей...</p>
@@ -386,7 +386,7 @@
               <div class="form-group">
                 <label class="form-label" for="biography-manual-text">Ручное описание на русском</label>
                 <textarea id="biography-manual-text" class="biography-textarea" maxlength="65536"
-                  placeholder="Оставьте пустым, если достаточно автоматического описания."></textarea>
+                  placeholder="Оставьте пустым, если достаточно автоматического описания"></textarea>
                 <span class="form-hint">Текст должен быть фактическим, достаточно подробным и написанным на русском языке.</span>
               </div>
               <div class="form-group">
@@ -481,7 +481,7 @@
                   type="text"
                   id="cast-token"
                   class="form-input mono masked-key-input"
-                  placeholder="Вставьте долгосрочный токен MA..."
+                  placeholder="Долгосрочный токен"
                   autocomplete="off"
                   autocorrect="off"
                   autocapitalize="off"
@@ -632,7 +632,7 @@
             type="text" 
             id="key-secret" 
             class="form-input mono masked-key-input" 
-            placeholder="Вставьте секретный токен или ключ..." 
+            placeholder="Токен или ключ" 
             required 
             autocomplete="off" 
             autocorrect="off" 
@@ -727,7 +727,7 @@
   <!-- Контейнер Toast-уведомлений -->
   <div id="toast-container" class="toast-container"></div>
 
-  <script src="/app.js?v=2.6.0"></script>
-  <script src="/timeline-editor.js?v=2.6.0"></script>
+  <script src="/app.js?v=2.7.0"></script>
+  <script src="/timeline-editor.js?v=2.7.0"></script>
 </body>
 </html>
