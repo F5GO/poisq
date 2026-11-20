@@ -122,11 +122,24 @@ func (*WikipediaSource) Provider() Provider { return ProviderWikipedia }
 func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*BiographySourceResult, error) {
 	mbid := strings.TrimSpace(artist.Identity.MusicBrainzID)
 	links := &metadata.MBArtistLinks{}
-	if mbid != "" {
+	if mbid != "" && artist.Links != nil && strings.EqualFold(artist.Links.ArtistMBID, mbid) {
+		links = artist.Links
+	} else if mbid != "" {
 		var err error
 		links, err = s.links.LookupArtistLinks(ctx, mbid)
 		if err != nil {
 			return nil, fmt.Errorf("wikipedia identity links unavailable")
+		}
+	}
+	evidenceCodes := []string{"id:musicbrainz", "link:wikipedia"}
+	if mbid != "" && links.WikidataID == "" && links.WikipediaURL == "" {
+		// MusicBrainz often lacks the reverse link while Wikidata stores the
+		// MusicBrainz artist ID (P434). An exact P434 match is an identity link.
+		if wikidataID := s.wikidataIDByMusicBrainzID(ctx, artist.Context.Name, mbid); wikidataID != "" {
+			copied := *links
+			copied.WikidataID = wikidataID
+			links = &copied
+			evidenceCodes = []string{"id:musicbrainz", "link:wikidata_p434"}
 		}
 	}
 	article, linkedArticle := exactWikipediaArticle(links.WikipediaURL)
@@ -135,7 +148,6 @@ func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Bi
 		linkedArticle = false
 	}
 	sourceID := ""
-	evidenceCodes := []string{"id:musicbrainz", "link:wikipedia"}
 	if (article.Language != "ru" || article.Title == "") && links.WikidataID != "" {
 		var entity struct {
 			Entities map[string]struct {
@@ -181,7 +193,9 @@ func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Bi
 	if strings.TrimSpace(article.Title) == "" || len(article.Title) > MaxIdentityNameBytes || s.wikipedias[article.Language] == nil {
 		return nil, nil
 	}
-	query := url.Values{"action": {"query"}, "prop": {"extracts"}, "exintro": {"1"}, "explaintext": {"1"}, "redirects": {"1"}, "format": {"json"}, "titles": {article.Title}}
+	// The whole article, not only the intro: birth, origin, and career usually
+	// live in the first sections. Reference/discography sections are trimmed.
+	query := url.Values{"action": {"query"}, "prop": {"extracts"}, "explaintext": {"1"}, "exsectionformat": {"wiki"}, "redirects": {"1"}, "format": {"json"}, "titles": {article.Title}}
 	var response struct {
 		Query struct {
 			Pages map[string]struct {
@@ -201,7 +215,7 @@ func (s *WikipediaSource) Fetch(ctx context.Context, artist ResolvedArtist) (*Bi
 	sort.Strings(pageIDs)
 	for _, id := range pageIDs {
 		page := response.Query.Pages[id]
-		text := strings.TrimSpace(page.Extract)
+		text := trimWikipediaArticle(page.Extract, maxWikipediaArticleBytes)
 		if page.PageID <= 0 || text == "" {
 			continue
 		}
@@ -272,6 +286,123 @@ func (s *WikipediaSource) fetchExactRussianReleaseMatch(ctx context.Context, art
 		}, nil
 	}
 	return nil, nil
+}
+
+// maxWikipediaArticleBytes bounds stored article prose. Synthesis uses at
+// most 1200 characters per provider, and non-Russian text is translated in
+// full during validation, so a larger body would only add LLM cost.
+const maxWikipediaArticleBytes = 8 << 10
+
+var wikipediaStopSections = map[string]struct{}{
+	"дискография": {}, "примечания": {}, "ссылки": {}, "литература": {}, "источники": {}, "см. также": {},
+	"видеография": {}, "фильмография": {}, "синглы": {}, "альбомы": {},
+	"discography": {}, "references": {}, "notes": {}, "external links": {}, "see also": {},
+	"further reading": {}, "sources": {}, "bibliography": {}, "videography": {}, "filmography": {},
+}
+
+// trimWikipediaArticle drops section headings, stops at the first reference
+// or list section, and truncates at a sentence boundary within maxBytes.
+func trimWikipediaArticle(extract string, maxBytes int) string {
+	lines := strings.Split(extract, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "==") && strings.HasSuffix(trimmed, "==") {
+			heading := strings.ToLower(strings.TrimSpace(strings.Trim(trimmed, "=")))
+			if _, stop := wikipediaStopSections[heading]; stop {
+				break
+			}
+			continue
+		}
+		if trimmed != "" {
+			kept = append(kept, trimmed)
+		}
+	}
+	text := strings.Join(kept, "\n")
+	if len(text) <= maxBytes {
+		return text
+	}
+	text = truncateUTF8Bytes(text, maxBytes)
+	if cut := strings.LastIndexAny(text, ".!?…"); cut > maxBytes/2 {
+		text = text[:cut+1]
+	}
+	return strings.TrimSpace(text)
+}
+
+// wikidataIDByMusicBrainzID finds the ru/en article titled exactly like the
+// artist and returns its Wikidata item only when that item's MusicBrainz
+// artist ID (P434) equals mbid. Any failure returns "" (no link).
+func (s *WikipediaSource) wikidataIDByMusicBrainzID(ctx context.Context, name, mbid string) string {
+	name = strings.TrimSpace(name)
+	if s.wikidata == nil || name == "" || len(name) > MaxIdentityNameBytes {
+		return ""
+	}
+	for _, language := range []string{"ru", "en"} {
+		client := s.wikipedias[language]
+		if client == nil {
+			continue
+		}
+		var response struct {
+			Query struct {
+				Pages map[string]struct {
+					PageID    int64  `json:"pageid"`
+					Title     string `json:"title"`
+					PageProps struct {
+						WikibaseItem string `json:"wikibase_item"`
+					} `json:"pageprops"`
+				} `json:"pages"`
+			} `json:"query"`
+		}
+		query := url.Values{"action": {"query"}, "prop": {"pageprops"}, "ppprop": {"wikibase_item"}, "redirects": {"1"}, "format": {"json"}, "titles": {name}}
+		if _, err := client.getJSON(ctx, "/w/api.php", query, nil, &response); err != nil {
+			continue
+		}
+		for _, page := range response.Query.Pages {
+			item := strings.TrimSpace(page.PageProps.WikibaseItem)
+			if page.PageID <= 0 || !validWikidataItem(item) || !wikipediaTitleMatchesArtist(page.Title, name) {
+				continue
+			}
+			if s.wikidataHasMusicBrainzID(ctx, item, mbid) {
+				return item
+			}
+		}
+	}
+	return ""
+}
+
+func (s *WikipediaSource) wikidataHasMusicBrainzID(ctx context.Context, item, mbid string) bool {
+	var entity struct {
+		Entities map[string]struct {
+			Claims map[string][]struct {
+				MainSnak struct {
+					DataValue struct {
+						Value any `json:"value"`
+					} `json:"datavalue"`
+				} `json:"mainsnak"`
+			} `json:"claims"`
+		} `json:"entities"`
+	}
+	if _, err := s.wikidata.getJSON(ctx, "/wiki/Special:EntityData/"+item+".json", nil, nil, &entity); err != nil {
+		return false
+	}
+	for _, claim := range entity.Entities[item].Claims["P434"] {
+		if value, ok := claim.MainSnak.DataValue.Value.(string); ok && strings.EqualFold(strings.TrimSpace(value), mbid) {
+			return true
+		}
+	}
+	return false
+}
+
+func validWikidataItem(value string) bool {
+	if len(value) < 2 || len(value) > 32 || value[0] != 'Q' {
+		return false
+	}
+	for _, r := range value[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func wikipediaTitleMatchesArtist(title, artist string) bool {

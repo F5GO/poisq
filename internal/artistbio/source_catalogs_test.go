@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/F5GO/poisq/internal/keypool"
+	"github.com/F5GO/poisq/internal/metadata"
 )
 
 func TestAppleMusicBiographySourceUsesReleaseEvidence(t *testing.T) {
@@ -104,5 +106,76 @@ func TestCatalogBiographySourceReportsInvalidKeyWithoutLeakingIt(t *testing.T) {
 	_, err := source.Fetch(context.Background(), yandexResolvedArtist())
 	if err == nil || strings.Contains(err.Error(), secret) || keys.invalid != 1 {
 		t.Fatalf("unsafe auth failure: err=%v invalid=%d", err, keys.invalid)
+	}
+}
+
+// guestOnlyResolvedArtist models an artist resolved by MusicBrainz whose local
+// library context cannot confirm any catalog by releases (e.g. one guest track).
+func guestOnlyResolvedArtist(links *metadata.MBArtistLinks) ResolvedArtist {
+	artist := exactResolvedArtist()
+	artist.Context.Tracks = []string{"Совместный трек"}
+	artist.Identity.Confidence = 0.98
+	artist.Links = links
+	return artist
+}
+
+func TestCatalogSourcesUseExactMusicBrainzLinksWithoutSearch(t *testing.T) {
+	links := &metadata.MBArtistLinks{ArtistMBID: exactTestMBID, DeezerID: "15170473", AppleMusicID: "1132504782", DiscogsID: "8097249", YandexMusicID: "777"}
+	artist := guestOnlyResolvedArtist(links)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/catalog/ru/artists/1132504782":
+			_, _ = w.Write([]byte(`{"data":[{"id":"1132504782","attributes":{"name":"Артист","editorialNotes":{"standard":"Описание Apple"}}}]}`))
+		case "/artists/8097249":
+			_, _ = w.Write([]byte(`{"id":8097249,"name":"Артист","profile":"Профиль Discogs"}`))
+		case "/artists/777/brief-info":
+			_, _ = w.Write([]byte(`{"result":{"artist":{"id":777,"description":{"text":"Описание Яндекса"}}}}`))
+		case "/ru/artist/15170473":
+			_, _ = w.Write([]byte(`<div id="naboo_artist_biography_resume_premium"><span itemprop="description">Описание Deezer</span></div>`))
+		default:
+			t.Errorf("unexpected search or path %q: exact links must skip name search", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	keys := &fakeBiographyKeys{key: &keypool.LeasedKey{ID: 3, PlainKey: "token"}}
+	apple, _ := newAppleMusicBiographySource(server.URL, keys)
+	discogs, _ := newDiscogsBiographySource(server.URL, keys)
+	yandex, _ := newYandexBiographySource(server.URL, keys)
+	deezer, _ := newDeezerBiographySource(server.URL, server.URL)
+	cases := []struct {
+		source BiographySource
+		id     string
+		text   string
+	}{
+		{apple, "1132504782", "Описание Apple"},
+		{discogs, "8097249", "Профиль Discogs"},
+		{yandex, "777", "Описание Яндекса"},
+		{deezer, "15170473", "Описание Deezer"},
+	}
+	for _, tc := range cases {
+		result, err := tc.source.Fetch(context.Background(), artist)
+		if err != nil || result == nil {
+			t.Fatalf("%s: result=%#v err=%v", tc.source.Provider(), result, err)
+		}
+		wantEvidence := []string{"id:musicbrainz", "link:" + string(tc.source.Provider())}
+		if result.SourceArtistID != tc.id || result.OriginalText != tc.text || result.MatchConfidence != 0.98 || !slices.Equal(result.EvidenceCodes, wantEvidence) {
+			t.Fatalf("%s: unexpected result %#v", tc.source.Provider(), result)
+		}
+	}
+}
+
+func TestExactCatalogIDIgnoresLinksOfAnotherArtistOrUnsafeIDs(t *testing.T) {
+	artist := guestOnlyResolvedArtist(&metadata.MBArtistLinks{ArtistMBID: "00000000-0000-0000-0000-000000000000", DeezerID: "1"})
+	if id := artist.exactCatalogID(ProviderDeezer); id != "" {
+		t.Fatalf("links of another MusicBrainz artist were used: %q", id)
+	}
+	artist.Links = &metadata.MBArtistLinks{ArtistMBID: exactTestMBID, DeezerID: "../1"}
+	if id := artist.exactCatalogID(ProviderDeezer); id != "" {
+		t.Fatalf("unsafe catalog id accepted: %q", id)
+	}
+	artist.Links = nil
+	if id := artist.exactCatalogID(ProviderDeezer); id != "" {
+		t.Fatalf("id without links: %q", id)
 	}
 }

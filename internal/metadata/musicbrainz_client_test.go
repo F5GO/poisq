@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -165,7 +166,14 @@ func TestMusicBrainzArtistLinksReturnsOnlyExactSafeLinks(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"` + mbid + `","relations":[
 			{"type":"wikidata","url":{"resource":"https://www.wikidata.org/wiki/Q123"}},
 			{"type":"wikipedia","url":{"resource":"https://ru.wikipedia.org/wiki/%D0%9A%D0%B8%D0%BD%D0%BE_(%D0%B3%D1%80%D1%83%D0%BF%D0%BF%D0%B0)"}},
-			{"type":"wikipedia","url":{"resource":"http://evil.example/wiki/Kino"}}
+			{"type":"wikipedia","url":{"resource":"http://evil.example/wiki/Kino"}},
+			{"type":"free streaming","url":{"resource":"https://www.deezer.com/artist/15170473"}},
+			{"type":"free streaming","url":{"resource":"https://www.deezer.com/artist/999"}},
+			{"type":"streaming","url":{"resource":"https://music.apple.com/ru/artist/1132504782"}},
+			{"type":"discogs","url":{"resource":"https://www.discogs.com/artist/8097249-Anikv"}},
+			{"type":"streaming","url":{"resource":"https://music.yandex.ru/artist/12345"}},
+			{"type":"streaming","url":{"resource":"http://music.yandex.ru/artist/666"}},
+			{"type":"streaming","url":{"resource":"https://tidal.com/artist/10005552"}}
 		]}`))
 	}))
 	defer server.Close()
@@ -178,7 +186,41 @@ func TestMusicBrainzArtistLinksReturnsOnlyExactSafeLinks(t *testing.T) {
 	if links.WikidataID != "Q123" || !strings.HasPrefix(links.WikipediaURL, "https://ru.wikipedia.org/wiki/") {
 		t.Fatalf("unexpected links: %#v", links)
 	}
+	if links.DeezerID != "15170473" || links.AppleMusicID != "1132504782" || links.DiscogsID != "8097249" || links.YandexMusicID != "12345" {
+		t.Fatalf("unexpected catalog links: %#v", links)
+	}
 	if _, err := client.LookupArtistLinks(context.Background(), "../../etc/passwd"); err == nil {
 		t.Fatal("unsafe MBID accepted")
+	}
+}
+
+func TestAssignCatalogArtistLinkAcceptsOnlyExactArtistURLs(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want MBArtistLinks
+	}{
+		{"https://deezer.com/ru/artist/42", MBArtistLinks{DeezerID: "42"}},
+		{"https://www.deezer.com/album/42", MBArtistLinks{}},
+		{"https://music.apple.com/us/artist/some-name/1132504782", MBArtistLinks{AppleMusicID: "1132504782"}},
+		{"https://itunes.apple.com/artist/id77", MBArtistLinks{AppleMusicID: "77"}},
+		{"https://music.apple.com/ru/album/x/123", MBArtistLinks{}},
+		{"https://www.discogs.com/artist/8097249", MBArtistLinks{DiscogsID: "8097249"}},
+		{"https://www.discogs.com/label/8097249", MBArtistLinks{}},
+		{"https://music.yandex.com/artist/5", MBArtistLinks{YandexMusicID: "5"}},
+		{"https://music.yandex.ru/artist/5abc", MBArtistLinks{}},
+		{"https://user@www.deezer.com/artist/42", MBArtistLinks{}},
+		{"https://www.deezer.com:8443/artist/42", MBArtistLinks{}},
+		{"https://evil-deezer.com/artist/42", MBArtistLinks{}},
+	}
+	for _, tc := range cases {
+		linked, err := url.Parse(tc.raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", tc.raw, err)
+		}
+		var got MBArtistLinks
+		assignCatalogArtistLink(&got, linked)
+		if got != tc.want {
+			t.Errorf("%s: got %#v, want %#v", tc.raw, got, tc.want)
+		}
 	}
 }

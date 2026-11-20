@@ -77,6 +77,9 @@ func NewTrackRepository(db *sql.DB) *TrackRepository {
 }
 
 // ArtistIdentityContext возвращает только ограниченный каталоговый контекст артиста без путей и текстов песен.
+// Альбом считается альбомом артиста, только если артист указан в album_artist
+// (или album_artist пуст): гостевой трек на чужом альбоме добавляет в контекст
+// только сам трек, иначе чужой альбом ломает определение артиста и биографию.
 func (r *TrackRepository) ArtistIdentityContext(ctx context.Context, artistName string, albumLimit, trackLimit int) (ArtistIdentityContext, error) {
 	artistName = strings.TrimSpace(artistName)
 	if artistName == "" || len(artistName) > 2048 {
@@ -88,7 +91,7 @@ func (r *TrackRepository) ArtistIdentityContext(ctx context.Context, artistName 
 		SELECT kind, value, year FROM (
 			SELECT 'album' AS kind, album AS value, MIN(year) AS year
 			FROM tracks
-			WHERE (artist = ? OR album_artist = ?) AND album != ''
+			WHERE (album_artist = ? OR (album_artist = '' AND artist = ?)) AND album != ''
 			GROUP BY album
 			ORDER BY MIN(year), album
 			LIMIT ?
@@ -172,7 +175,10 @@ func (r *TrackRepository) collaborativeIdentityContext(ctx context.Context, arti
 		if !containsArtistToken(artist, artistName) && !containsArtistToken(albumArtist, artistName) {
 			continue
 		}
-		if album != "" && len(result.Albums) < albumLimit {
+		// A guest appearance on another artist's album must not make that
+		// album part of this artist's identity or biography evidence.
+		ownAlbum := containsArtistToken(albumArtist, artistName) || (strings.TrimSpace(albumArtist) == "" && containsArtistToken(artist, artistName))
+		if album != "" && ownAlbum && len(result.Albums) < albumLimit {
 			if _, ok := seenAlbums[album]; !ok {
 				seenAlbums[album] = struct{}{}
 				result.Albums = append(result.Albums, ArtistIdentityRelease{Title: album, Year: year})

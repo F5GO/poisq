@@ -106,6 +106,7 @@ func (p *SynthesisPipeline) Run(ctx context.Context, artist db.LibraryArtist) (e
 		return p.retryable(ctx, artist.ID, "catalog_unavailable", err)
 	}
 	logPipelineStage(artist.ID, artist.Name, "catalog", stageStarted, nil)
+	logger.Debug("[BIO] artist_id=%q artist=%q catalog_stored=%d catalog_empty=%d catalog_failed=%d", artist.ID, artist.Name, ingestReport.Stored, ingestReport.Empty, ingestReport.Failed)
 	stageStarted = time.Now()
 	valReport, err := p.validator.ValidateArtist(ctx, artist.ID)
 	if err != nil {

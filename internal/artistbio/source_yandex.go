@@ -125,6 +125,9 @@ func (s *YandexBiographySource) Fetch(ctx context.Context, artist ResolvedArtist
 	if artist.Identity.Provider == ProviderYandexMusic && artist.Identity.ProviderArtistID != "" {
 		return s.fetchDescription(ctx, artist.Identity.ProviderArtistID, artist.Identity.Confidence, artist.Identity.EvidenceCodes)
 	}
+	if id := artist.exactCatalogID(ProviderYandexMusic); id != "" {
+		return s.fetchDescription(ctx, id, artist.Identity.Confidence, exactCatalogEvidence(ProviderYandexMusic))
+	}
 	candidates, err := s.FindIdentityCandidates(ctx, artist.Context)
 	if err != nil {
 		return nil, err

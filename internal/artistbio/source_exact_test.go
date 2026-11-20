@@ -2,6 +2,7 @@ package artistbio
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -137,6 +138,9 @@ func TestExactWikipediaArticleRejectsLookalikeHosts(t *testing.T) {
 
 func TestWikipediaSourceRejectsUnverifiedExactNamePage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if servedWikidataCrossCheck(w, r, `{"query":{"pages":{"9":{"pageid":9,"title":"Кино"}}}}`) {
+			return
+		}
 		if r.URL.Query().Get("titles") != "Кино" || r.URL.Query().Get("prop") != "extracts|pageprops" {
 			t.Errorf("unexpected exact fallback query: %q", r.URL.RawQuery)
 		}
@@ -155,6 +159,11 @@ func TestWikipediaSourceRejectsUnverifiedExactNamePage(t *testing.T) {
 
 func TestWikipediaSourceUsesExactNameWithLocalReleaseEvidence(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The P434 cross-check finds the item, but its MusicBrainz ID differs,
+		// so only the local-release fallback may accept the page.
+		if servedWikidataCrossCheck(w, r, `{"query":{"pages":{"11637091":{"pageid":11637091,"title":"Biicla","pageprops":{"wikibase_item":"Q141738077"}}}}}`) {
+			return
+		}
 		if r.URL.Query().Get("titles") != "Biicla" || r.URL.Query().Get("redirects") != "1" {
 			t.Errorf("unexpected exact fallback query: %q", r.URL.RawQuery)
 		}
@@ -298,5 +307,72 @@ func TestExactSourcesRejectOversizedOrMismatchedRecords(t *testing.T) {
 	result, err := source.Fetch(context.Background(), exactResolvedArtist())
 	if err != nil || result != nil {
 		t.Fatalf("mismatched MBID accepted: %#v %v", result, err)
+	}
+}
+
+// servedWikidataCrossCheck answers the P434 cross-check requests (page props
+// and the Wikidata entity without a matching MusicBrainz ID).
+func servedWikidataCrossCheck(w http.ResponseWriter, r *http.Request, pageProps string) bool {
+	if strings.HasPrefix(r.URL.Path, "/wiki/Special:EntityData/") {
+		_, _ = w.Write([]byte(`{"entities":{"Q141738077":{"claims":{"P434":[{"mainsnak":{"datavalue":{"value":"00000000-0000-0000-0000-000000000000"}}}]}}}}`))
+		return true
+	}
+	if r.URL.Query().Get("prop") == "pageprops" {
+		_, _ = w.Write([]byte(pageProps))
+		return true
+	}
+	return false
+}
+
+func TestWikipediaSourceFindsArticleThroughWikidataMusicBrainzID(t *testing.T) {
+	const fullArticle = "Anikv — российская певица.\n== Биография ==\nРодилась 29 апреля 1995 года в Тбилиси.\n== Дискография ==\nАльбом, которого нет в тексте."
+	var entityRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/wiki/Special:EntityData/Q107208663.json":
+			entityRequests++
+			if entityRequests == 1 {
+				_, _ = w.Write([]byte(`{"entities":{"Q107208663":{"claims":{"P434":[{"mainsnak":{"datavalue":{"value":"` + exactTestMBID + `"}}}]}}}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"entities":{"Q107208663":{"sitelinks":{"ruwiki":{"title":"Anikv"}}}}}`))
+		case r.URL.Query().Get("prop") == "pageprops":
+			_, _ = w.Write([]byte(`{"query":{"pages":{"7":{"pageid":7,"title":"Anikv","pageprops":{"wikibase_item":"Q107208663"}}}}}`))
+		case r.URL.Query().Get("prop") == "extracts":
+			if r.URL.Query().Get("exintro") != "" || r.URL.Query().Get("exsectionformat") != "wiki" {
+				t.Errorf("article must be fetched in full with wiki headings: %q", r.URL.RawQuery)
+			}
+			raw, _ := json.Marshal(fullArticle)
+			_, _ = w.Write([]byte(`{"query":{"pages":{"7":{"pageid":7,"title":"Anikv","extract":` + string(raw) + `}}}}`))
+		default:
+			t.Errorf("unexpected request %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+	}))
+	defer server.Close()
+	source, err := newWikipediaSource(fakeArtistLinks{links: &metadata.MBArtistLinks{ArtistMBID: exactTestMBID}}, server.URL, server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artist := exactResolvedArtist()
+	artist.Context.Name = "ANIKV"
+	result, err := source.Fetch(context.Background(), artist)
+	if err != nil || result == nil {
+		t.Fatalf("P434 lookup failed: result=%#v err=%v", result, err)
+	}
+	want := "Anikv — российская певица.\nРодилась 29 апреля 1995 года в Тбилиси."
+	if result.SourceArtistID != "Q107208663" || result.OriginalText != want || !containsString(result.EvidenceCodes, "link:wikidata_p434") {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestTrimWikipediaArticleStopsAtReferenceSectionsAndBounds(t *testing.T) {
+	article := "Вступление.\n== Биография ==\nПервое.\n\n=== Детство ===\nВторое.\n== Примечания ==\nСноска."
+	if got := trimWikipediaArticle(article, 1<<10); got != "Вступление.\nПервое.\nВторое." {
+		t.Fatalf("trim = %q", got)
+	}
+	long := strings.Repeat("Предложение номер один. ", 100)
+	got := trimWikipediaArticle(long, 300)
+	if len(got) > 300 || !strings.HasSuffix(got, ".") {
+		t.Fatalf("bounded trim = %d bytes %q", len(got), got)
 	}
 }

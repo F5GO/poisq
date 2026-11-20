@@ -52,6 +52,9 @@ func (s *AppleMusicBiographySource) Fetch(ctx context.Context, artist ResolvedAr
 	}
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+leased.PlainKey)
+	if id := artist.exactCatalogID(ProviderAppleMusic); id != "" {
+		return s.fetchArtist(ctx, headers, leased.ID, id, artist.Identity.Confidence, exactCatalogEvidence(ProviderAppleMusic))
+	}
 	var search struct {
 		Results struct {
 			Artists struct {
@@ -103,16 +106,20 @@ func (s *AppleMusicBiographySource) Fetch(ctx context.Context, artist ResolvedAr
 	if resolution.Status != ResolutionResolved || resolution.Provider != ProviderAppleMusic {
 		return nil, nil
 	}
+	return s.fetchArtist(ctx, headers, leased.ID, resolution.ProviderArtistID, resolution.Confidence, resolution.EvidenceCodes)
+}
+
+func (s *AppleMusicBiographySource) fetchArtist(ctx context.Context, headers http.Header, keyID int64, id string, confidence float64, evidence []string) (*BiographySourceResult, error) {
 	var details struct {
 		Data []appleArtistResource `json:"data"`
 	}
-	status, err = s.http.getJSON(ctx, "/v1/catalog/ru/artists/"+resolution.ProviderArtistID, nil, headers, &details)
+	status, err := s.http.getJSON(ctx, "/v1/catalog/ru/artists/"+id, nil, headers, &details)
 	if err != nil {
-		reportBiographyKeyFailure(s.keys, leased.ID, status, "Apple Music")
+		reportBiographyKeyFailure(s.keys, keyID, status, "Apple Music")
 		return nil, fmt.Errorf("apple music artist details unavailable")
 	}
-	s.keys.ReportSuccess(leased.ID)
-	if len(details.Data) != 1 || details.Data[0].ID != resolution.ProviderArtistID {
+	s.keys.ReportSuccess(keyID)
+	if len(details.Data) != 1 || details.Data[0].ID != id {
 		return nil, nil
 	}
 	resource := details.Data[0]
@@ -129,8 +136,8 @@ func (s *AppleMusicBiographySource) Fetch(ctx context.Context, artist ResolvedAr
 	}
 	return &BiographySourceResult{
 		SourceArtistID: resource.ID, SourceURL: sourceURL, OriginalText: text,
-		LanguageHint: "ru", MatchConfidence: resolution.Confidence,
-		EvidenceCodes: append([]string(nil), resolution.EvidenceCodes...),
+		LanguageHint: "ru", MatchConfidence: confidence,
+		EvidenceCodes: append([]string(nil), evidence...),
 	}, nil
 }
 
@@ -160,6 +167,18 @@ func (s *DiscogsBiographySource) Fetch(ctx context.Context, artist ResolvedArtis
 	}
 	headers := make(http.Header)
 	headers.Set("Authorization", "Discogs token="+leased.PlainKey)
+	if id := artist.exactCatalogID(ProviderDiscogs); id != "" {
+		var details discogsArtistDetails
+		status, err := s.http.getJSON(ctx, "/artists/"+id, nil, headers, &details)
+		if err != nil {
+			reportBiographyKeyFailure(s.keys, leased.ID, status, "Discogs")
+			return nil, fmt.Errorf("discogs artist details unavailable")
+		}
+		if boundedNumericJSONID(details.ID) != id {
+			return nil, nil
+		}
+		return s.result(leased.ID, id, details.Profile, artist.Identity.Confidence, exactCatalogEvidence(ProviderDiscogs)), nil
+	}
 	var search struct {
 		Results []struct {
 			ID    json.RawMessage `json:"id"`
@@ -176,19 +195,14 @@ func (s *DiscogsBiographySource) Fetch(ctx context.Context, artist ResolvedArtis
 	if len(search.Results) > 3 {
 		search.Results = search.Results[:3]
 	}
-	type discogsDetails struct {
-		ID      json.RawMessage `json:"id"`
-		Name    string          `json:"name"`
-		Profile string          `json:"profile"`
-	}
-	detailsByID := make(map[string]discogsDetails, len(search.Results))
+	detailsByID := make(map[string]discogsArtistDetails, len(search.Results))
 	candidates := make([]IdentityCandidate, 0, len(search.Results))
 	for _, found := range search.Results {
 		id := boundedNumericJSONID(found.ID)
 		if id == "" {
 			continue
 		}
-		var details discogsDetails
+		var details discogsArtistDetails
 		if _, err := s.http.getJSON(ctx, "/artists/"+id, nil, headers, &details); err != nil || boundedNumericJSONID(details.ID) != id {
 			continue
 		}
@@ -216,17 +230,27 @@ func (s *DiscogsBiographySource) Fetch(ctx context.Context, artist ResolvedArtis
 		return nil, nil
 	}
 	details := detailsByID[resolution.ProviderArtistID]
-	text := cleanDiscogsText(details.Profile)
+	return s.result(leased.ID, resolution.ProviderArtistID, details.Profile, resolution.Confidence, resolution.EvidenceCodes), nil
+}
+
+type discogsArtistDetails struct {
+	ID      json.RawMessage `json:"id"`
+	Name    string          `json:"name"`
+	Profile string          `json:"profile"`
+}
+
+func (s *DiscogsBiographySource) result(keyID int64, id, profile string, confidence float64, evidence []string) *BiographySourceResult {
+	text := cleanDiscogsText(profile)
 	if text == "" {
-		return nil, nil
+		return nil
 	}
-	s.keys.ReportSuccess(leased.ID)
+	s.keys.ReportSuccess(keyID)
 	return &BiographySourceResult{
-		SourceArtistID: resolution.ProviderArtistID,
-		SourceURL:      "https://www.discogs.com/artist/" + resolution.ProviderArtistID,
-		OriginalText:   text, MatchConfidence: resolution.Confidence,
-		EvidenceCodes: append([]string(nil), resolution.EvidenceCodes...),
-	}, nil
+		SourceArtistID: id,
+		SourceURL:      "https://www.discogs.com/artist/" + id,
+		OriginalText:   text, MatchConfidence: confidence,
+		EvidenceCodes: append([]string(nil), evidence...),
+	}
 }
 
 var discogsMarkup = regexp.MustCompile(`(?i)\[/?(?:b|i|u)\]|\[/?a(?:=[^\]]*)?\]`)

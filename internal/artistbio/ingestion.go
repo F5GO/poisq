@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/F5GO/poisq/internal/metadata"
 )
 
 const (
@@ -21,6 +23,37 @@ const (
 type ResolvedArtist struct {
 	Context  IdentityContext
 	Identity IdentityResolution
+	// Links are the exact MusicBrainz URL relations of the resolved artist.
+	// When present, catalog sources fetch the linked artist directly instead
+	// of re-identifying it by name and local releases.
+	Links *metadata.MBArtistLinks
+}
+
+// exactCatalogID returns the catalog artist ID linked from the resolved
+// MusicBrainz artist, or "" when no exact link exists.
+func (a ResolvedArtist) exactCatalogID(provider Provider) string {
+	if a.Links == nil || a.Identity.MusicBrainzID == "" || !strings.EqualFold(a.Links.ArtistMBID, a.Identity.MusicBrainzID) {
+		return ""
+	}
+	var id string
+	switch provider {
+	case ProviderDeezer:
+		id = a.Links.DeezerID
+	case ProviderAppleMusic:
+		id = a.Links.AppleMusicID
+	case ProviderDiscogs:
+		id = a.Links.DiscogsID
+	case ProviderYandexMusic:
+		id = a.Links.YandexMusicID
+	}
+	if !safeCatalogID(id) {
+		return ""
+	}
+	return id
+}
+
+func exactCatalogEvidence(provider Provider) []string {
+	return []string{"id:musicbrainz", "link:" + string(provider)}
 }
 
 // BiographySourceResult is attributable prose returned by one real provider.
@@ -49,6 +82,7 @@ type IngestionService struct {
 	store   *Store
 	sources []BiographySource
 	global  chan struct{}
+	links   artistLinksLookup
 
 	mu       sync.Mutex
 	inflight map[string]*ingestionCall
@@ -101,6 +135,12 @@ func NewIngestionService(store *Store, sources []BiographySource, globalConcurre
 	}, nil
 }
 
+// SetArtistLinks enables exact MusicBrainz catalog links. Call it once during
+// composition, before the service handles requests.
+func (s *IngestionService) SetArtistLinks(lookup artistLinksLookup) {
+	s.links = lookup
+}
+
 func (s *IngestionService) Ingest(ctx context.Context, artist ResolvedArtist) (IngestionReport, error) {
 	bounded, err := boundResolvedArtist(artist)
 	if err != nil {
@@ -130,6 +170,12 @@ func (s *IngestionService) Ingest(ctx context.Context, artist ResolvedArtist) (I
 }
 
 func (s *IngestionService) ingestOnce(ctx context.Context, artist ResolvedArtist) (IngestionReport, error) {
+	if artist.Links == nil && s.links != nil && artist.Identity.MusicBrainzID != "" {
+		// A failed lookup only disables exact links; sources fall back to search.
+		if links, err := s.links.LookupArtistLinks(ctx, artist.Identity.MusicBrainzID); err == nil && links != nil {
+			artist.Links = links
+		}
+	}
 	perArtist := make(chan struct{}, min(maxSourcesPerArtist, len(s.sources)))
 	results := make(chan sourceFetchResult, len(s.sources))
 	var wg sync.WaitGroup
@@ -217,7 +263,7 @@ func boundResolvedArtist(input ResolvedArtist) (ResolvedArtist, error) {
 	}
 	identity.EvidenceCodes = append([]string(nil), identity.EvidenceCodes...)
 	identity.ContradictionCodes = append([]string(nil), identity.ContradictionCodes...)
-	return ResolvedArtist{Context: boundedContext, Identity: identity}, nil
+	return ResolvedArtist{Context: boundedContext, Identity: identity, Links: input.Links}, nil
 }
 
 func candidateFromSource(artist ResolvedArtist, provider Provider, result BiographySourceResult) (Candidate, error) {

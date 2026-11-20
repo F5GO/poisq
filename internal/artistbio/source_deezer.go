@@ -41,6 +41,9 @@ func newDeezerBiographySource(apiBase, webBase string) (*DeezerBiographySource, 
 func (*DeezerBiographySource) Provider() Provider { return ProviderDeezer }
 
 func (s *DeezerBiographySource) Fetch(ctx context.Context, artist ResolvedArtist) (*BiographySourceResult, error) {
+	if id := artist.exactCatalogID(ProviderDeezer); id != "" {
+		return s.fetchDescription(ctx, id, artist.Identity.Confidence, exactCatalogEvidence(ProviderDeezer))
+	}
 	var search struct {
 		Data []struct {
 			ID   json.RawMessage `json:"id"`
@@ -95,7 +98,10 @@ func (s *DeezerBiographySource) Fetch(ctx context.Context, artist ResolvedArtist
 	if resolution.Status != ResolutionResolved || resolution.Provider != ProviderDeezer || resolution.Confidence < AutoResolveConfidence {
 		return nil, nil
 	}
-	id := resolution.ProviderArtistID
+	return s.fetchDescription(ctx, resolution.ProviderArtistID, resolution.Confidence, resolution.EvidenceCodes)
+}
+
+func (s *DeezerBiographySource) fetchDescription(ctx context.Context, id string, confidence float64, evidence []string) (*BiographySourceResult, error) {
 	headers := make(http.Header)
 	headers.Set("Accept-Language", "ru-RU,ru;q=0.9")
 	body, status, err := s.web.get(ctx, "/ru/artist/"+id, nil, headers)
@@ -108,8 +114,8 @@ func (s *DeezerBiographySource) Fetch(ctx context.Context, artist ResolvedArtist
 	}
 	return &BiographySourceResult{
 		SourceArtistID: id, SourceURL: "https://www.deezer.com/ru/artist/" + id,
-		OriginalText: text, LanguageHint: "ru", MatchConfidence: resolution.Confidence,
-		EvidenceCodes: append([]string(nil), resolution.EvidenceCodes...),
+		OriginalText: text, LanguageHint: "ru", MatchConfidence: confidence,
+		EvidenceCodes: append([]string(nil), evidence...),
 	}, nil
 }
 

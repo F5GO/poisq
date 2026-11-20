@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/F5GO/poisq/internal/db"
+	"github.com/F5GO/poisq/internal/metadata"
 )
 
 type fakeBiographySource struct {
@@ -377,5 +378,61 @@ func TestIngestionGlobalConcurrencyLimit(t *testing.T) {
 	wg.Wait()
 	if got := maximum.Load(); got != 2 {
 		t.Fatalf("global provider concurrency = %d, want 2", got)
+	}
+}
+
+type linksRecordingSource struct {
+	provider Provider
+	seen     atomic.Pointer[metadata.MBArtistLinks]
+}
+
+func (s *linksRecordingSource) Provider() Provider { return s.provider }
+
+func (s *linksRecordingSource) Fetch(_ context.Context, artist ResolvedArtist) (*BiographySourceResult, error) {
+	s.seen.Store(artist.Links)
+	return nil, nil
+}
+
+type countingArtistLinks struct {
+	calls atomic.Int32
+	links *metadata.MBArtistLinks
+	err   error
+}
+
+func (c *countingArtistLinks) LookupArtistLinks(context.Context, string) (*metadata.MBArtistLinks, error) {
+	c.calls.Add(1)
+	return c.links, c.err
+}
+
+func TestIngestionLooksUpMusicBrainzLinksOnceForAllSources(t *testing.T) {
+	store := ingestionTestStore(t)
+	artist := resolvedArtistForIngestion(t, store, "artist-links")
+	deezer := &linksRecordingSource{provider: ProviderDeezer}
+	discogs := &linksRecordingSource{provider: ProviderDiscogs}
+	service, err := NewIngestionService(store, []BiographySource{deezer, discogs}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup := &countingArtistLinks{links: &metadata.MBArtistLinks{ArtistMBID: "mbid-kino", DeezerID: "42"}}
+	service.SetArtistLinks(lookup)
+	if _, err := service.Ingest(context.Background(), artist); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if lookup.calls.Load() != 1 {
+		t.Fatalf("links lookups = %d, want 1", lookup.calls.Load())
+	}
+	for _, source := range []*linksRecordingSource{deezer, discogs} {
+		if got := source.seen.Load(); got == nil || got.DeezerID != "42" {
+			t.Fatalf("%s did not receive links: %#v", source.provider, got)
+		}
+	}
+
+	failing := &countingArtistLinks{err: errors.New("musicbrainz down")}
+	service.SetArtistLinks(failing)
+	if _, err := service.Ingest(context.Background(), artist); err != nil {
+		t.Fatalf("links failure must not fail ingestion: %v", err)
+	}
+	if got := deezer.seen.Load(); got != nil {
+		t.Fatalf("failed lookup must leave links empty, got %#v", got)
 	}
 }

@@ -95,3 +95,55 @@ func TestTrackRepositoryArtistIdentityContextMatchesCollaborativeCreditsSafely(t
 		t.Fatalf("substring matched unexpectedly: %#v", noSubstring)
 	}
 }
+
+func TestTrackRepositoryArtistIdentityContextExcludesGuestAlbums(t *testing.T) {
+	database, err := OpenPoisqDatabase(filepath.Join(t.TempDir(), "poisq.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+	repo := NewTrackRepository(database)
+	for i, track := range []TrackRecord{
+		{ID: "1", FilePath: "/music/1.flac", Artist: "Host", AlbumArtist: "Host", Album: "Host Album", Title: "Solo", Year: 2025},
+		{ID: "2", FilePath: "/music/2.flac", Artist: "Guest", AlbumArtist: "Host", Album: "Host Album", Title: "Exact Guest Credit", Year: 2025},
+		{ID: "3", FilePath: "/music/3.flac", Artist: "Host, Other", AlbumArtist: "Host", Album: "Host Album 2", Title: "Collab", Year: 2025},
+		{ID: "4", FilePath: "/music/4.flac", Artist: "Untagged", AlbumArtist: "", Album: "Untagged Album", Title: "Untagged Song", Year: 2024},
+	} {
+		track.TrackNumber = i + 1
+		if err := repo.UpsertTrack(track); err != nil {
+			t.Fatalf("upsert track %d: %v", i, err)
+		}
+	}
+
+	guest, err := repo.ArtistIdentityContext(context.Background(), "Guest", 10, 10)
+	if err != nil {
+		t.Fatalf("guest context: %v", err)
+	}
+	if len(guest.Albums) != 0 || len(guest.Tracks) != 1 || guest.Tracks[0] != "Exact Guest Credit" {
+		t.Fatalf("guest appearance must keep the track but not the host album: %#v", guest)
+	}
+
+	other, err := repo.ArtistIdentityContext(context.Background(), "Other", 10, 10)
+	if err != nil {
+		t.Fatalf("collaborative guest context: %v", err)
+	}
+	if len(other.Albums) != 0 || len(other.Tracks) != 1 || other.Tracks[0] != "Collab" {
+		t.Fatalf("collaborative guest must keep the track but not the host album: %#v", other)
+	}
+
+	host, err := repo.ArtistIdentityContext(context.Background(), "Host", 10, 10)
+	if err != nil {
+		t.Fatalf("host context: %v", err)
+	}
+	if len(host.Albums) != 2 {
+		t.Fatalf("host albums must remain: %#v", host)
+	}
+
+	untagged, err := repo.ArtistIdentityContext(context.Background(), "Untagged", 10, 10)
+	if err != nil {
+		t.Fatalf("untagged context: %v", err)
+	}
+	if len(untagged.Albums) != 1 || untagged.Albums[0].Title != "Untagged Album" {
+		t.Fatalf("album without album_artist must fall back to track artist: %#v", untagged)
+	}
+}

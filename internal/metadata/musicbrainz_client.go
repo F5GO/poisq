@@ -65,6 +65,12 @@ type MBArtistLinks struct {
 	ArtistMBID   string `json:"artistMbid"`
 	WikidataID   string `json:"wikidataId"`
 	WikipediaURL string `json:"wikipediaUrl"`
+	// Exact catalog artist IDs from MusicBrainz URL relations. They let
+	// biography sources fetch the linked artist without a name search.
+	DeezerID      string `json:"deezerId,omitempty"`
+	AppleMusicID  string `json:"appleMusicId,omitempty"`
+	DiscogsID     string `json:"discogsId,omitempty"`
+	YandexMusicID string `json:"yandexMusicId,omitempty"`
 }
 
 type mbArtistSearchResp struct {
@@ -355,7 +361,7 @@ func (mb *MusicBrainzClient) LookupArtist(ctx context.Context, artistName string
 	return &artist, nil
 }
 
-// LookupArtistLinks returns only exact Wikipedia/Wikidata links attached to a MusicBrainz artist ID.
+// LookupArtistLinks returns only exact Wikipedia/Wikidata and catalog artist links attached to a MusicBrainz artist ID.
 func (mb *MusicBrainzClient) LookupArtistLinks(ctx context.Context, artistMBID string) (*MBArtistLinks, error) {
 	artistMBID = strings.TrimSpace(artistMBID)
 	if !validMusicBrainzID(artistMBID) {
@@ -402,9 +408,72 @@ func (mb *MusicBrainzClient) LookupArtistLinks(ctx context.Context, artistMBID s
 			if strings.HasSuffix(strings.ToLower(linked.Host), ".wikipedia.org") && strings.HasPrefix(linked.Path, "/wiki/") {
 				result.WikipediaURL = linked.String()
 			}
+		default:
+			assignCatalogArtistLink(result, linked)
 		}
 	}
 	return result, nil
+}
+
+// assignCatalogArtistLink extracts a numeric artist ID from an exact catalog
+// artist URL. The first link per catalog wins, matching MusicBrainz order.
+func assignCatalogArtistLink(result *MBArtistLinks, linked *url.URL) {
+	if linked.User != nil || linked.Port() != "" {
+		return
+	}
+	host := strings.ToLower(linked.Hostname())
+	segments := strings.Split(strings.Trim(linked.Path, "/"), "/")
+	switch {
+	case (host == "www.deezer.com" || host == "deezer.com") && result.DeezerID == "":
+		result.DeezerID = numericSegmentAfter(segments, "artist", false)
+	case (host == "music.apple.com" || host == "itunes.apple.com") && result.AppleMusicID == "":
+		// Apple artist URLs end with the ID: /ru/artist/123 or /us/artist/name/123.
+		if len(segments) > 0 && slicesContain(segments, "artist") {
+			result.AppleMusicID = numericID(strings.TrimPrefix(segments[len(segments)-1], "id"))
+		}
+	case (host == "www.discogs.com" || host == "discogs.com") && result.DiscogsID == "":
+		// Discogs accepts /artist/123 and /artist/123-Name.
+		result.DiscogsID = numericSegmentAfter(segments, "artist", true)
+	case strings.HasPrefix(host, "music.yandex.") && result.YandexMusicID == "":
+		result.YandexMusicID = numericSegmentAfter(segments, "artist", false)
+	}
+}
+
+func numericSegmentAfter(segments []string, marker string, allowSlugSuffix bool) string {
+	for index := 0; index+1 < len(segments); index++ {
+		if segments[index] != marker {
+			continue
+		}
+		value := segments[index+1]
+		if allowSlugSuffix {
+			if dash := strings.IndexByte(value, '-'); dash > 0 {
+				value = value[:dash]
+			}
+		}
+		return numericID(value)
+	}
+	return ""
+}
+
+func numericID(value string) string {
+	if value == "" || len(value) > 20 {
+		return ""
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return value
+}
+
+func slicesContain(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func escapeLuceneQuery(s string) string {

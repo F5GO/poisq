@@ -139,6 +139,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("[FATAL] Не удалось инициализировать сбор биографий: %v", err)
 	}
+	bioIngestion.SetArtistLinks(mbClient)
 	var regionalIdentitySource artistbio.IdentityCandidateSource
 	for _, source := range bioSources {
 		if source.Provider() == artistbio.ProviderYandexMusic {
