@@ -236,7 +236,8 @@ func (p *SynthesisPipeline) synthesizeAndStore(ctx context.Context, artist db.Li
 		if verification.Grounded {
 			break
 		}
-		if filtered, ok := ai.FilterGroundedSummary(summary, verification, evidence, artist.Name); ok {
+		if filtered, ok := ai.FilterGroundedSummary(summary, verification, evidence, artist.Name); ok &&
+			(fallbackSummary == nil || utf8.RuneCountInString(filtered.Summary) > utf8.RuneCountInString(fallbackSummary.Summary)) {
 			fallbackSummary = &filtered
 		}
 		if attempt == 1 {
@@ -288,7 +289,7 @@ func buildVerificationRetryFeedback(summary ai.BiographySummary, verification ai
 	if len(rejected) == 0 {
 		return "Previous draft failed factual verification. Rewrite using ONLY literal, explicitly stated facts from the supplied evidence and drop any inferred claims."
 	}
-	return "Previous draft failed factual verification on: " + strings.Join(rejected, "; ") + ". For each rejected sentence, either add ALL missing source_ids from evidence that support every claim in it, or rewrite/drop unsupported parts using ONLY literal facts explicitly stated in the cited evidence, keeping at least 150 characters and citing >= 2 distinct origins."
+	return "Previous draft failed factual verification on: " + strings.Join(rejected, "; ") + ". For each rejected sentence, either add ALL missing source_ids from evidence that support every claim in it, or rewrite/drop unsupported parts using ONLY literal facts explicitly stated in the cited evidence. Replace dropped content with other evidence facts not yet used so the biography does not get shorter, and cite >= 2 distinct origins."
 }
 
 func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity IdentityContext, resolution IdentityResolution, preferRussian, includeReleaseHint bool) ([]ai.SynthesisEvidence, error) {
@@ -338,7 +339,7 @@ func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity Ide
 	inputs := make([]ai.SearchEvidenceInput, 0, len(report.Results))
 	byID := make(map[string]WebSearchResult, len(report.Results))
 	for _, result := range report.Results {
-		inputs = append(inputs, ai.SearchEvidenceInput{ID: result.ID, Title: result.Title, URL: result.URL, Domain: result.Domain, Snippet: result.Snippet})
+		inputs = append(inputs, ai.SearchEvidenceInput{ID: result.ID, Title: result.Title, URL: result.URL, Domain: result.Domain, Snippet: result.Snippet, Origin: evidenceOriginForDomain(result.Domain)})
 		byID[result.ID] = result
 	}
 	cards, err := p.ai.Collect(ctx, identityJSON, inputs)
@@ -352,7 +353,7 @@ func (p *SynthesisPipeline) collectWebEvidence(ctx context.Context, identity Ide
 		if !ok {
 			continue
 		}
-		output = append(output, ai.SynthesisEvidence{ID: "web:" + card.ID, Origin: result.Domain, URL: result.URL, Language: card.Language, Text: card.Fact})
+		output = append(output, ai.SynthesisEvidence{ID: "web:" + card.ID, Origin: evidenceOriginForDomain(result.Domain), URL: result.URL, Language: card.Language, Text: card.Fact})
 	}
 	return output, nil
 }

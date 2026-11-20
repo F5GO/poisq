@@ -242,3 +242,43 @@ func TestMultiWordArtistFiltersHomonymNoise(t *testing.T) {
 		t.Fatalf("expected single-word album Scoop noise to be filtered out for Nic D, got %#v", got)
 	}
 }
+
+func TestEvidenceOriginForDomainCollapsesMirrorsAndCatalogHosts(t *testing.T) {
+	cases := map[string]string{
+		"ru.wikipedia.org":       "wikipedia",
+		"en.m.wikipedia.org":     "wikipedia",
+		"wikipedia.akarpov.ru":   "wikipedia",
+		"www.wikiwand.com":       "wikipedia",
+		"wiki2.org":              "wikipedia",
+		"music.yandex.ru":        "yandex_music",
+		"music.yandex.com":       "yandex_music",
+		"www.deezer.com":         "deezer",
+		"music.apple.com":        "apple_music",
+		"www.last.fm":            "lastfm",
+		"www.discogs.com":        "discogs",
+		"www.weekend.rambler.ru": "weekend.rambler.ru",
+		"m.youtube.com":          "youtube.com",
+		"wikiwandering.example":  "wikiwandering.example",
+		"yandex.ru":              "yandex.ru",
+	}
+	for domain, want := range cases {
+		if got := evidenceOriginForDomain(domain); got != want {
+			t.Errorf("evidenceOriginForDomain(%q) = %q, want %q", domain, got, want)
+		}
+	}
+}
+
+func TestHasEnoughSearchResultsIgnoresWikipediaMirrors(t *testing.T) {
+	snippet := strings.Repeat("Достаточно длинный фрагмент о творчестве исполнителя. ", 10)
+	mirrored := []WebSearchResult{
+		{Domain: "ru.wikipedia.org", Snippet: snippet},
+		{Domain: "wikipedia.akarpov.ru", Snippet: snippet},
+	}
+	if hasEnoughSearchResults(mirrored) {
+		t.Fatal("a Wikipedia article and its mirror must not count as two independent origins")
+	}
+	independent := append(mirrored[:1:1], WebSearchResult{Domain: "weekend.rambler.ru", Snippet: snippet})
+	if !hasEnoughSearchResults(independent) {
+		t.Fatal("two independent origins with enough text must be sufficient")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -414,5 +415,29 @@ func TestSynthesisPipelineRetriesEditAfterVerifierRejection(t *testing.T) {
 	effective, found, err := store.EffectiveBiography(context.Background(), "artist")
 	if err != nil || !found || effective.Source != ProviderAISummary {
 		t.Fatalf("effective=%#v found=%v err=%v", effective, found, err)
+	}
+}
+
+func TestSplitBiographySentencesKeepsPunctuationAndAbbreviations(t *testing.T) {
+	text := "Анна родилась 29 апр. 1995 г. в Тбилиси. В 2018 г. Она подписала контракт с лейблом А. Б. Иванова!\nДискография\nВыпустила альбом с рейтингом 4.5 на сайте example.com? Да."
+	got := splitBiographySentences(text)
+	want := []string{
+		"Анна родилась 29 апр. 1995 г. в Тбилиси.",
+		"В 2018 г. Она подписала контракт с лейблом А. Б. Иванова!",
+		"Дискография",
+		"Выпустила альбом с рейтингом 4.5 на сайте example.com?",
+		"Да.",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("splitBiographySentences:\n got=%q\nwant=%q", got, want)
+	}
+}
+
+func TestCompactBiographyEvidenceKeepsSentenceBoundaries(t *testing.T) {
+	text := "Исполнительница родилась в Тбилиси и выросла в музыкальной семье\nОна выпустила дебютный альбом в 2020 году. Она выпустила дебютный альбом в 2020 году."
+	got := compactBiographyEvidence(text, map[string]struct{}{}, 1000)
+	want := "Исполнительница родилась в Тбилиси и выросла в музыкальной семье. Она выпустила дебютный альбом в 2020 году."
+	if got != want {
+		t.Fatalf("compactBiographyEvidence = %q, want %q", got, want)
 	}
 }

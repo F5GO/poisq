@@ -287,8 +287,8 @@ func hasEnoughSearchResults(results []WebSearchResult) bool {
 	domains := make(map[string]struct{}, len(results))
 	totalRunes := 0
 	for _, r := range results {
-		if r.Domain != "youtube.com" && r.Domain != "www.youtube.com" && r.Domain != "m.youtube.com" && r.Domain != "youtu.be" {
-			domains[r.Domain] = struct{}{}
+		if origin := evidenceOriginForDomain(r.Domain); origin != "youtube.com" && origin != "youtu.be" {
+			domains[origin] = struct{}{}
 		}
 		totalRunes += utf8.RuneCountInString(r.Snippet)
 	}
@@ -585,6 +585,50 @@ func safePublicEvidenceURL(raw string) (string, string, bool) {
 	}
 	parsed.Host = strings.ToLower(parsed.Host)
 	return parsed.String(), host, true
+}
+
+// evidenceOriginForDomain maps a web host to the independent source it
+// represents. Mirrors and mobile hosts of one source collapse into one origin,
+// and hosts of catalog providers map to the provider name, so the
+// two-independent-origins rule cannot be satisfied by copies of one text.
+func evidenceOriginForDomain(domain string) string {
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
+	for _, prefix := range []string{"www.", "m.", "mobile."} {
+		host = strings.TrimPrefix(host, prefix)
+	}
+	hasHost := func(base string) bool { return host == base || strings.HasSuffix(host, "."+base) }
+	switch {
+	case hasHost("wikipedia.org") || isWikipediaMirrorHost(host):
+		return string(ProviderWikipedia)
+	case strings.HasPrefix(host, "music.yandex."):
+		return string(ProviderYandexMusic)
+	case hasHost("deezer.com"):
+		return string(ProviderDeezer)
+	case host == "music.apple.com" || host == "itunes.apple.com":
+		return string(ProviderAppleMusic)
+	case hasHost("last.fm") || strings.HasPrefix(host, "lastfm."):
+		return string(ProviderLastFM)
+	case hasHost("discogs.com"):
+		return string(ProviderDiscogs)
+	case hasHost("theaudiodb.com"):
+		return string(ProviderTheAudioDB)
+	}
+	return host
+}
+
+// isWikipediaMirrorHost recognizes hosts that republish Wikipedia articles,
+// such as wikipedia.<someone>.ru, wikiwand.com, or wiki2.org.
+func isWikipediaMirrorHost(host string) bool {
+	for _, label := range strings.Split(host, ".") {
+		if strings.Contains(label, "wikipedia") {
+			return true
+		}
+		switch label {
+		case "wikiwand", "wiki2", "wikizero", "wikibrief", "wiki5", "ruwiki", "wikiredia", "wikimili", "dbpedia":
+			return true
+		}
+	}
+	return false
 }
 
 func lowQualityEvidenceURL(canonical, domain string) bool {

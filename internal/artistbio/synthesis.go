@@ -170,15 +170,84 @@ func compactBiographyEvidence(text string, globalSeen map[string]struct{}, maxRu
 	return strings.Join(selected, " ")
 }
 
+// splitBiographySentences splits prose into sentences while keeping their
+// terminal punctuation, so compacted evidence stays readable and facts from
+// adjacent sentences are not run together. Decimal numbers, domains, initials,
+// and common abbreviations (г., гг., т. е., feat.) do not end a sentence.
 func splitBiographySentences(text string) []string {
-	return strings.FieldsFunc(text, func(r rune) bool {
-		switch r {
-		case '.', '!', '?', '\n', '\r':
-			return true
-		default:
-			return false
+	runes := []rune(text)
+	sentences := make([]string, 0, 16)
+	start := 0
+	emit := func(end int) {
+		if end > start {
+			if sentence := strings.TrimSpace(string(runes[start:end])); sentence != "" {
+				sentences = append(sentences, sentence)
+			}
 		}
-	})
+		start = end
+	}
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if r == '\n' || r == '\r' {
+			emit(i)
+			start = i + 1
+			continue
+		}
+		if r != '.' && r != '!' && r != '?' && r != '…' {
+			continue
+		}
+		end := i + 1
+		for end < len(runes) && strings.ContainsRune(".!?…»\"')]", runes[end]) {
+			end++
+		}
+		if end < len(runes) && !unicode.IsSpace(runes[end]) {
+			i = end - 1
+			continue
+		}
+		if r == '.' && endsWithAbbreviation(runes[start:i]) {
+			i = end - 1
+			continue
+		}
+		next := end
+		for next < len(runes) && (runes[next] == ' ' || runes[next] == '\t') {
+			next++
+		}
+		if next < len(runes) && unicode.IsLower(runes[next]) {
+			i = end - 1
+			continue
+		}
+		emit(end)
+		i = end - 1
+	}
+	emit(len(runes))
+	return sentences
+}
+
+var biographyAbbreviations = map[string]struct{}{
+	"г": {}, "гг": {}, "т": {}, "е": {}, "д": {}, "п": {}, "др": {}, "пр": {}, "см": {}, "им": {}, "ул": {},
+	"св": {}, "род": {}, "ок": {}, "англ": {}, "рус": {}, "нем": {}, "фр": {}, "ср": {}, "напр": {},
+	"тыс": {}, "млн": {}, "млрд": {}, "обл": {}, "пос": {}, "feat": {}, "ft": {}, "vs": {}, "mr": {},
+	"mrs": {}, "ms": {}, "dr": {}, "st": {}, "jr": {}, "sr": {}, "vol": {}, "no": {}, "approx": {}, "ca": {},
+	"янв": {}, "фев": {}, "февр": {}, "мар": {}, "апр": {}, "авг": {}, "сен": {}, "сент": {}, "окт": {},
+	"ноя": {}, "нояб": {}, "дек": {}, "jan": {}, "feb": {}, "apr": {}, "aug": {}, "sep": {}, "sept": {},
+	"oct": {}, "nov": {}, "dec": {},
+}
+
+func endsWithAbbreviation(segment []rune) bool {
+	end := len(segment)
+	begin := end
+	for begin > 0 && unicode.IsLetter(segment[begin-1]) {
+		begin--
+	}
+	if begin == end {
+		return false
+	}
+	word := strings.ToLower(string(segment[begin:end]))
+	if end-begin == 1 && unicode.IsUpper(segment[begin]) {
+		return true // initial such as «А. С. Пушкин»
+	}
+	_, ok := biographyAbbreviations[word]
+	return ok
 }
 
 func normalizeEvidenceSentence(value string) string {
@@ -187,9 +256,13 @@ func normalizeEvidenceSentence(value string) string {
 	if utf8.RuneCountInString(value) < 20 {
 		return ""
 	}
-	return strings.TrimFunc(value, func(r rune) bool {
-		return unicode.IsSpace(r) || r == '-' || r == '—' || r == ';'
+	value = strings.TrimFunc(value, func(r rune) bool {
+		return unicode.IsSpace(r) || r == '-' || r == '—' || r == ';' || r == ','
 	})
+	if last, _ := utf8.DecodeLastRuneInString(value); !strings.ContainsRune(".!?…", last) {
+		value += "."
+	}
+	return value
 }
 
 func truncateUTF8Bytes(value string, maxBytes int) string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -442,8 +443,8 @@ func TestBiographyVerifierDeduplicatesSharedEvidence(t *testing.T) {
 
 func TestFilterGroundedSummaryRecoversDroppedOpeningSentence(t *testing.T) {
 	s1 := "Talemates — электронный проект, основанный в 2019 году."
-	s2 := "В дискографии коллектива представлен трек и совместный релиз."
-	s3 := "Музыканты выпускали композиции на профильных электронных площадках."
+	s2 := "В дискографии коллектива представлен сольный трек и совместный релиз с другим электронным проектом."
+	s3 := "Музыканты выпускали композиции на профильных электронных площадках и независимых лейблах."
 	summary := BiographySummary{
 		Summary: s1 + " " + s2 + " " + s3,
 		Sentences: []SummarySentence{
@@ -466,5 +467,150 @@ func TestFilterGroundedSummaryRecoversDroppedOpeningSentence(t *testing.T) {
 	filtered, ok := FilterGroundedSummary(summary, verification, evidence, "Talemates")
 	if !ok || len(filtered.Sentences) != 2 || !strings.HasPrefix(filtered.Summary, "Talemates: ") {
 		t.Fatalf("expected opening sentence drop to preserve artist name and second origin, got ok=%v filtered=%#v", ok, filtered)
+	}
+}
+
+func TestRepairNumericCitationsAddsSourceOrDropsInventedNumbers(t *testing.T) {
+	evidence := []SynthesisEvidence{
+		{ID: "web:a", Origin: "wikipedia", Language: "ru", Text: "Певица родилась 29 апреля 1995 года в Тбилиси."},
+		{ID: "web:b", Origin: "weekend.rambler.ru", Language: "ru", Text: "В 2021 году певица выпустила дебютный альбом."},
+	}
+	birth := "Певица родилась 29 апреля 1995 года в Тбилиси."
+	album := "В 2021 году певица выпустила дебютный альбом."
+	invented := "Карьеру она начала в 2020 году."
+	summary := BiographySummary{
+		Summary: birth + " " + album + " " + invented,
+		Sentences: []SummarySentence{
+			{ID: 1, Text: birth, SourceIDs: []string{"web:a"}},
+			{ID: 2, Text: album, SourceIDs: []string{"web:a"}}, // wrong citation: 2021 is only in web:b
+			{ID: 3, Text: invented, SourceIDs: []string{"web:b"}},
+		},
+		UsedSourceIDs: []string{"web:a", "web:b"},
+	}
+	removed := repairNumericCitations(&summary, evidence)
+	if !slices.Equal(removed, []string{"2020"}) {
+		t.Fatalf("removed=%v, want [2020]", removed)
+	}
+	if len(summary.Sentences) != 2 || summary.Summary != birth+" "+album {
+		t.Fatalf("unexpected repaired summary: %#v", summary)
+	}
+	if !slices.Contains(summary.Sentences[1].SourceIDs, "web:b") {
+		t.Fatalf("expected citation repair to add web:b, got %v", summary.Sentences[1].SourceIDs)
+	}
+	if !slices.Equal(summary.UsedSourceIDs, []string{"web:a", "web:b"}) {
+		t.Fatalf("used ids=%v", summary.UsedSourceIDs)
+	}
+}
+
+func TestNumberSetIgnoresSingleDigitsAndLeadingZeros(t *testing.T) {
+	got := numberSet("Альбом (1) вышел 04.09.2020, тираж 007 и 15 треков")
+	for _, want := range []string{"2020", "15"} {
+		if _, ok := got[want]; !ok {
+			t.Fatalf("numberSet missing %q: %v", want, got)
+		}
+	}
+	for _, unwanted := range []string{"1", "4", "9", "7", "04", "007"} {
+		if _, ok := got[unwanted]; ok {
+			t.Fatalf("numberSet unexpectedly contains %q: %v", unwanted, got)
+		}
+	}
+}
+
+func TestBiographyEditorDropsSentenceWithInventedYear(t *testing.T) {
+	s1 := "ANIKV — певица, которая родилась в Тбилиси и выступает в жанрах поп и R&B, исполняя песни на русском языке."
+	s2 := "Она сотрудничает с российским лейблом и регулярно выпускает синглы, которые публикуются на крупных площадках."
+	s3 := "Свою карьеру исполнительница начала в 2020 году."
+	evidence := []SynthesisEvidence{
+		{ID: "web:a", Origin: "wikipedia", Language: "ru", Text: s1},
+		{ID: "web:b", Origin: "weekend.rambler.ru", Language: "ru", Text: s2},
+	}
+	raw, _ := json.Marshal(BiographySummary{
+		Summary: s1 + " " + s2 + " " + s3,
+		Sentences: []SummarySentence{
+			{ID: 1, Text: s1, SourceIDs: []string{"web:a"}},
+			{ID: 2, Text: s2, SourceIDs: []string{"web:b"}},
+			{ID: 3, Text: s3, SourceIDs: []string{"web:b"}},
+		},
+		UsedSourceIDs: []string{"web:a", "web:b"},
+	})
+	gen := &synthesisSequenceGenerator{responses: []string{string(raw)}}
+	res, err := NewBiographySynthesisAI(gen).Edit(context.Background(), evidence)
+	if err != nil || gen.calls != 1 || strings.Contains(res.Summary, "2020") || len(res.Sentences) != 2 {
+		t.Fatalf("expected invented year sentence to be removed, got calls=%d err=%v summary=%q", gen.calls, err, res.Summary)
+	}
+}
+
+func TestBiographyCollectorDropsCardWithNumberAbsentFromResult(t *testing.T) {
+	response := `{"cards":[{"id":"fact-1","result_id":"r1","fact":"Artist started her career in 2020 with an album.","language":"en"},{"id":"fact-2","result_id":"r2","fact":"Artist was born on 29 April 1995 in Tbilisi.","language":"en"}]}`
+	// Dropping fact-1 leaves one origin, so the collector retries once and then
+	// keeps the remaining supported card.
+	gen := &synthesisSequenceGenerator{responses: []string{response, response}}
+	cards, err := NewBiographySynthesisAI(gen).Collect(context.Background(), json.RawMessage(`{"name":"Artist"}`), []SearchEvidenceInput{
+		{ID: "r1", Title: "Artist album", URL: "https://one.example/a", Domain: "one.example", Snippet: "Artist released an album that received attention from critics."},
+		{ID: "r2", Title: "Artist", URL: "https://two.example/a", Domain: "two.example", Snippet: "Artist (born 29 April 1995, Tbilisi) is a singer."},
+	})
+	if err != nil || len(cards) != 1 || cards[0].ID != "fact-2" {
+		t.Fatalf("expected only the card with supported numbers, got cards=%#v err=%v", cards, err)
+	}
+}
+
+func TestBiographyCollectorTreatsMirrorsAsOneOrigin(t *testing.T) {
+	gen := &synthesisSequenceGenerator{responses: []string{
+		`{"cards":[{"id":"fact-1","result_id":"r1","fact":"Artist is a singer from Tbilisi.","language":"en"},{"id":"fact-2","result_id":"r2","fact":"Artist performs pop music.","language":"en"}]}`,
+	}}
+	_, err := NewBiographySynthesisAI(gen).Collect(context.Background(), json.RawMessage(`{"name":"Artist"}`), []SearchEvidenceInput{
+		{ID: "r1", Title: "Artist", URL: "https://ru.wikipedia.org/wiki/A", Domain: "ru.wikipedia.org", Origin: "wikipedia", Snippet: "Artist is a singer from Tbilisi who performs pop music."},
+		{ID: "r2", Title: "Artist", URL: "https://wikipedia.mirror.example/A", Domain: "wikipedia.mirror.example", Origin: "wikipedia", Snippet: "Artist is a singer from Tbilisi who performs pop music."},
+	})
+	if err != nil || gen.calls != 1 || !strings.Contains(gen.inputs[0], `"min_independent_domains":1`) {
+		t.Fatalf("mirrors must count as a single origin: calls=%d err=%v input=%q", gen.calls, err, gen.inputs)
+	}
+}
+
+func TestSummaryMinRunesScalesWithEvidence(t *testing.T) {
+	thin := []SynthesisEvidence{{Text: strings.Repeat("а", 120)}}
+	rich := []SynthesisEvidence{{Text: strings.Repeat("а", 900)}, {Text: strings.Repeat("б", 900)}}
+	middle := []SynthesisEvidence{{Text: strings.Repeat("а", 900)}}
+	if got := SummaryMinRunes(thin); got != minSummaryRunesFloor {
+		t.Fatalf("thin=%d", got)
+	}
+	if got := SummaryMinRunes(middle); got != 300 {
+		t.Fatalf("middle=%d", got)
+	}
+	if got := SummaryMinRunes(rich); got != minSummaryRunesCeiling {
+		t.Fatalf("rich=%d", got)
+	}
+}
+
+func TestFilterGroundedSummaryDropsLowConfidenceSentences(t *testing.T) {
+	s1 := "Певица родилась в Тбилиси и с детства занималась вокалом в музыкальной школе своего родного города."
+	s2 := "Она выпустила несколько синглов и альбом на независимом лейбле, а также выступала на летних фестивалях."
+	s3 := "Её песни звучали в популярном сериале и стали известны широкой аудитории слушателей по всей стране."
+	summary := BiographySummary{
+		Summary: s1 + " " + s2 + " " + s3,
+		Sentences: []SummarySentence{
+			{ID: 1, Text: s1, SourceIDs: []string{"a"}},
+			{ID: 2, Text: s2, SourceIDs: []string{"b"}},
+			{ID: 3, Text: s3, SourceIDs: []string{"b"}},
+		},
+		UsedSourceIDs: []string{"a", "b"},
+	}
+	evidence := []SynthesisEvidence{{ID: "a", Origin: "one", Text: s1}, {ID: "b", Origin: "two", Text: s2 + " " + s3}}
+	filtered, ok := FilterGroundedSummary(summary, SynthesisVerification{
+		Verdicts: []string{"grounded", "grounded", "grounded"},
+		Scores:   []float64{0.97, 0.96, 0.85},
+	}, evidence, "")
+	if !ok || strings.Contains(filtered.Summary, "сериале") {
+		t.Fatalf("expected 0.85-confidence sentence to be dropped, ok=%v summary=%q", ok, filtered.Summary)
+	}
+}
+
+func TestBiographyPromptsContainNoRealArtistExamples(t *testing.T) {
+	for _, name := range []string{"ANIKV", "Biicla", "Izhevski", "Talemates", "Grebz", "Грибы", "4atty", "Nic D", "Sимптом", "МакSим"} {
+		for label, prompt := range map[string]string{"collector": collectorSystemPrompt, "editor": editorSystemPrompt, "verifier": synthesisVerifierSystemPrompt} {
+			if strings.Contains(prompt, name) {
+				t.Errorf("%s prompt contains real artist example %q, which can leak into other biographies", label, name)
+			}
+		}
 	}
 }
