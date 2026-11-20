@@ -128,8 +128,16 @@
 
 .track-header-meta {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 16px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Текстовый столбец шапки сжимается вместо того, чтобы растягивать её. */
+.track-header-meta > div:last-child {
+  min-width: 0;
+  flex: 1;
 }
 
 .track-cover-placeholder {
@@ -156,15 +164,40 @@
 /* Баннер задачи */
 .karaoke-job-banner {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+  max-width: 100%;
   margin-top: 6px;
-  padding: 3px 10px;
-  border-radius: var(--radius-pill);
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
   background: var(--color-accent-bg);
   color: var(--poisq-blue);
   font-size: 12px;
   font-weight: 500;
+  line-height: 1.45;
+}
+
+/* Длинный статус ограничен тремя строками; полный текст — в подсказке. */
+#karaoke-job-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.karaoke-job-banner .spinner-small {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.karaoke-job-banner.is-final .spinner-small { display: none; }
+
+.karaoke-job-banner.is-error {
+  background: var(--color-red-bg);
+  color: var(--color-red);
 }
 
 .spinner-small {

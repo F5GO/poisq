@@ -316,6 +316,8 @@
 }
 
 .biography-state-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 4px 8px;
   border-radius: var(--radius-pill);
   background: var(--bg-surface-secondary);
@@ -328,6 +330,11 @@
   color: var(--poisq-blue);
   border: 1px solid var(--border-focus);
 }
+
+.biography-editor-header { align-items: flex-start; }
+.biography-editor-header > div { min-width: 0; }
+.biography-artist-title { overflow-wrap: anywhere; }
+#biography-job-status { overflow-wrap: anywhere; }
 
 .biography-preview-block { margin: 22px 0; }
 

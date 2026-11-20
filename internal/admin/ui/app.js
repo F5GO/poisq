@@ -1721,11 +1721,15 @@ async function saveRawLrc() {
 
 let karaokeJobPollTimer = null;
 
-function showKaraokeJobBanner(text) {
+// kind: "progress" (spinner), "done" (final, no spinner) or "error" (final, red).
+function showKaraokeJobBanner(text, kind = "progress") {
   const banner = document.getElementById("karaoke-job-banner");
   const txt = document.getElementById("karaoke-job-text");
   if (banner && txt) {
     txt.textContent = text;
+    txt.title = text; // full text when the banner clamps a long status
+    banner.classList.toggle("is-final", kind !== "progress");
+    banner.classList.toggle("is-error", kind === "error");
     banner.classList.remove("hidden");
   }
 }
@@ -1742,10 +1746,10 @@ function startPollingKaraokeJob(trackId, initialText) {
   }
 
   showKaraokeJobBanner(initialText);
-  const stop = (text, hideAfterMs) => {
+  const stop = (text, hideAfterMs, kind = "done") => {
     clearInterval(karaokeJobPollTimer);
     karaokeJobPollTimer = null;
-    if (text) showKaraokeJobBanner(text);
+    if (text) showKaraokeJobBanner(text, kind);
     setTimeout(hideKaraokeJobBanner, hideAfterMs);
   };
 
@@ -1770,7 +1774,7 @@ function startPollingKaraokeJob(trackId, initialText) {
         stop("Текст успешно обновлен (источник: poisq)", 2500);
         await refreshCurrentKaraokeTrack(trackId);
       } else if (job.status === "failed") {
-        stop(job.errorLog ? `Не получилось: ${job.errorLog}` : "Текст не найден или ошибка провайдера", 5000);
+        stop(job.errorLog ? `Не получилось: ${job.errorLog}` : "Текст не найден или ошибка провайдера", 5000, "error");
       }
     } catch (err) {
       console.warn("Ошибка опроса статуса задачи:", err);
