@@ -41,14 +41,17 @@ func TestExtractFLACAudioMD5(t *testing.T) {
 
 func TestBuildFFmpegMetadataArgsPicardStandard(t *testing.T) {
 	tags := CanonicalTagSet{
-		Artist:      "МакSим",
-		Album:       "Трудный возраст",
-		AlbumArtist: "МакSим",
-		Title:       "Знаешь ли ты",
-		Year:        2006,
-		TrackNumber: 2,
-		ReleaseMBID: "1234-release-mbid",
-		ArtistMBID:  "5678-artist-mbid",
+		Artist:           "МакSим",
+		Album:            "Трудный возраст",
+		AlbumArtist:      "МакSим",
+		Title:            "Знаешь ли ты",
+		Year:             2006,
+		TrackNumber:      2,
+		ReleaseMBID:      "1234-release-mbid",
+		ReleaseGroupMBID: "release-group-id",
+		ArtistMBID:       "5678-artist-mbid",
+		RecordingMBID:    "recording-id",
+		ReleaseTrackMBID: "release-track-id",
 	}
 
 	args := BuildFFmpegMetadataArgs("/music/MakSim/02.flac", tags)
@@ -60,9 +63,25 @@ func TestBuildFFmpegMetadataArgsPicardStandard(t *testing.T) {
 		"ORIGINALDATE=2006",
 		"MUSICBRAINZ_ALBUMID=1234-release-mbid",
 		"MUSICBRAINZ_ARTISTID=5678-artist-mbid",
+		"MUSICBRAINZ_TRACKID=recording-id",
+		"MUSICBRAINZ_RELEASEGROUPID=release-group-id",
+		"MUSICBRAINZ_RELEASETRACKID=release-track-id",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("missing expected Picard metadata flag %q in %q", expected, joined)
+		}
+	}
+	if strings.Contains(joined, "MusicBrainz Release Track Id=recording-id") {
+		t.Fatalf("recording ID was aliased as release track ID: %q", joined)
+	}
+}
+
+func TestBuildFFmpegMetadataArgsPreservesPartialDates(t *testing.T) {
+	tags := CanonicalTagSet{ReleaseDate: "2024-05-17", OriginalDate: "1999-08", Title: "Dates"}
+	joined := strings.Join(BuildFFmpegMetadataArgs("/music/dates.flac", tags), " ")
+	for _, expected := range []string{"date=2024-05-17", "ORIGINALDATE=1999-08"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("missing exact date %q in %q", expected, joined)
 		}
 	}
 }

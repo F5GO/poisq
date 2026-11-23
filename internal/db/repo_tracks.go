@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/F5GO/poisq/internal/musicmeta"
 )
 
 // TrackRecord представляет состояние одного трека медиатеки в poisq.db.
@@ -269,12 +271,12 @@ func (r *TrackRepository) UpsertTrack(t TrackRecord) error {
 		ON CONFLICT(id) DO UPDATE SET
 			file_path = excluded.file_path,
 			folder_path = excluded.folder_path,
-			artist = excluded.artist,
-			album = excluded.album,
-			album_artist = excluded.album_artist,
-			title = excluded.title,
-			track_number = excluded.track_number,
-			year = excluded.year,
+			artist = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='credits' AND (source='audio_file' OR locked=1)) THEN tracks.artist ELSE excluded.artist END,
+			album = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='album' AND (source='audio_file' OR locked=1)) THEN tracks.album ELSE excluded.album END,
+			album_artist = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='credits' AND (source='audio_file' OR locked=1)) THEN tracks.album_artist ELSE excluded.album_artist END,
+			title = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='title' AND (source='audio_file' OR locked=1)) THEN tracks.title ELSE excluded.title END,
+			track_number = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='track_number' AND (source='audio_file' OR locked=1)) THEN tracks.track_number ELSE excluded.track_number END,
+			year = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='release_date' AND (source='audio_file' OR locked=1)) THEN tracks.year ELSE excluded.year END,
 			duration = excluded.duration,
 			has_cover = CASE WHEN excluded.has_cover = 1 THEN 1 ELSE tracks.has_cover END,
 			cover_width = CASE WHEN excluded.cover_width > 0 THEN excluded.cover_width ELSE tracks.cover_width END,
@@ -286,7 +288,10 @@ func (r *TrackRepository) UpsertTrack(t TrackRecord) error {
 		t.TrackNumber, t.Year, t.Duration, t.LangCode, hasCoverInt, t.CoverWidth, t.CoverHeight,
 		mojibakeInt, t.LyricsStatus, t.ActiveSource, t.ActiveLyrics, lrcSyncedInt, now,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return r.syncNormalizedLegacy(t, true)
 }
 
 // UpsertTracksBatch пакетно сохраняет срез записей треков внутри единой транзакции SQLite,
@@ -311,12 +316,12 @@ func (r *TrackRepository) UpsertTracksBatch(tracks []TrackRecord) error {
 		ON CONFLICT(id) DO UPDATE SET
 			file_path = excluded.file_path,
 			folder_path = excluded.folder_path,
-			artist = excluded.artist,
-			album = excluded.album,
-			album_artist = excluded.album_artist,
-			title = excluded.title,
-			track_number = excluded.track_number,
-			year = excluded.year,
+			artist = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='credits' AND (source='audio_file' OR locked=1)) THEN tracks.artist ELSE excluded.artist END,
+			album = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='album' AND (source='audio_file' OR locked=1)) THEN tracks.album ELSE excluded.album END,
+			album_artist = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='credits' AND (source='audio_file' OR locked=1)) THEN tracks.album_artist ELSE excluded.album_artist END,
+			title = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='title' AND (source='audio_file' OR locked=1)) THEN tracks.title ELSE excluded.title END,
+			track_number = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='track_number' AND (source='audio_file' OR locked=1)) THEN tracks.track_number ELSE excluded.track_number END,
+			year = CASE WHEN EXISTS (SELECT 1 FROM metadata_field_state WHERE scope='track' AND scope_id=tracks.id AND field='release_date' AND (source='audio_file' OR locked=1)) THEN tracks.year ELSE excluded.year END,
 			duration = excluded.duration,
 			has_cover = CASE WHEN excluded.has_cover = 1 THEN 1 ELSE tracks.has_cover END,
 			cover_width = CASE WHEN excluded.cover_width > 0 THEN excluded.cover_width ELSE tracks.cover_width END,
@@ -358,7 +363,15 @@ func (r *TrackRepository) UpsertTracksBatch(tracks []TrackRecord) error {
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	for _, track := range tracks {
+		if err := r.syncNormalizedLegacy(track, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // UpdateLyrics обновляет статус, источник и содержимое текста для трека.
@@ -378,6 +391,51 @@ func (r *TrackRepository) UpdateLyrics(trackID, status, source, content, langCod
 	return err
 }
 
+// syncNormalizedLegacy updates only the legacy-compatible projection of an
+// already materialized normalized document. Rich fields remain untouched.
+func (r *TrackRepository) syncNormalizedLegacy(track TrackRecord, preserveAuthoritative bool) error {
+	var exists int
+	err := r.db.QueryRow(`SELECT 1 FROM track_metadata WHERE track_id=?`, track.ID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	repo := NewMetadataRepository(r.db)
+	doc, err := repo.GetTrackDocument(context.Background(), track.ID)
+	if err != nil {
+		return err
+	}
+	current := doc.Clone()
+	doc = musicmeta.ApplyLegacy(doc, musicmeta.LegacyTrack{
+		TrackID: track.ID, Artist: track.Artist, Album: track.Album, AlbumArtist: track.AlbumArtist,
+		Title: track.Title, Year: track.Year, TrackNumber: track.TrackNumber,
+	})
+	if preserveAuthoritative {
+		preserve := func(field musicmeta.Field) bool {
+			state, ok := current.FieldStates[field]
+			return ok && (state.Locked || state.Source == musicmeta.SourceAudioFile)
+		}
+		if preserve(musicmeta.FieldTitle) {
+			doc.Title = current.Title
+		}
+		if preserve(musicmeta.FieldAlbum) {
+			doc.Album = current.Album
+		}
+		if preserve(musicmeta.FieldTrackNumber) {
+			doc.TrackNumber = current.TrackNumber
+		}
+		if preserve(musicmeta.FieldReleaseDate) {
+			doc.ReleaseDate = current.ReleaseDate
+		}
+		if preserve(musicmeta.FieldCredits) {
+			doc.Credits = current.Credits
+		}
+	}
+	return repo.PutTrackDocument(context.Background(), doc)
+}
+
 // ClearLyrics полностью удаляет сохраненный или сгенерированный текст у трека и сбрасывает статус в 'none'.
 func (r *TrackRepository) ClearLyrics(trackID string) error {
 	now := time.Now().Unix()
@@ -392,6 +450,14 @@ func (r *TrackRepository) ClearLyrics(trackID string) error {
 
 // UpdateMetadata обновляет теги трека в poisq.db после применения Staging-предложения или отката.
 func (r *TrackRepository) UpdateMetadata(trackID, artist, album, albumArtist, title string, year int, isMojibake bool) error {
+	track, err := r.GetByID(trackID)
+	if err != nil {
+		return err
+	}
+	return r.UpdateMetadataFull(trackID, artist, album, albumArtist, title, year, track.TrackNumber, isMojibake)
+}
+
+func (r *TrackRepository) UpdateMetadataFull(trackID, artist, album, albumArtist, title string, year, trackNumber int, isMojibake bool) error {
 	now := time.Now().Unix()
 	mojibakeInt := 0
 	if isMojibake {
@@ -399,10 +465,17 @@ func (r *TrackRepository) UpdateMetadata(trackID, artist, album, albumArtist, ti
 	}
 	_, err := r.db.Exec(`
 		UPDATE tracks
-		SET artist = ?, album = ?, album_artist = ?, title = ?, year = ?, is_mojibake = ?, updated_at = ?
+		SET artist = ?, album = ?, album_artist = ?, title = ?, year = ?, track_number = ?, is_mojibake = ?, updated_at = ?
 		WHERE id = ?
-	`, artist, album, albumArtist, title, year, mojibakeInt, now, trackID)
-	return err
+	`, artist, album, albumArtist, title, year, trackNumber, mojibakeInt, now, trackID)
+	if err != nil {
+		return err
+	}
+	track, err := r.GetByID(trackID)
+	if err != nil {
+		return err
+	}
+	return r.syncNormalizedLegacy(*track, false)
 }
 
 // UpdateCoverInfo обновляет сведения об обложке трека или папки.
@@ -503,6 +576,34 @@ func (r *TrackRepository) ListTracks(statusFilter string, searchQuery string, li
 			return nil, err
 		}
 		list = append(list, *t)
+	}
+	return list, rows.Err()
+}
+
+// ListTracksAfterID returns a stable keyset page for complete background audits.
+func (r *TrackRepository) ListTracksAfterID(afterID string, limit int) ([]TrackRecord, error) {
+	if limit < 1 {
+		limit = 500
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	rows, err := r.db.Query(`
+		SELECT id, file_path, folder_path, artist, album, album_artist, title,
+		       track_number, year, duration, lang_code, has_cover, cover_width, cover_height,
+		       is_mojibake, lyrics_status, active_source, active_lyrics, lrc_file_synced, updated_at
+		FROM tracks WHERE id > ? ORDER BY id ASC LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := make([]TrackRecord, 0, limit)
+	for rows.Next() {
+		track, err := scanTrackRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *track)
 	}
 	return list, rows.Err()
 }

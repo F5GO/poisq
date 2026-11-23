@@ -223,3 +223,8 @@
 .ai-sparkle {
   color: var(--poisq-violet);
 }
+.staging-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 20px;
+}

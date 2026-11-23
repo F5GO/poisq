@@ -8,7 +8,9 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/F5GO/poisq/internal/db"
@@ -27,7 +29,27 @@ func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) 
 		statusFilter = "pending"
 	}
 
-	items, err := s.stagingRepo.List(statusFilter, 300)
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 1 && parsed <= 300 {
+			limit = parsed
+		}
+	}
+	var beforeCreatedAt, beforeID int64
+	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
+		parts := strings.Split(cursor, ":")
+		if len(parts) != 2 {
+			writeJSONError(w, http.StatusBadRequest, "invalid staging cursor")
+			return
+		}
+		beforeCreatedAt, _ = strconv.ParseInt(parts[0], 10, 64)
+		beforeID, _ = strconv.ParseInt(parts[1], 10, 64)
+		if beforeCreatedAt <= 0 || beforeID <= 0 {
+			writeJSONError(w, http.StatusBadRequest, "invalid staging cursor")
+			return
+		}
+	}
+	items, err := s.stagingRepo.ListPage(statusFilter, beforeCreatedAt, beforeID, limit)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -125,9 +147,12 @@ func (s *AdminServer) handleStagingList(w http.ResponseWriter, r *http.Request) 
 		cleanItems = append(cleanItems, item)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"items": cleanItems,
-	})
+	nextCursor := ""
+	if len(items) == limit {
+		last := items[len(items)-1]
+		nextCursor = fmt.Sprintf("%d:%d", last.CreatedAt, last.ID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": cleanItems, "nextCursor": nextCursor})
 }
 
 func (s *AdminServer) handleStagingApply(w http.ResponseWriter, r *http.Request) {

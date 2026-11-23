@@ -1,0 +1,528 @@
+/*
+ * poisq Docs — Компонентные стили дизайн-системы «Мастеринг»
+ *
+ * Что делает этот код и для чего он нужен:
+ * Приводит верстку VitePress (навбар, сайдбар, таблицы, карточки, кнопки,
+ * блоки кода и callouts) в точное соответствие с poisq Studio:
+ * плоские поверхности с границей 1 px, радиусы 4–8 px, без теней, стекла и градиентов.
+ */
+
+body {
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--signal-soft);
+  color: var(--text-primary);
+}
+
+/* Тонкий скроллбар как в Studio */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-sm);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+/* ---------- Навигационная панель ---------- */
+.VPNavBar {
+  background-color: var(--navbar-bg) !important;
+  border-bottom: 1px solid var(--navbar-border) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.VPNavBar .content-body {
+  background-color: var(--navbar-bg) !important;
+}
+
+.VPNavBar .divider {
+  display: none;
+}
+
+/* Бренд poisq docs (4 столбика эквалайзера + poisq docs) */
+.poisq-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.poisq-brand-mark {
+  width: 22px;
+  height: 22px;
+  display: block;
+  fill: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.poisq-brand-mark .mark-live {
+  fill: var(--signal);
+}
+
+.poisq-brand-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.poisq-brand-name {
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.poisq-brand-sub {
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* Вкладки навбара с нижней акцентной линией 2px */
+.VPNavBarMenuLink {
+  position: relative;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  color: var(--text-secondary) !important;
+  height: var(--vp-nav-height);
+  display: inline-flex !important;
+  align-items: center;
+}
+
+.VPNavBarMenuLink:hover {
+  color: var(--text-primary) !important;
+}
+
+.VPNavBarMenuLink.active {
+  color: var(--text-primary) !important;
+}
+
+.VPNavBarMenuLink.active::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  background: var(--signal);
+}
+
+/* Индикатор версии в правом кластере навбара */
+.poisq-nav-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: 12px;
+  padding: 0 10px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-secondary);
+  font-family: var(--vp-font-family-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.poisq-nav-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--signal);
+}
+
+@media (max-width: 960px) {
+  .poisq-nav-badge {
+    display: none;
+  }
+}
+
+/* ---------- Кнопка поиска ---------- */
+.DocSearch-Button {
+  background: var(--bg-surface-elevated) !important;
+  border: 1px solid var(--border-medium) !important;
+  border-radius: var(--radius-md) !important;
+  height: 34px !important;
+  box-shadow: none !important;
+}
+
+.DocSearch-Button:hover {
+  border-color: var(--signal) !important;
+}
+
+.DocSearch-Button .DocSearch-Button-Key {
+  font-family: var(--vp-font-family-mono);
+  border-radius: var(--radius-xs) !important;
+  border: 1px solid var(--border-subtle) !important;
+  background: var(--bg-surface-secondary) !important;
+}
+
+/* ---------- Сайдбар ---------- */
+.VPSidebar {
+  background-color: var(--bg-surface-secondary) !important;
+  border-right: 1px solid var(--border-subtle) !important;
+}
+
+.VPSidebarItem.level-0 > .item > .text {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: var(--text-muted) !important;
+  letter-spacing: 0.01em;
+}
+
+.VPSidebarItem.level-1 > .item {
+  border-radius: var(--radius-md);
+  padding: 2px 8px;
+  margin: 1px 0;
+  border: 1px solid transparent;
+  position: relative;
+}
+
+.VPSidebarItem.level-1 > .item:hover {
+  background: var(--bg-hover);
+}
+
+.VPSidebarItem.level-1.is-active > .item {
+  background: var(--bg-surface-elevated);
+  border-color: var(--border-subtle);
+}
+
+.VPSidebarItem.level-1.is-active > .item::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 5px;
+  bottom: 5px;
+  width: 3px;
+  background: var(--signal);
+}
+
+.VPSidebarItem.level-1.is-active > .item > .link > .text {
+  color: var(--text-primary) !important;
+  font-weight: 500 !important;
+}
+
+/* ---------- Основная страница документа ---------- */
+.VPContent.has-sidebar {
+  background-color: var(--bg-surface);
+}
+
+.vp-doc h1 {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+  color: var(--text-primary);
+}
+
+.vp-doc h2 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 24px;
+  margin-top: 40px;
+}
+
+.vp-doc h3 {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.vp-doc a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+/* ---------- Таблицы в стиле .data-table Studio ---------- */
+.vp-doc table {
+  display: table;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg-surface-elevated);
+  font-size: 13.5px;
+  margin: 20px 0;
+}
+
+.vp-doc thead th {
+  background: var(--bg-surface-secondary);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  padding: 10px 14px;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.vp-doc tbody tr {
+  background: transparent !important;
+  transition: background-color 0.12s ease;
+}
+
+.vp-doc tbody tr:hover {
+  background-color: var(--bg-hover) !important;
+}
+
+.vp-doc tbody td {
+  padding: 9px 14px;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  vertical-align: top;
+}
+
+.vp-doc tbody td code {
+  overflow-wrap: anywhere;
+}
+
+.vp-doc tbody tr:last-child td {
+  border-bottom: none;
+}
+
+@media (max-width: 768px) {
+  .vp-doc table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+/* ---------- Инлайн-код и блоки кода (стиль .job-console) ---------- */
+.vp-doc :not(pre) > code {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.86em;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-secondary);
+  color: var(--text-primary);
+}
+
+.vp-doc div[class*='language-'] {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md) !important;
+  background-color: var(--vp-code-block-bg) !important;
+  box-shadow: none !important;
+}
+
+.vp-doc div[class*='language-'] span.lang {
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px;
+  color: #8C8C8C;
+}
+
+.vp-doc div[class*='language-'] pre code {
+  color: #E5E5E5;
+}
+
+/* ---------- Callouts (строгие, плоские, цвет только у danger) ---------- */
+.vp-doc .custom-block {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--signal);
+  padding: 14px 16px;
+  box-shadow: none;
+}
+
+.vp-doc .custom-block.warning {
+  border-left-color: var(--text-secondary);
+}
+
+.vp-doc .custom-block.danger {
+  border-color: var(--color-red-border);
+  border-left: 3px solid var(--color-red);
+  background: var(--color-red-bg);
+}
+
+.vp-doc .custom-block.danger .custom-block-title {
+  color: var(--color-red);
+}
+
+.vp-doc .custom-block .custom-block-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* ---------- Главная страница (Home Layout) ---------- */
+.VPHome {
+  background-color: var(--bg-page);
+  padding-bottom: 64px;
+}
+
+.VPHero {
+  padding-top: 56px !important;
+  padding-bottom: 36px !important;
+}
+
+.VPHero .name {
+  font-size: 40px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.03em !important;
+  line-height: 1.15 !important;
+}
+
+.VPHero .text {
+  font-size: 28px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.02em !important;
+  color: var(--text-primary) !important;
+  line-height: 1.25 !important;
+  margin-top: 8px;
+}
+
+.VPHero .tagline {
+  font-size: 15px !important;
+  color: var(--text-secondary) !important;
+  line-height: 1.55 !important;
+  max-width: 620px !important;
+}
+
+.VPButton {
+  border-radius: var(--radius-md) !important;
+  font-weight: 500 !important;
+  font-size: 13.5px !important;
+  box-shadow: none !important;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease !important;
+}
+
+.VPFeatures .VPFeature {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: none !important;
+  transition: border-color 0.12s ease, background-color 0.12s ease !important;
+}
+
+.VPFeatures .VPFeature:hover {
+  border-color: var(--border-medium) !important;
+  background: var(--bg-surface-elevated) !important;
+}
+
+.VPFeatures .VPFeature .title {
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.015em;
+  color: var(--text-primary) !important;
+}
+
+.VPFeatures .VPFeature .details {
+  font-size: 13.5px !important;
+  line-height: 1.55 !important;
+  color: var(--text-secondary) !important;
+}
+
+/* ---------- Навигация пред/след и оглавление ---------- */
+.VPDocFooter .pager-link {
+  border-radius: var(--radius-lg) !important;
+  border: 1px solid var(--border-subtle) !important;
+  background: var(--bg-surface-elevated) !important;
+}
+
+.VPDocFooter .pager-link:hover {
+  border-color: var(--signal) !important;
+}
+
+.VPDocAsideOutline .outline-marker {
+  width: 2px !important;
+  background-color: var(--signal) !important;
+}
+
+/* Бейджи в текстах (прямоугольные ярлыки как в Studio) */
+.VPBadge {
+  border-radius: var(--radius-sm) !important;
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  border: 1px solid var(--border-subtle) !important;
+  background: var(--bg-surface-secondary) !important;
+  color: var(--text-secondary) !important;
+}
+
+/* Сводная карточка портов на главной */
+.poisq-ports-strip {
+  max-width: 1152px;
+  margin: 12px auto 0;
+  padding: 0 24px;
+}
+
+.poisq-ports-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 12px;
+}
+
+.poisq-port-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.poisq-port-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.poisq-port-num {
+  font-family: var(--vp-font-family-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.poisq-port-tag {
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  background: var(--bg-surface-secondary);
+}
+
+.poisq-port-desc {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+@media (max-width: 768px) {
+  .poisq-ports-grid {
+    grid-template-columns: 1fr;
+  }
+}

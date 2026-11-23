@@ -224,3 +224,57 @@ func TestAssignCatalogArtistLinkAcceptsOnlyExactArtistURLs(t *testing.T) {
 		}
 	}
 }
+
+func TestMusicBrainzLookupReleaseDetailsPreservesRecordingAndReleaseTrackIDs(t *testing.T) {
+	const releaseID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const groupID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	const releaseTrackID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	const recordingID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/release/"+releaseID || r.URL.Query().Get("inc") != "recordings release-groups" {
+			t.Errorf("unexpected details request: %s", r.URL.String())
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"` + releaseID + `","release-group":{"id":"` + groupID + `"},
+			"media":[{"position":1,"tracks":[{
+				"id":"` + releaseTrackID + `","position":2,"number":"2","title":"Song","length":182000,
+				"recording":{"id":"` + recordingID + `","title":"Song"}
+			}]}]
+		}`))
+	}))
+	defer server.Close()
+	client := NewMusicBrainzClient()
+	client.baseURL = server.URL
+	details, err := client.LookupReleaseDetails(context.Background(), releaseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details.ReleaseGroupMBID != groupID || len(details.Tracks) != 1 || details.Tracks[0].ReleaseTrackMBID != releaseTrackID || details.Tracks[0].RecordingMBID != recordingID {
+		t.Fatalf("unexpected details: %#v", details)
+	}
+}
+
+func TestMatchMusicBrainzTrackUsesStrongEvidenceAndRejectsTies(t *testing.T) {
+	details := &MBReleaseDetails{Tracks: []MBReleaseTrack{
+		{ReleaseTrackMBID: "a", RecordingMBID: "ra", Title: "Группа крови", DiscNumber: 1, TrackNumber: 1, DurationMillis: 286000},
+		{ReleaseTrackMBID: "b", RecordingMBID: "rb", Title: "Закрой за мной дверь", DiscNumber: 1, TrackNumber: 2, DurationMillis: 240000},
+	}}
+	match, ok := MatchMusicBrainzTrack("Группа крови!", 1, 1, 0, details)
+	if !ok || match.Track.RecordingMBID != "ra" {
+		t.Fatalf("position/title match failed: %#v %v", match, ok)
+	}
+	match, ok = MatchMusicBrainzTrack("Закрой за мной дверь", 0, 0, 242, details)
+	if !ok || match.Track.RecordingMBID != "rb" {
+		t.Fatalf("title/duration match failed: %#v %v", match, ok)
+	}
+	if _, ok := MatchMusicBrainzTrack("Группа крови", 0, 0, 0, details); ok {
+		t.Fatal("weak title-only evidence accepted")
+	}
+	ambiguous := &MBReleaseDetails{Tracks: []MBReleaseTrack{
+		{Title: "Song", TrackNumber: 1, DiscNumber: 1, DurationMillis: 100000},
+		{Title: "Song", TrackNumber: 2, DiscNumber: 1, DurationMillis: 100000},
+	}}
+	if _, ok := MatchMusicBrainzTrack("Song", 0, 0, 100, ambiguous); ok {
+		t.Fatal("ambiguous match accepted")
+	}
+}

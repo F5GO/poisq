@@ -16,6 +16,8 @@
 }
 
 .nav-container {
+  width: 100%;
+  min-width: 0;
   max-width: 1240px;
   margin: 0 auto;
   padding: 0 24px;
@@ -80,6 +82,7 @@
   gap: 4px;
   overflow-x: auto;
   scrollbar-width: none;
+  min-width: 0;
 }
 
 .nav-links::-webkit-scrollbar { display: none; }
@@ -192,12 +195,19 @@
     flex-wrap: wrap;
     padding: 8px 16px 0;
     gap: 0 16px;
+    max-width: 100vw;
+    overflow: hidden;
   }
   .nav-brand { height: 36px; }
   .nav-right-cluster { height: 36px; margin-left: auto; }
   .nav-links { order: 3; width: 100%; }
   .nav-tab { height: 40px; }
   .nav-status { display: none; }
+}
+
+@media (max-width: 420px) {
+  .brand-sub { display: none; }
+  .nav-tab { padding: 0 10px; }
 }
 
 /* Вкладки и бренд — ссылки с адресами страниц: убираем подчёркивание и цвет ссылки */

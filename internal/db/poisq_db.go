@@ -6,6 +6,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -40,6 +41,10 @@ func OpenPoisqDatabase(dbPath string) (*sql.DB, error) {
 	if err := initPoisqSchema(sqliteDB); err != nil {
 		_ = sqliteDB.Close()
 		return nil, fmt.Errorf("ошибка миграции схемы poisq.db: %w", err)
+	}
+	if err := applyMetadataMigrations(context.Background(), sqliteDB); err != nil {
+		_ = sqliteDB.Close()
+		return nil, fmt.Errorf("ошибка версионированной миграции poisq.db: %w", err)
 	}
 
 	return sqliteDB, nil
@@ -250,6 +255,12 @@ func ResetDatabase(db *sql.DB, keepAPIKeys bool) error {
 	defer tx.Rollback()
 
 	tables := []string{
+		"metadata_history_revert_links", "metadata_field_history",
+		"writeback_transactions",
+		"similar_artists", "media_artwork",
+		"album_audio_analysis", "track_audio_analysis",
+		"track_media_info",
+		"track_credit_external_ids", "track_credits", "track_genres", "track_custom_tags", "metadata_external_ids", "metadata_field_state", "track_metadata",
 		"artist_bio_jobs", "artist_bio_web_cache", "artist_biographies", "artist_bio_candidates", "artist_bio_identity",
 		"staging_changes", "tracks", "lyrics_jobs", "provider_cache", "lrc_confidence", "lrc_corrections", "ai_alias_cache",
 	}

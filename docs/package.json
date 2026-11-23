@@ -1,0 +1,15 @@
+{
+  "name": "poisq-docs",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Документация сервиса poisq на движке VitePress",
+  "scripts": {
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.3"
+  }
+}

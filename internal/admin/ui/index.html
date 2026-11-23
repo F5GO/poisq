@@ -49,6 +49,7 @@
 
       <nav class="nav-links">
         <a class="nav-tab active" data-tab="library" href="/library">Медиатека</a>
+        <a class="nav-tab" data-tab="metadata" href="/metadata">Метаданные</a>
         <a class="nav-tab" data-tab="karaoke" href="/lyrics">
           <span>Тексты</span>
           <span class="badge-count jobs-count" title="Задач в очереди">0</span>
@@ -134,6 +135,52 @@
               <tr><td colspan="6" class="cell-empty">Загрузка каталога...</td></tr>
             </tbody>
           </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================== -->
+    <!-- /metadata: Нормализованные музыкальные метаданные -->
+    <!-- ============================================================== -->
+    <section id="panel-metadata" class="tab-panel">
+      <div class="panel-header metadata-page-head">
+        <div>
+          <h1 class="panel-title">Метаданные музыки</h1>
+          <p class="panel-desc">Источники каждого поля, блокировки, технические параметры и безопасные изменения через очередь исправлений.</p>
+        </div>
+        <div class="header-actions">
+          <span id="metadata-audit-status" class="badge badge-muted" role="status">Аудит не запущен</span>
+          <button type="button" class="btn btn-secondary" id="btn-metadata-audit">Проверить медиатеку</button>
+        </div>
+      </div>
+
+      <div class="metadata-layout">
+        <aside class="metadata-picker" aria-label="Треки">
+          <div class="metadata-picker-head">
+            <input type="search" id="metadata-search-input" class="search-field search-compact" placeholder="Найти трек" autocomplete="off" />
+            <div class="metadata-bulk-toolbar">
+              <span id="metadata-selection-count" class="metadata-selection-count">Выбрано: 0</span>
+              <button type="button" class="btn btn-secondary btn-compact" id="btn-metadata-select-visible">Выбрать видимые</button>
+              <button type="button" class="btn btn-secondary btn-compact" id="btn-metadata-clear-selection">Сбросить</button>
+            </div>
+          </div>
+          <div id="metadata-track-list" class="metadata-track-list" aria-live="polite">
+            <p class="metadata-empty">Загрузка треков...</p>
+          </div>
+        </aside>
+
+        <div class="metadata-workspace">
+          <div id="metadata-recovery-status" class="metadata-recovery" role="status">Проверка состояния записи...</div>
+          <div id="metadata-detail-empty" class="metadata-empty metadata-empty-main">Выберите трек слева, чтобы увидеть поля, их источники и инструменты альбома.</div>
+          <div id="metadata-detail" class="hidden"></div>
+          <details class="metadata-policy" id="metadata-policy-panel">
+            <summary>Порядок источников метаданных</summary>
+            <p class="panel-desc">Приоритет и режим обновления применяются отдельно к каждому полю. Заблокированные поля не заменяются.</p>
+            <div id="metadata-policy-rules" class="metadata-policy-rules"></div>
+            <div class="metadata-policy-actions">
+              <button type="button" class="btn btn-primary" id="btn-save-metadata-policy">Сохранить порядок</button>
+            </div>
+          </details>
         </div>
       </div>
     </section>

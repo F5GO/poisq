@@ -95,6 +95,11 @@ func main() {
 	stagingRepo := db.NewStagingRepository(poisqDB)
 	jobRepo := db.NewJobRepository(poisqDB)
 	cacheRepo := db.NewProviderCacheRepository(poisqDB)
+	metadataRepo := db.NewMetadataRepository(poisqDB)
+	mediaInfoRepo := db.NewMediaInfoRepository(poisqDB)
+	metadataPolicyRepo := db.NewMetadataPolicyRepository(poisqDB)
+	audioAnalysisRepo := db.NewAudioAnalysisRepository(poisqDB)
+	mediaEnrichmentRepo := db.NewMediaEnrichmentRepository(poisqDB)
 
 	// Автоматическая дедупликация базы фонотеки при запуске
 	if del, err := trackRepo.DeduplicateTracks(); err == nil && del > 0 {
@@ -170,9 +175,19 @@ func main() {
 		pathGuard.Root(), trackRepo, stagingRepo, mbClient, coverFetcher,
 	)
 	libraryScanner.SetArbiter(metadataArbiter)
+	localImporter := metadata.NewLocalImporter(pathGuard, metadataRepo, mediaInfoRepo, metadata.NewFFProbeAudioProber(""), 2)
+	localImporter.SetPolicyProvider(metadataPolicyRepo.Get)
+	localImporter.SetAnalysisRepository(audioAnalysisRepo)
+	libraryScanner.SetLocalImporter(localImporter)
 
 	atomicTagger := tagger.NewAtomicTagWriter(pathGuard)
 	stagingService := tagger.NewStagingService(atomicTagger, coverFetcher, trackRepo, stagingRepo)
+	nfoService := metadata.NewNFOService(pathGuard, trackRepo, metadataRepo, metadataPolicyRepo, stagingRepo)
+	audioAnalysisService := metadata.NewAudioAnalysisService(pathGuard, trackRepo, audioAnalysisRepo, stagingRepo, metadata.NewFFmpegLoudnessAnalyzer(""), 2)
+	mediaEnrichmentService := metadata.NewMediaEnrichmentService(pathGuard, stagingRepo, mediaEnrichmentRepo, metadata.NewListenBrainzClient())
+	if err := stagingService.RecoverIncomplete(context.Background()); err != nil {
+		log.Fatalf("[FATAL] Не удалось восстановить незавершённую транзакцию метаданных: %v", err)
+	}
 
 	queueWorker := worker.NewQueueProcessor(
 		jobRepo, trackRepo, cacheRepo, keyPoolMgr, tournament, lyricsCleaner, karaokePipeline, lrcWriter,
@@ -247,6 +262,11 @@ func main() {
 	adminHandler.SetCast(castService)
 	adminHandler.SetBiographyStore(bioStore)
 	adminHandler.SetBiographyCoordinator(bioCoordinator)
+	adminHandler.SetMetadataControlServices(admin.MetadataControlServices{
+		Metadata: metadataRepo, MediaInfo: mediaInfoRepo, Policy: metadataPolicyRepo,
+		Analysis: audioAnalysisRepo, Writebacks: stagingRepo.WritebackRepository(), History: db.NewMetadataHistoryRepository(poisqDB), AudioService: audioAnalysisService,
+		NFOService: nfoService, Enrichment: mediaEnrichmentRepo, EnrichmentSvc: mediaEnrichmentService,
+	})
 	if cfg.NavidromeURL != nil {
 		adminHandler.SetNavidromeURL(cfg.NavidromeURL.String())
 	}

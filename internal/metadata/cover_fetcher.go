@@ -261,6 +261,13 @@ func (cf *CoverFetcher) FindCoverCandidates(ctx context.Context, releaseMBID, ar
 // Если folderPath расходится с реальной структурой каталогов (например, префикс Music/, суффикс « — копия»),
 // путь автоматически резолвится к физическому каталогу на диске через ResolveFuzzyDirectory.
 func (cf *CoverFetcher) DownloadAndSaveAtomically(ctx context.Context, folderPath string, imageURL string) (int, int, error) {
+	return cf.DownloadAndSaveRoleAtomically(ctx, folderPath, imageURL, "cover.jpg")
+}
+
+func (cf *CoverFetcher) DownloadAndSaveRoleAtomically(ctx context.Context, folderPath, imageURL, fileName string) (int, int, error) {
+	if !allowedArtworkFileName(fileName) {
+		return 0, 0, fmt.Errorf("invalid artwork role filename")
+	}
 	root := ""
 	if cf.guard != nil {
 		root = cf.guard.Root()
@@ -273,7 +280,7 @@ func (cf *CoverFetcher) DownloadAndSaveAtomically(ctx context.Context, folderPat
 		targetDir = filepath.Join(root, targetDir)
 	}
 
-	targetCover := filepath.Join(targetDir, "cover.jpg")
+	targetCover := filepath.Join(targetDir, fileName)
 	safeTarget, err := cf.guard.ValidateTarget(targetCover, true)
 	if err != nil {
 		return 0, 0, err
@@ -341,6 +348,15 @@ func (cf *CoverFetcher) DownloadAndSaveAtomically(ctx context.Context, folderPat
 	}
 
 	return w, h, nil
+}
+
+func allowedArtworkFileName(value string) bool {
+	switch value {
+	case "cover.jpg", "artist.jpg", "disc.png", "logo.png", "banner.jpg", "fanart.jpg":
+		return true
+	default:
+		return false
+	}
 }
 
 func validatePublicCoverURL(rawURL string) error {

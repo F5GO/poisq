@@ -89,6 +89,11 @@ type LibraryScanner struct {
 	mbClient    *MusicBrainzClient
 	coverFetch  *CoverFetcher
 	arbiter     *ai.MetadataArbiter
+	localImport *LocalImporter
+}
+
+func (s *LibraryScanner) SetLocalImporter(importer *LocalImporter) {
+	s.localImport = importer
 }
 
 // NewLibraryScanner создает новый экземпляр сканера медиатеки.
@@ -242,6 +247,7 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 	}
 
 	batch := make([]db.TrackRecord, 0, 500)
+	importTracks := make([]db.TrackRecord, 0, len(finalList))
 	count := 0
 
 	for _, item := range finalList {
@@ -330,6 +336,7 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 		}
 
 		batch = append(batch, rec)
+		importTracks = append(importTracks, rec)
 		count++
 
 		if len(batch) >= 500 {
@@ -373,6 +380,10 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 	if s.tracksRepo != nil {
 		_, _ = s.tracksRepo.DeduplicateTracks()
 	}
+	if s.localImport != nil {
+		stats := s.localImport.ImportTracks(context.Background(), importTracks)
+		logger.Info("[SCANNER] Локальные теги: импортировано %d, без изменений %d, ошибок %d", stats.Imported, stats.Skipped, stats.Failed)
+	}
 
 	return count, rows.Err()
 }
@@ -380,9 +391,18 @@ func (s *LibraryScanner) SyncFromNavidromeDB(navDB *sql.DB) (int, error) {
 // RunDeepAudit запускает глубокую проверку папок через MusicBrainz и iTunes/CoverArt,
 // складывая все найденные улучшения тегов и обложек в таблицу staging_changes (Staging-режим).
 func (s *LibraryScanner) RunDeepAudit(ctx context.Context, limitFolders int) (int, error) {
-	tracks, err := s.tracksRepo.ListTracks("all", "", 500)
-	if err != nil {
-		return 0, err
+	var tracks []db.TrackRecord
+	afterID := ""
+	for {
+		page, err := s.tracksRepo.ListTracksAfterID(afterID, 500)
+		if err != nil {
+			return 0, err
+		}
+		tracks = append(tracks, page...)
+		if len(page) < 500 {
+			break
+		}
+		afterID = page[len(page)-1].ID
 	}
 
 	byFolder := make(map[string][]db.TrackRecord)
@@ -448,49 +468,51 @@ func (s *LibraryScanner) auditFolder(ctx context.Context, folderPath string, fol
 	if s.mbClient != nil {
 		if relInfo, err := s.mbClient.LookupRelease(ctx, consensus.DominantArtist, consensus.DominantAlbum); err == nil && relInfo != nil {
 			releaseMBID = relInfo.ReleaseMBID
-			// Если имя артиста или год уточнены в MusicBrainz (например, "Максим" -> "МакSим")
-			if relInfo.CanonicalArtist != consensus.DominantArtist || (consensus.DominantYear == 0 && relInfo.Year > 0) {
-				for _, tr := range folderTracks {
-					if onlyTrackID != "" && tr.ID != onlyTrackID {
-						continue
+			var releaseDetails *MBReleaseDetails
+			if details, detailErr := s.mbClient.LookupReleaseDetails(ctx, relInfo.ReleaseMBID); detailErr == nil {
+				releaseDetails = details
+				if relInfo.ReleaseGroupMBID == "" {
+					relInfo.ReleaseGroupMBID = details.ReleaseGroupMBID
+				}
+			}
+			for _, tr := range folderTracks {
+				if onlyTrackID != "" && tr.ID != onlyTrackID {
+					continue
+				}
+				targetAlbum := tr.Album
+				if consensus.IsNumberedAlbum && relInfo.AlbumTitle != "" {
+					targetAlbum = relInfo.AlbumTitle
+				}
+				targetYear := tr.Year
+				if targetYear == 0 && relInfo.Year > 0 {
+					targetYear = relInfo.Year
+				}
+				confidence := relInfo.Score
+				recordingMBID := ""
+				releaseTrackMBID := ""
+				if match, ok := MatchMusicBrainzTrack(tr.Title, tr.TrackNumber, 0, tr.Duration, releaseDetails); ok {
+					recordingMBID = match.Track.RecordingMBID
+					releaseTrackMBID = match.Track.ReleaseTrackMBID
+					if match.Score < confidence {
+						confidence = match.Score
 					}
-					targetAlbum := tr.Album
-					if consensus.IsNumberedAlbum && relInfo.AlbumTitle != "" {
-						// Folder-as-Album Lock: удерживаем единый номерной альбом для всех треков папки
-						targetAlbum = relInfo.AlbumTitle
-					}
-					targetYear := tr.Year
-					if targetYear == 0 && relInfo.Year > 0 {
-						targetYear = relInfo.Year
-					}
-					curJSON, _ := json.Marshal(map[string]any{
-						"artist":      tr.Artist,
-						"album":       tr.Album,
-						"albumArtist": tr.AlbumArtist,
-						"title":       tr.Title,
-						"year":        tr.Year,
-					})
-					propJSON, _ := json.Marshal(map[string]any{
-						"artist":      relInfo.CanonicalArtist,
-						"album":       targetAlbum,
-						"albumArtist": relInfo.CanonicalArtist,
-						"title":       tr.Title,
-						"year":        targetYear,
-						"releaseMbid": relInfo.ReleaseMBID,
-						"artistMbid":  relInfo.ArtistMBID,
-						"reason":      "Канонизация MusicBrainz + Folder-as-Album Lock",
-					})
-					if _, err := s.stagingRepo.CreateProposal(db.StagingChangeRecord{
-						Scope:        "track",
-						TargetID:     tr.ID,
-						FolderPath:   folderPath,
-						ChangeType:   "musicbrainz",
-						Confidence:   relInfo.Score,
-						CurrentJSON:  string(curJSON),
-						ProposedJSON: string(propJSON),
-					}); err == nil {
-						proposalsCreated++
-					}
+				}
+				curJSON, _ := json.Marshal(map[string]any{
+					"artist": tr.Artist, "album": tr.Album, "albumArtist": tr.AlbumArtist,
+					"title": tr.Title, "year": tr.Year,
+				})
+				propJSON, _ := json.Marshal(map[string]any{
+					"artist": relInfo.CanonicalArtist, "album": targetAlbum, "albumArtist": relInfo.CanonicalArtist,
+					"title": tr.Title, "year": targetYear, "releaseMbid": relInfo.ReleaseMBID,
+					"releaseGroupMbid": relInfo.ReleaseGroupMBID, "artistMbid": relInfo.ArtistMBID,
+					"recordingMbid": recordingMBID, "releaseTrackMbid": releaseTrackMBID,
+					"reason": "MusicBrainz identity + Folder-as-Album Lock",
+				})
+				if _, err := s.stagingRepo.CreateProposal(db.StagingChangeRecord{
+					Scope: "track", TargetID: tr.ID, FolderPath: folderPath, ChangeType: "musicbrainz",
+					Confidence: confidence, CurrentJSON: string(curJSON), ProposedJSON: string(propJSON),
+				}); err == nil {
+					proposalsCreated++
 				}
 			}
 		} else if artInfo, err := s.mbClient.LookupArtist(ctx, consensus.DominantArtist); err == nil && artInfo != nil {

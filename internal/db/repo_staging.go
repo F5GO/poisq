@@ -7,6 +7,7 @@ package db
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -34,6 +35,16 @@ type StagingRepository struct {
 // NewStagingRepository создает новый экземпляр репозитория Staging-предложений.
 func NewStagingRepository(db *sql.DB) *StagingRepository {
 	return &StagingRepository{db: db}
+}
+
+func (r *StagingRepository) MetadataRepository() *MetadataRepository {
+	return NewMetadataRepository(r.db)
+}
+
+func (r *StagingRepository) Database() *sql.DB { return r.db }
+
+func (r *StagingRepository) MediaEnrichmentRepository() *MediaEnrichmentRepository {
+	return NewMediaEnrichmentRepository(r.db)
 }
 
 // CreateProposal сохраняет новое предложение в статусе pending, если аналогичное активное предложение еще не создано.
@@ -88,6 +99,11 @@ func (r *StagingRepository) GetByID(id int64) (*StagingChangeRecord, error) {
 
 // List возвращает список предложений с фильтрацией по статусу (pending, applied, ignored, reverted).
 func (r *StagingRepository) List(statusFilter string, limit int) ([]StagingChangeRecord, error) {
+	return r.ListPage(statusFilter, 0, 0, limit)
+}
+
+// ListPage returns a deterministic keyset page ordered newest first.
+func (r *StagingRepository) ListPage(statusFilter string, beforeCreatedAt, beforeID int64, limit int) ([]StagingChangeRecord, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
@@ -98,9 +114,17 @@ func (r *StagingRepository) List(statusFilter string, limit int) ([]StagingChang
 		FROM staging_changes
 	`
 	var args []any
+	conditions := make([]string, 0, 2)
 	if statusFilter != "" && statusFilter != "all" {
-		query += ` WHERE status = ?`
+		conditions = append(conditions, `status = ?`)
 		args = append(args, statusFilter)
+	}
+	if beforeCreatedAt > 0 && beforeID > 0 {
+		conditions = append(conditions, `(created_at < ? OR (created_at = ? AND id < ?))`)
+		args = append(args, beforeCreatedAt, beforeCreatedAt, beforeID)
+	}
+	if len(conditions) > 0 {
+		query += ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
 	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
 	args = append(args, limit)

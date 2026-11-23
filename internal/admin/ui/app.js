@@ -35,6 +35,7 @@ const state = {
   tracks: [],
   selectedTrack: null,
   stagingItems: [],
+  stagingNextCursor: "",
   keys: [],
   jobs: [],
   jobLogs: {},
@@ -47,6 +48,14 @@ const state = {
   biographySearchTimer: null,
   biographySearchGeneration: 0,
   biographyBusy: false,
+  metadataTracks: [],
+  metadataSelectedId: null,
+  metadataSelectedIds: new Set(),
+  metadataDetail: null,
+  metadataHistory: [],
+  metadataHistorySelectedIds: new Set(),
+  metadataPolicy: null,
+  metadataAuditTimer: null,
 
   // Караоке плеер
   audioEl: null,
@@ -298,6 +307,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initCastForm();
   initNavidromeAccountForm();
   initBiographyStudio();
+  initMetadataStudio();
   window.addEventListener("popstate", applyRoute);
   applyRoute();
   if (state.activeTab !== "library") loadLibraryData(); // счётчики в шапке нужны на любой странице
@@ -379,9 +389,9 @@ function initNavigation() {
 
 // Адреса страниц: первая часть пути → вкладка. /lyrics/<id> открывает трек, /settings/<раздел> — подраздел настроек.
 // Очередь задач живёт внутри «Текстов» (/lyrics/queue), поэтому в шапке подсвечиваются «Тексты».
-const ROUTE_TABS = { library: "library", lyrics: "karaoke", biographies: "biographies", fixes: "staging", settings: "keys" };
-const TAB_PATHS = { library: "/library", karaoke: "/lyrics", biographies: "/biographies", staging: "/fixes", jobs: "/lyrics/queue", keys: "/settings/keys" };
-const TAB_TITLES = { library: "Медиатека", karaoke: "Тексты", biographies: "Биографии", staging: "Исправления", jobs: "Очередь задач", keys: "Настройки" };
+const ROUTE_TABS = { library: "library", metadata: "metadata", lyrics: "karaoke", biographies: "biographies", fixes: "staging", settings: "keys" };
+const TAB_PATHS = { library: "/library", metadata: "/metadata", karaoke: "/lyrics", biographies: "/biographies", staging: "/fixes", jobs: "/lyrics/queue", keys: "/settings/keys" };
+const TAB_TITLES = { library: "Медиатека", metadata: "Метаданные", karaoke: "Тексты", biographies: "Биографии", staging: "Исправления", jobs: "Очередь задач", keys: "Настройки" };
 const SETTINGS_SECTIONS = ["keys", "navidrome", "cast", "service"];
 
 function navigate(path, replace = false) {
@@ -435,12 +445,17 @@ function activateTab(tabName) {
     clearInterval(state.jobsPollTimer);
     state.jobsPollTimer = null;
   }
+  if (state.metadataAuditTimer && tabName !== "metadata") {
+    clearInterval(state.metadataAuditTimer);
+    state.metadataAuditTimer = null;
+  }
 
   if (tabName === "library") loadLibraryData();
   if (tabName === "karaoke") {
     renderKaraokeSidebar();
   }
   if (tabName === "staging") loadStagingData();
+  if (tabName === "metadata") loadMetadataWorkspace();
   if (tabName === "jobs") {
     loadJobsData();
     state.jobsPollTimer = setInterval(() => {
@@ -1134,6 +1149,582 @@ function formatLyricsSource(src) {
     return "poisq";
   }
   return String(src).toUpperCase();
+}
+
+// -----------------------------------------------------------------------------
+// 3.1. Рабочее место метаданных
+// -----------------------------------------------------------------------------
+const METADATA_FIELDS = [
+  ["title", "Название"], ["subtitle", "Подзаголовок"], ["album", "Альбом"],
+  ["sort_title", "Название для сортировки"], ["sort_album", "Альбом для сортировки"],
+  ["release_date", "Дата выпуска"], ["original_release_date", "Первая дата выпуска"],
+  ["track_number", "Номер трека"], ["track_total", "Треков на диске"],
+  ["disc_number", "Номер диска"], ["disc_total", "Всего дисков"],
+  ["compilation", "Сборник"], ["label", "Лейбл"], ["catalog_number", "Каталожный номер"],
+  ["barcode", "Штрихкод"], ["isrc", "ISRC"], ["grouping", "Группа"],
+  ["comment", "Комментарий"], ["copyright", "Авторские права"],
+  ["bpm", "BPM"], ["rating", "Рейтинг"], ["credits", "Участники"],
+  ["genres", "Жанры"], ["external_ids", "Внешние ID"], ["custom_tags", "Пользовательские теги"]
+];
+
+const METADATA_VALUE_KEYS = {
+  title: "title", subtitle: "subtitle", album: "album", sort_title: "sortTitle", sort_album: "sortAlbum",
+  release_date: "releaseDate", original_release_date: "originalReleaseDate", track_number: "trackNumber",
+  track_total: "trackTotal", disc_number: "discNumber", disc_total: "discTotal", compilation: "compilation",
+  label: "label", catalog_number: "catalogNumber", barcode: "barcode", isrc: "isrc", grouping: "grouping",
+  comment: "comment", copyright: "copyright", bpm: "bpm", rating: "rating", credits: "credits",
+  genres: "genres", external_ids: "externalIds", custom_tags: "customTags"
+};
+
+function initMetadataStudio() {
+  const search = document.getElementById("metadata-search-input");
+  search?.addEventListener("input", () => renderMetadataTrackList(search.value));
+  document.getElementById("btn-metadata-select-visible")?.addEventListener("click", selectVisibleMetadataTracks);
+  document.getElementById("btn-metadata-clear-selection")?.addEventListener("click", clearMetadataTrackSelection);
+  document.getElementById("btn-metadata-audit")?.addEventListener("click", runMetadataLibraryAudit);
+  document.getElementById("btn-save-metadata-policy")?.addEventListener("click", saveMetadataPolicy);
+}
+
+async function loadMetadataWorkspace() {
+  try {
+    const [tracks, policy] = await Promise.all([
+      fetchApi("/tracks?limit=250"),
+      fetchApi("/metadata/policy")
+    ]);
+    state.metadataTracks = tracks.tracks || [];
+    state.metadataPolicy = policy;
+    renderMetadataTrackList(document.getElementById("metadata-search-input")?.value || "");
+    renderMetadataPolicy();
+    await Promise.all([loadMetadataRecovery(), pollMetadataAuditStatus()]);
+    if (!state.metadataAuditTimer) state.metadataAuditTimer = setInterval(pollMetadataAuditStatus, 2000);
+    if (state.metadataSelectedId && state.metadataTracks.some(t => t.id === state.metadataSelectedId)) {
+      await selectMetadataTrack(state.metadataSelectedId);
+    }
+  } catch (err) {
+    showToast(`Не удалось загрузить метаданные: ${err.message}`, "error");
+  }
+}
+
+function renderMetadataTrackList(query = "") {
+  const list = document.getElementById("metadata-track-list");
+  if (!list) return;
+  const needle = String(query).trim().toLocaleLowerCase("ru");
+  const values = state.metadataTracks.filter(t => !needle || [t.title, t.artist, t.album].some(v => String(v || "").toLocaleLowerCase("ru").includes(needle)));
+  if (!values.length) {
+    list.innerHTML = `<p class="metadata-empty">Треки не найдены.</p>`;
+    return;
+  }
+  list.innerHTML = values.map(track => `
+    <div class="metadata-track-row ${track.id === state.metadataSelectedId ? "active" : ""}">
+      <label class="metadata-track-select" title="Добавить в пакетную правку"><input type="checkbox" ${state.metadataSelectedIds.has(track.id) ? "checked" : ""} onchange="toggleMetadataTrackSelection('${escapeJsArg(track.id)}', this.checked)"><span class="sr-only">Выбрать ${escapeHtml(track.title || "трек")}</span></label>
+      <button type="button" class="metadata-track" onclick="selectMetadataTrack('${escapeJsArg(track.id)}')">
+        <span class="metadata-track-title">${escapeHtml(track.title || "Без названия")}</span>
+        <span class="metadata-track-meta">${escapeHtml(track.artist || "Неизвестный исполнитель")} · ${escapeHtml(track.album || "Без альбома")}</span>
+      </button>
+    </div>`).join("");
+  updateMetadataSelectionCount();
+}
+
+function visibleMetadataTracks() {
+  const needle = String(document.getElementById("metadata-search-input")?.value || "").trim().toLocaleLowerCase("ru");
+  return state.metadataTracks.filter(t => !needle || [t.title, t.artist, t.album].some(v => String(v || "").toLocaleLowerCase("ru").includes(needle)));
+}
+
+function toggleMetadataTrackSelection(trackId, selected) {
+  if (selected) state.metadataSelectedIds.add(trackId); else state.metadataSelectedIds.delete(trackId);
+  updateMetadataSelectionCount();
+  renderMetadataDetail();
+}
+
+function selectVisibleMetadataTracks() {
+  visibleMetadataTracks().slice(0, 500).forEach(track => state.metadataSelectedIds.add(track.id));
+  renderMetadataTrackList(document.getElementById("metadata-search-input")?.value || "");
+  renderMetadataDetail();
+}
+
+function clearMetadataTrackSelection() {
+  state.metadataSelectedIds.clear();
+  renderMetadataTrackList(document.getElementById("metadata-search-input")?.value || "");
+  renderMetadataDetail();
+}
+
+function updateMetadataSelectionCount() {
+  const count = document.getElementById("metadata-selection-count");
+  if (count) count.textContent = `Выбрано: ${state.metadataSelectedIds.size}`;
+}
+
+async function selectMetadataTrack(trackId) {
+  state.metadataSelectedId = trackId;
+  renderMetadataTrackList(document.getElementById("metadata-search-input")?.value || "");
+  const detail = document.getElementById("metadata-detail");
+  const empty = document.getElementById("metadata-detail-empty");
+  if (detail) detail.innerHTML = `<p class="metadata-empty">Загрузка метаданных...</p>`;
+  detail?.classList.remove("hidden");
+  empty?.classList.add("hidden");
+  try {
+    state.metadataDetail = await fetchApi(`/metadata/track?id=${encodeURIComponent(trackId)}`);
+    state.metadataHistorySelectedIds.clear();
+    renderMetadataDetail();
+    await Promise.all([loadMetadataArtwork(), loadMetadataSimilar(), loadMetadataHistory()]);
+  } catch (err) {
+    if (detail) detail.innerHTML = `<p class="metadata-empty text-red">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function metadataExternalID(type) {
+  return (state.metadataDetail?.document?.externalIds || []).find(item => item.type === type)?.value || "";
+}
+
+function metadataCredit(role) {
+  return (state.metadataDetail?.document?.credits || []).filter(item => item.role === role).map(item => item.name).join("; ");
+}
+
+function displayMetadataValue(field, doc) {
+  const value = doc[METADATA_VALUE_KEYS[field]];
+  if (field === "release_date" || field === "original_release_date") return value?.value || "—";
+  if (field === "credits") return (value || []).map(item => `${item.name} · ${item.role}`).join("; ") || "—";
+  if (field === "external_ids") return (value || []).map(item => `${item.type}: ${item.value}`).join("; ") || "—";
+  if (field === "custom_tags") return (value || []).map(item => `${item.key}=${item.value}`).join("; ") || "—";
+  if (Array.isArray(value)) return value.join("; ") || "—";
+  if (typeof value === "boolean") return value ? "Да" : "Нет";
+  if (value && typeof value === "object") return "—";
+  return value === 0 || value ? String(value) : "—";
+}
+
+function renderMetadataDetail() {
+  const root = document.getElementById("metadata-detail");
+  const data = state.metadataDetail;
+  if (!root || !data) return;
+  const track = data.track || {};
+  const doc = data.document || {};
+  const states = doc.fieldStates || {};
+  const media = data.mediaInfo || {};
+  const analysis = data.analysis || {};
+  const year = String(doc.releaseDate?.value || track.year || "").slice(0, 4);
+  const artistMbid = metadataExternalID("musicbrainz_artist");
+  const bulkCount = state.metadataSelectedIds.size;
+  const isBulk = bulkCount > 1;
+
+  const fields = METADATA_FIELDS.map(([field, label]) => {
+    const source = states[field] || {};
+    const confidence = Number.isFinite(source.confidence) ? `${Math.round(source.confidence * 100)}%` : "—";
+    return `<div class="metadata-field">
+      <div><span class="metadata-field-name">${label}</span><span class="metadata-field-value">${escapeHtml(displayMetadataValue(field, doc))}</span>
+      <span class="metadata-field-source">${escapeHtml(source.source || "без источника")}${source.provider ? ` · ${escapeHtml(source.provider)}` : ""} · ${confidence}</span></div>
+      <button type="button" class="metadata-lock ${source.locked ? "locked" : ""}" title="${source.locked ? "Разблокировать поле" : "Защитить поле от обновлений"}" aria-label="${source.locked ? "Разблокировать" : "Заблокировать"}: ${label}" onclick="toggleMetadataLock('${field}', ${!source.locked})">${source.locked ? "●" : "○"}</button>
+    </div>`;
+  }).join("");
+
+  const facts = [
+    ["Формат", [media.container, media.audioCodec].filter(Boolean).join(" · ") || "—"],
+    ["Аудио", media.sampleRate ? `${media.sampleRate} Гц · ${media.bitDepth || "—"} бит · ${media.channels || "—"} кан.` : "—"],
+    ["Громкость", analysis.integratedLufs != null ? `${analysis.integratedLufs.toFixed(1)} LUFS` : "Не измерена"],
+    ["Истинный пик", analysis.truePeakDb != null ? `${analysis.truePeakDb.toFixed(1)} dBFS` : "—"]
+  ].map(([label, value]) => `<div class="metadata-fact"><span class="metadata-fact-label">${label}</span><span class="metadata-fact-value mono">${escapeHtml(value)}</span></div>`).join("");
+
+  root.innerHTML = `
+    <div class="metadata-detail-head">
+      <div><h2 class="metadata-detail-title">${escapeHtml(track.title || "Без названия")}</h2><p class="metadata-detail-sub">${escapeHtml(track.artist || "—")} · ${escapeHtml(track.album || "—")}</p></div>
+      <div class="metadata-action-row">
+        <button type="button" class="btn btn-secondary" onclick="refreshMetadataTrack()">Обновить источники</button>
+        <button type="button" class="btn btn-secondary" onclick="analyzeMetadataTrack()">Измерить громкость</button>
+      </div>
+    </div>
+    <div class="metadata-facts">${facts}</div>
+
+    <section class="metadata-section">
+      <div class="metadata-section-head"><h3 class="metadata-section-title">Поля и происхождение</h3><span class="metadata-section-note">Круг справа блокирует автоматическую замену</span></div>
+      <div class="metadata-fields">${fields}</div>
+    </section>
+
+    <section class="metadata-section">
+      <div class="metadata-section-head"><h3 class="metadata-section-title">${isBulk ? `Пакетная правка · ${bulkCount} треков` : "Редактирование тегов"}</h3><span class="metadata-section-note">${isBulk ? "Отметьте только поля, которые нужно заменить во всех выбранных треках" : "Сначала показываем различия, затем создаём безопасное предложение"}</span></div>
+      <form id="metadata-tags-form" onsubmit="event.preventDefault(); saveMetadataTags();">
+        <div class="metadata-edit-grid">
+          ${metadataInput("md-title", "Название", doc.title || track.title, "text", "", "title", isBulk)}
+          ${metadataInput("md-subtitle", "Подзаголовок", doc.subtitle, "text", "", "subtitle", isBulk)}
+          ${metadataInput("md-sort-title", "Название для сортировки", doc.sortTitle, "text", "", "sort_title", isBulk)}
+          ${metadataInput("md-album", "Альбом", doc.album || track.album, "text", "", "album", isBulk)}
+          ${metadataInput("md-sort-album", "Альбом для сортировки", doc.sortAlbum, "text", "", "sort_album", isBulk)}
+          ${metadataInput("md-release-date", "Дата выпуска (ГГГГ-ММ-ДД)", doc.releaseDate?.value || year, "text", "", "release_date", isBulk)}
+          ${metadataInput("md-original-release-date", "Первая дата выпуска", doc.originalReleaseDate?.value, "text", "", "original_release_date", isBulk)}
+          ${metadataInput("md-track-number", "Номер трека", doc.trackNumber || track.trackNumber, "number", "", "track_number", isBulk)}
+          ${metadataInput("md-track-total", "Всего треков", doc.trackTotal, "number", "", "track_total", isBulk)}
+          ${metadataInput("md-disc-number", "Номер диска", doc.discNumber, "number", "", "disc_number", isBulk)}
+          ${metadataInput("md-disc-total", "Всего дисков", doc.discTotal, "number", "", "disc_total", isBulk)}
+          ${metadataInput("md-bpm", "BPM", doc.bpm, "number", "", "bpm", isBulk)}
+          ${metadataInput("md-rating", "Рейтинг (0–100, пусто — удалить)", doc.rating, "number", "", "rating", isBulk)}
+          ${metadataInput("md-genres", "Жанры через ;", (doc.genres || []).join("; "), "text", "", "genres", isBulk)}
+          ${metadataInput("md-artist", "Исполнитель", metadataCredit("artist") || track.artist, "text", "", "credits", isBulk)}
+          ${metadataInput("md-album-artist", "Исполнитель альбома", metadataCredit("album_artist") || track.albumArtist, "text", "", "credits", isBulk)}
+          ${metadataInput("md-composer", "Композитор", metadataCredit("composer"), "text", "", "credits", isBulk)}
+          ${metadataInput("md-lyricist", "Автор текста", metadataCredit("lyricist"), "text", "", "credits", isBulk)}
+          ${metadataInput("md-conductor", "Дирижёр", metadataCredit("conductor"), "text", "", "credits", isBulk)}
+          ${metadataInput("md-performer", "Исполнитель роли", metadataCredit("performer"), "text", "", "credits", isBulk)}
+          ${metadataInput("md-producer", "Продюсер", metadataCredit("producer"), "text", "", "credits", isBulk)}
+          ${metadataInput("md-remixer", "Ремиксер", metadataCredit("remixer"), "text", "", "credits", isBulk)}
+          ${metadataInput("md-label", "Лейбл", doc.label, "text", "", "label", isBulk)}
+          ${metadataInput("md-catalog", "Каталожный номер", doc.catalogNumber, "text", "", "catalog_number", isBulk)}
+          ${metadataInput("md-barcode", "Штрихкод", doc.barcode, "text", "", "barcode", isBulk)}
+          ${metadataInput("md-isrc", "ISRC", doc.isrc, "text", "", "isrc", isBulk)}
+          ${metadataInput("md-grouping", "Группа", doc.grouping, "text", "", "grouping", isBulk)}
+          ${metadataInput("md-release-mbid", "MusicBrainz release", metadataExternalID("musicbrainz_release"), "text", "", "external_ids", isBulk)}
+          ${metadataInput("md-release-group-mbid", "MusicBrainz release group", metadataExternalID("musicbrainz_release_group"), "text", "", "external_ids", isBulk)}
+          ${metadataInput("md-artist-mbid", "MusicBrainz artist", artistMbid, "text", "", "external_ids", isBulk)}
+          ${metadataInput("md-recording-mbid", "MusicBrainz recording", metadataExternalID("musicbrainz_recording"), "text", "", "external_ids", isBulk)}
+          ${metadataInput("md-release-track-mbid", "MusicBrainz release track", metadataExternalID("musicbrainz_release_track"), "text", "", "external_ids", isBulk)}
+          <div class="form-group metadata-edit-field"><label class="metadata-field-toggle"><input type="checkbox" data-metadata-field="compilation" ${isBulk ? "" : "checked"}> Изменить поле</label><label class="metadata-checkbox"><input type="checkbox" id="md-compilation" ${doc.compilation ? "checked" : ""}> Сборник</label></div>
+          <div class="form-group wide metadata-edit-field"><label class="metadata-field-toggle"><input type="checkbox" data-metadata-field="comment" ${isBulk ? "" : "checked"}> Изменить поле</label><label class="form-label" for="md-comment">Комментарий</label><textarea id="md-comment" class="form-input metadata-textarea">${escapeHtml(doc.comment || "")}</textarea></div>
+          ${metadataInput("md-copyright", "Авторские права", doc.copyright, "text", "wide", "copyright", isBulk)}
+          <div class="form-group wide metadata-edit-field"><label class="metadata-field-toggle"><input type="checkbox" data-metadata-field="custom_tags" ${isBulk ? "" : "checked"}> Изменить поле</label><label class="form-label" for="md-custom-tags">Пользовательские теги · по одному KEY=value на строку</label><textarea id="md-custom-tags" class="form-input metadata-textarea mono">${escapeHtml((doc.customTags || []).map(item => `${item.key}=${item.value}`).join("\n"))}</textarea></div>
+        </div>
+        <button type="submit" class="btn btn-primary">Предпросмотр изменений</button>
+      </form>
+    </section>
+
+    <section class="metadata-section">
+      <div class="metadata-section-head"><h3 class="metadata-section-title">История полей</h3><span class="metadata-section-note">Можно откатить отдельные поля, не затрагивая остальные</span></div>
+      <div id="metadata-history" class="metadata-history"><p class="metadata-empty">Загрузка истории...</p></div>
+    </section>
+
+    <section class="metadata-section">
+      <div class="metadata-section-head"><h3 class="metadata-section-title">Инструменты альбома</h3><span class="metadata-section-note">Изменения файлов сначала попадают в «Исправления»</span></div>
+      <div class="metadata-tools">
+        <div class="metadata-tool"><h4>NFO для Jellyfin и Kodi</h4><p>Импорт учитывает блокировки. Экспорт создаёт предложения для album.nfo и artist.nfo.</p><div class="metadata-tool-actions"><button class="btn btn-secondary" type="button" onclick="runMetadataNFO('import')">Импортировать NFO</button><button class="btn btn-secondary" type="button" onclick="runMetadataNFO('export')">Подготовить NFO</button></div></div>
+        <div class="metadata-tool"><h4>ReplayGain</h4><p>Расчёт основан на сохранённом измерении EBU R128.</p><div class="metadata-inline-input"><input id="md-target-lufs" class="form-input mono" type="number" min="-30" max="-5" step="0.1" value="-14"><button class="btn btn-secondary" type="button" onclick="stageMetadataReplayGain()">Подготовить теги</button></div></div>
+        <div class="metadata-tool"><h4>Изображения по ролям</h4><p>Album, artist, disc, logo, banner и backdrop сохраняются отдельными файлами.</p>
+          <div class="form-group"><label class="form-label" for="md-art-scope">Область</label><select id="md-art-scope" class="form-select"><option value="album">Альбом</option><option value="artist">Исполнитель</option></select></div>
+          <div class="form-group"><label class="form-label" for="md-art-role">Роль</label><select id="md-art-role" class="form-select" onchange="syncMetadataArtworkScope()"><option value="album_primary">Обложка альбома</option><option value="artist_primary">Фото исполнителя</option><option value="disc">Диск</option><option value="logo">Логотип</option><option value="banner">Баннер</option><option value="backdrop">Фон</option></select></div>
+          <div class="form-group"><label class="form-label" for="md-art-url">Прямая ссылка на изображение</label><input id="md-art-url" class="form-input" type="url" placeholder="https://..."></div>
+          <div class="metadata-inline-input"><div class="form-group"><label class="form-label" for="md-art-width">Ширина</label><input id="md-art-width" class="form-input mono" type="number" min="1"></div><div class="form-group"><label class="form-label" for="md-art-height">Высота</label><input id="md-art-height" class="form-input mono" type="number" min="1"></div></div>
+          <div class="metadata-tool-actions" style="margin-top:8px"><button class="btn btn-secondary" type="button" onclick="stageMetadataArtwork()">Подготовить изображение</button></div><div id="metadata-artwork-list" class="metadata-artwork-list"></div>
+        </div>
+        <div class="metadata-tool"><h4>Похожие исполнители</h4><p>${artistMbid ? "Данные ListenBrainz привязаны к подтверждённому MusicBrainz ID." : "Сначала подтвердите MusicBrainz ID исполнителя."}</p><button class="btn btn-secondary" type="button" ${artistMbid ? "" : "disabled"} onclick="refreshMetadataSimilar('${escapeJsArg(artistMbid)}')">Обновить список</button><div id="metadata-similar-list" class="metadata-similar-list"></div></div>
+      </div>
+    </section>`;
+}
+
+function metadataInput(id, label, value, type = "text", extraClass = "", field = "", bulk = false) {
+  return `<div class="form-group metadata-edit-field ${extraClass}">${field ? `<label class="metadata-field-toggle"><input type="checkbox" data-metadata-field="${field}" ${bulk ? "" : "checked"}> Изменить поле</label>` : ""}<label class="form-label" for="${id}">${label}</label><input id="${id}" class="form-input${type === "number" ? " mono" : ""}" type="${type}" ${type === "number" ? 'min="0" max="99999"' : ""} value="${escapeHtml(value == null ? "" : String(value))}"></div>`;
+}
+
+async function toggleMetadataLock(field, locked) {
+  if (!state.metadataSelectedId) return;
+  try {
+    await fetchApi("/metadata/lock", "POST", { trackId: state.metadataSelectedId, field, locked });
+    await selectMetadataTrack(state.metadataSelectedId);
+    showToast(locked ? "Поле защищено от обновлений" : "Поле разблокировано", "success");
+  } catch (err) { showToast(`Не удалось изменить блокировку: ${err.message}`, "error"); }
+}
+
+function metadataFormValue(id) { return (document.getElementById(id)?.value || "").trim(); }
+function metadataFormNumber(id) { return parseInt(metadataFormValue(id), 10) || 0; }
+
+function metadataFieldEnabled(field) {
+  return [...document.querySelectorAll(`[data-metadata-field="${field}"]`)].some(input => input.checked);
+}
+
+function metadataNames(value, role) {
+  return String(value || "").split(";").map(name => name.trim()).filter(Boolean).map(name => ({ role, name }));
+}
+
+function parseMetadataCustomTags(value) {
+  return String(value || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean).map((line, index) => {
+    const separator = line.indexOf("=");
+    if (separator < 1) throw new Error(`Строка ${index + 1}: ожидается KEY=value`);
+    return { key: line.slice(0, separator).trim(), value: line.slice(separator + 1).trim() };
+  });
+}
+
+function metadataExternalIDsFromForm() {
+  const managed = {
+    musicbrainz_release: metadataFormValue("md-release-mbid"),
+    musicbrainz_release_group: metadataFormValue("md-release-group-mbid"),
+    musicbrainz_artist: metadataFormValue("md-artist-mbid"),
+    musicbrainz_recording: metadataFormValue("md-recording-mbid"),
+    musicbrainz_release_track: metadataFormValue("md-release-track-mbid")
+  };
+  const existing = (state.metadataDetail?.document?.externalIds || []).filter(item => !(item.type in managed));
+  return existing.concat(Object.entries(managed).filter(([, value]) => value).map(([type, value]) => ({ type, value })));
+}
+
+function buildMetadataPatch() {
+  const patch = {};
+  const clear = [];
+  const textFields = {
+    title: "md-title", subtitle: "md-subtitle", sortTitle: "md-sort-title", album: "md-album", sortAlbum: "md-sort-album",
+    label: "md-label", catalogNumber: "md-catalog", barcode: "md-barcode", isrc: "md-isrc", grouping: "md-grouping",
+    comment: "md-comment", copyright: "md-copyright"
+  };
+  const semantic = {
+    title: "title", subtitle: "subtitle", sortTitle: "sort_title", album: "album", sortAlbum: "sort_album",
+    label: "label", catalogNumber: "catalog_number", barcode: "barcode", isrc: "isrc", grouping: "grouping",
+    comment: "comment", copyright: "copyright"
+  };
+  Object.entries(textFields).forEach(([jsonKey, id]) => { if (metadataFieldEnabled(semantic[jsonKey])) patch[jsonKey] = metadataFormValue(id); });
+  [["releaseDate", "release_date", "md-release-date"], ["originalReleaseDate", "original_release_date", "md-original-release-date"]].forEach(([jsonKey, field, id]) => {
+    if (!metadataFieldEnabled(field)) return;
+    const value = metadataFormValue(id);
+    if (value) patch[jsonKey] = value; else clear.push(field);
+  });
+  [["trackNumber", "track_number", "md-track-number"], ["trackTotal", "track_total", "md-track-total"], ["discNumber", "disc_number", "md-disc-number"], ["discTotal", "disc_total", "md-disc-total"], ["bpm", "bpm", "md-bpm"]].forEach(([jsonKey, field, id]) => {
+    if (metadataFieldEnabled(field)) patch[jsonKey] = metadataFormNumber(id);
+  });
+  if (metadataFieldEnabled("rating")) {
+    const value = metadataFormValue("md-rating");
+    if (value === "") clear.push("rating"); else patch.rating = parseInt(value, 10);
+  }
+  if (metadataFieldEnabled("compilation")) patch.compilation = !!document.getElementById("md-compilation")?.checked;
+  if (metadataFieldEnabled("genres")) patch.genres = metadataFormValue("md-genres").split(/[;,]/).map(v => v.trim()).filter(Boolean);
+  if (metadataFieldEnabled("credits")) {
+    patch.credits = [
+      ...metadataNames(metadataFormValue("md-artist"), "artist"), ...metadataNames(metadataFormValue("md-album-artist"), "album_artist"),
+      ...metadataNames(metadataFormValue("md-composer"), "composer"), ...metadataNames(metadataFormValue("md-lyricist"), "lyricist"),
+      ...metadataNames(metadataFormValue("md-conductor"), "conductor"), ...metadataNames(metadataFormValue("md-performer"), "performer"),
+      ...metadataNames(metadataFormValue("md-producer"), "producer"), ...metadataNames(metadataFormValue("md-remixer"), "remixer")
+    ];
+  }
+  if (metadataFieldEnabled("external_ids")) patch.externalIds = metadataExternalIDsFromForm();
+  if (metadataFieldEnabled("custom_tags")) patch.customTags = parseMetadataCustomTags(metadataFormValue("md-custom-tags"));
+  if (clear.length) patch.clear = clear;
+  return patch;
+}
+
+function metadataPatchTargets() {
+  const selected = [...state.metadataSelectedIds];
+  return selected.length ? selected : (state.metadataSelectedId ? [state.metadataSelectedId] : []);
+}
+
+function historyValueLabel(value) {
+  if (value == null || value === "") return "∅";
+  if (Array.isArray(value)) return value.map(item => typeof item === "object" ? (item.name || `${item.key}=${item.value}`) : item).join("; ") || "∅";
+  if (typeof value === "object") return value.value || JSON.stringify(value);
+  return String(value);
+}
+
+async function saveMetadataTags() {
+  const trackIds = metadataPatchTargets();
+  if (!trackIds.length) return;
+  try {
+    const patch = buildMetadataPatch();
+    if (!Object.keys(patch).length) throw new Error("Отметьте хотя бы одно поле");
+    const preview = await fetchApi("/metadata/tags/preview", "POST", { trackIds, patch }, 60000);
+    const changed = (preview.items || []).filter(item => !item.unchanged && !item.error);
+    const errors = (preview.items || []).filter(item => item.error);
+    if (!changed.length) throw new Error(errors[0]?.error || "Выбранные значения уже установлены");
+    const details = changed.map(item => `${item.trackId} · ${(item.changes || []).map(change => `${change.field}: ${historyValueLabel(change.before)} → ${historyValueLabel(change.after)}`).join("; ")}`);
+    errors.forEach(item => details.push(`${item.trackId} · ошибка: ${item.error}`));
+    if (!await confirmDialog({
+      title: trackIds.length > 1 ? `Изменить ${changed.length} треков?` : "Подготовить изменение тегов?",
+      message: "Файлы пока не меняются: будут созданы предложения в разделе «Исправления».",
+      details,
+      confirmLabel: "Создать предложения"
+    })) return;
+    const result = await fetchApi("/metadata/tags/apply", "POST", { trackIds, patch }, 60000);
+    const failed = (result.items || []).filter(item => item.error);
+    const unchanged = (result.items || []).filter(item => item.unchanged).length;
+    showToast(`Создано предложений: ${result.created || 0}; без изменений: ${unchanged}; ошибок: ${failed.length}.`, failed.length ? "info" : "success");
+    if (failed.length) {
+      await confirmDialog({
+        title: "Часть треков не подготовлена",
+        message: "Успешные предложения сохранены. Ошибки можно исправить и повторить только для этих треков.",
+        details: failed.map(item => `${item.trackId}: ${item.error}`),
+        confirmLabel: "Закрыть",
+        cancelLabel: "Закрыть"
+      });
+    }
+    if (state.metadataSelectedId) await selectMetadataTrack(state.metadataSelectedId);
+  } catch (err) { showToast(`Не удалось подготовить теги: ${err.message}`, "error"); }
+}
+
+async function loadMetadataHistory() {
+  if (!state.metadataSelectedId) return;
+  try {
+    const result = await fetchApi(`/metadata/history?trackId=${encodeURIComponent(state.metadataSelectedId)}&limit=100`);
+    state.metadataHistory = result.items || [];
+    renderMetadataHistory();
+  } catch (err) {
+    const root = document.getElementById("metadata-history");
+    if (root) root.innerHTML = `<p class="metadata-empty text-red">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderMetadataHistory() {
+  const root = document.getElementById("metadata-history");
+  if (!root) return;
+  if (!state.metadataHistory.length) {
+    root.innerHTML = `<p class="metadata-empty">История появится после применения первого предложения.</p>`;
+    return;
+  }
+  root.innerHTML = `<div class="metadata-history-actions"><span>${state.metadataHistorySelectedIds.size ? `Выбрано полей: ${state.metadataHistorySelectedIds.size}` : "Выберите изменения для точечного отката"}</span><button type="button" class="btn btn-secondary" ${state.metadataHistorySelectedIds.size ? "" : "disabled"} onclick="revertMetadataHistory()">Откатить выбранные</button></div>` + state.metadataHistory.map(item => {
+    const oldValue = item.oldValue ?? null;
+    const newValue = item.newValue ?? null;
+    const reverted = !!item.revertedByProposalId;
+    return `<label class="metadata-history-row ${reverted ? "is-reverted" : ""}"><input type="checkbox" ${state.metadataHistorySelectedIds.has(item.id) ? "checked" : ""} ${reverted ? "disabled" : ""} onchange="toggleMetadataHistorySelection(${item.id}, this.checked)"><span><strong>${escapeHtml(item.field)}</strong><span class="metadata-history-diff">${escapeHtml(historyValueLabel(oldValue))} → ${escapeHtml(historyValueLabel(newValue))}</span><small>Предложение #${item.proposalId} · ${escapeHtml(item.source || "manual")} · ${escapeHtml(item.actor || "system")} · ${new Date(item.createdAt * 1000).toLocaleString("ru-RU")}${reverted ? ` · откат #${item.revertedByProposalId}` : ""}</small></span></label>`;
+  }).join("");
+}
+
+function toggleMetadataHistorySelection(id, selected) {
+  if (selected) {
+    const field = state.metadataHistory.find(item => item.id === id)?.field;
+    state.metadataHistory.filter(item => item.field === field).forEach(item => state.metadataHistorySelectedIds.delete(item.id));
+    state.metadataHistorySelectedIds.add(id);
+  } else state.metadataHistorySelectedIds.delete(id);
+  renderMetadataHistory();
+}
+
+async function revertMetadataHistory() {
+  const historyIds = [...state.metadataHistorySelectedIds];
+  if (!historyIds.length) return;
+  try {
+    const preview = await fetchApi("/metadata/history/revert/preview", "POST", { historyIds });
+    const details = (preview.changes || []).map(change => `${change.field}: ${historyValueLabel(change.before)} → ${historyValueLabel(change.after)}`);
+    if (!await confirmDialog({
+      title: "Откатить выбранные поля?",
+      message: preview.diverged ? "Текущие значения уже отличаются от этой записи истории. Проверьте изменения особенно внимательно." : "Откат будет создан как отдельное предложение в «Исправлениях».",
+      details,
+      confirmLabel: "Подготовить откат",
+      tone: preview.diverged ? "danger" : "default"
+    })) return;
+    const result = await fetchApi("/metadata/history/revert/apply", "POST", { historyIds, fingerprint: preview.fingerprint });
+    state.metadataHistorySelectedIds.clear();
+    showToast(`Откат подготовлен (предложение #${result.stagingId})`, "success");
+  } catch (err) { showToast(`Не удалось подготовить откат: ${err.message}`, "error"); }
+}
+
+async function refreshMetadataTrack() {
+  if (!state.metadataSelectedId) return;
+  try { await fetchApi("/metadata/refresh", "POST", { trackId: state.metadataSelectedId }); showToast("Обновление источников запущено", "info"); pollMetadataAuditStatus(); }
+  catch (err) { showToast(`Не удалось запустить обновление: ${err.message}`, "error"); }
+}
+
+async function analyzeMetadataTrack() {
+  if (!state.metadataSelectedId) return;
+  try {
+    await fetchApi("/metadata/analyze", "POST", { trackId: state.metadataSelectedId });
+    showToast("Измерение громкости запущено", "info");
+    setTimeout(() => selectMetadataTrack(state.metadataSelectedId), 3500);
+  } catch (err) { showToast(`Не удалось запустить измерение: ${err.message}`, "error"); }
+}
+
+async function runMetadataNFO(action) {
+  const folderPath = state.metadataDetail?.track?.folderPath;
+  if (!folderPath) return;
+  try { const result = await fetchApi("/metadata/nfo", "POST", { folderPath, action }); showToast(`Создано предложений: ${result.created || 0}`, "success"); }
+  catch (err) { showToast(`Операция NFO не выполнена: ${err.message}`, "error"); }
+}
+
+async function stageMetadataReplayGain() {
+  const targetLufs = parseFloat(metadataFormValue("md-target-lufs"));
+  try { await fetchApi("/metadata/replaygain", "POST", { trackId: state.metadataSelectedId, targetLufs }); showToast("Теги ReplayGain добавлены в исправления", "success"); }
+  catch (err) { showToast(`ReplayGain не подготовлен: ${err.message}`, "error"); }
+}
+
+function metadataArtworkScopeID(scope = "album") {
+  const track = state.metadataDetail?.track || {};
+  if (scope === "artist") return metadataExternalID("musicbrainz_artist") || track.albumArtist || track.artist || state.metadataSelectedId;
+  return metadataExternalID("musicbrainz_release") || track.folderPath || track.album || state.metadataSelectedId;
+}
+
+function syncMetadataArtworkScope() {
+  const role = metadataFormValue("md-art-role");
+  const scope = document.getElementById("md-art-scope");
+  if (!scope) return;
+  if (role === "artist_primary") scope.value = "artist";
+  if (role === "album_primary" || role === "disc") scope.value = "album";
+}
+
+async function stageMetadataArtwork() {
+  const url = metadataFormValue("md-art-url");
+  const scope = metadataFormValue("md-art-scope") || "album";
+  const scopeId = metadataArtworkScopeID(scope);
+  const role = metadataFormValue("md-art-role");
+  const width = metadataFormNumber("md-art-width"), height = metadataFormNumber("md-art-height");
+  const folderPath = state.metadataDetail?.track?.folderPath;
+  try {
+    await fetchApi("/metadata/artwork", "POST", { scope, scopeId, folderPath, role, candidates: [{ url, source: "manual", width, height, score: 80 }] });
+    showToast("Изображение добавлено в исправления", "success");
+  } catch (err) { showToast(`Изображение не подготовлено: ${err.message}`, "error"); }
+}
+
+async function loadMetadataArtwork() {
+  const list = document.getElementById("metadata-artwork-list");
+  if (!list || !state.metadataDetail) return;
+  try {
+    const results = await Promise.all(["album", "artist"].map(async scope => {
+      const result = await fetchApi(`/metadata/artwork?scope=${scope}&scopeId=${encodeURIComponent(metadataArtworkScopeID(scope))}`);
+      return (result.items || []).map(item => ({ ...item, scope }));
+    }));
+    const items = results.flat();
+    list.innerHTML = items.length ? items.map(item => `<div class="metadata-list-row"><span>${item.scope === "artist" ? "Исполнитель" : "Альбом"} · ${escapeHtml(item.role)}</span><span class="mono">${item.width}×${item.height}</span></div>`).join("") : `<span class="metadata-section-note">Сохранённых ролей пока нет.</span>`;
+  } catch (err) { list.innerHTML = `<span class="metadata-section-note">${escapeHtml(err.message)}</span>`; }
+}
+
+async function refreshMetadataSimilar(artistMbid) {
+  if (!artistMbid) return;
+  try { await fetchApi("/metadata/similar", "POST", { artistMbid, limit: 12 }, 30000); await loadMetadataSimilar(); showToast("Список похожих исполнителей обновлён", "success"); }
+  catch (err) { showToast(`Не удалось обновить список: ${err.message}`, "error"); }
+}
+
+async function loadMetadataSimilar() {
+  const list = document.getElementById("metadata-similar-list");
+  const artistMbid = metadataExternalID("musicbrainz_artist");
+  if (!list || !artistMbid) return;
+  try {
+    const result = await fetchApi(`/metadata/similar?artistMbid=${encodeURIComponent(artistMbid)}`);
+    list.innerHTML = (result.items || []).length ? result.items.map(item => `<div class="metadata-list-row"><span>${escapeHtml(item.name)}</span><span class="mono">${Math.round((item.score || 0) * 100)}%</span></div>`).join("") : `<span class="metadata-section-note">Список ещё не загружен.</span>`;
+  } catch (err) { list.innerHTML = `<span class="metadata-section-note">${escapeHtml(err.message)}</span>`; }
+}
+
+function renderMetadataPolicy() {
+  const root = document.getElementById("metadata-policy-rules");
+  if (!root) return;
+  const labels = { manual: "Ручные правки", audio_file: "Теги файла", nfo: "NFO", musicbrainz: "MusicBrainz", derived: "Расчётные", navidrome: "Navidrome", legacy: "Совместимость" };
+  root.innerHTML = (state.metadataPolicy?.rules || []).map((rule, index) => `<div class="metadata-policy-row" data-policy-index="${index}">
+    <span>${escapeHtml(labels[rule.source] || rule.source)}${rule.provider ? ` · ${escapeHtml(rule.provider)}` : ""}</span>
+    <input class="form-input mono" data-policy="priority" aria-label="Приоритет: ${escapeHtml(labels[rule.source] || rule.source)}" type="number" min="0" max="100000" value="${rule.priority}">
+    <select class="form-select" data-policy="mode" aria-label="Режим обновления: ${escapeHtml(labels[rule.source] || rule.source)}"><option value="priority" ${rule.refreshMode === "priority" ? "selected" : ""}>По приоритету</option><option value="missing_only" ${rule.refreshMode === "missing_only" ? "selected" : ""}>Только пустые</option><option value="newer" ${rule.refreshMode === "newer" ? "selected" : ""}>Только новее</option><option value="never" ${rule.refreshMode === "never" ? "selected" : ""}>Не обновлять</option></select>
+    <input class="form-input mono" data-policy="confidence" aria-label="Минимальная уверенность: ${escapeHtml(labels[rule.source] || rule.source)}" type="number" min="0" max="1" step="0.05" value="${rule.minConfidence}">
+    <label class="metadata-checkbox"><input data-policy="enabled" type="checkbox" ${rule.enabled ? "checked" : ""}> Вкл.</label>
+  </div>`).join("");
+}
+
+async function saveMetadataPolicy() {
+  const rows = Array.from(document.querySelectorAll("[data-policy-index]"));
+  const original = state.metadataPolicy?.rules || [];
+  const rules = rows.map((row, index) => ({
+    source: original[index].source, provider: original[index].provider || "", priority: parseInt(row.querySelector('[data-policy="priority"]').value, 10),
+    refreshMode: row.querySelector('[data-policy="mode"]').value, enabled: row.querySelector('[data-policy="enabled"]').checked,
+    minConfidence: parseFloat(row.querySelector('[data-policy="confidence"]').value)
+  }));
+  try { state.metadataPolicy = await fetchApi("/metadata/policy", "PUT", { rules }); renderMetadataPolicy(); showToast("Порядок источников сохранён", "success"); }
+  catch (err) { showToast(`Порядок не сохранён: ${err.message}`, "error"); }
+}
+
+async function loadMetadataRecovery() {
+  const root = document.getElementById("metadata-recovery-status");
+  if (!root) return;
+  try {
+    const result = await fetchApi("/metadata/writeback");
+    root.classList.toggle("is-ok", result.healthy);
+    root.classList.toggle("is-warning", !result.healthy);
+    root.textContent = result.healthy ? "Запись файлов: восстановление не требуется" : `Запись файлов: незавершённых ${result.incomplete}, ожидают сверки ${result.unreconciled}`;
+  } catch (err) { root.textContent = `Состояние записи недоступно: ${err.message}`; }
+}
+
+async function runMetadataLibraryAudit() {
+  try { await fetchApi("/scan/audit", "POST", { limitFolders: 100 }); showToast("Проверка медиатеки запущена", "info"); pollMetadataAuditStatus(); }
+  catch (err) { showToast(`Не удалось запустить проверку: ${err.message}`, "error"); }
+}
+
+async function pollMetadataAuditStatus() {
+  const badge = document.getElementById("metadata-audit-status");
+  if (!badge) return;
+  try {
+    const status = await fetchApi("/scan/audit");
+    badge.textContent = status.running ? (status.trackId ? "Проверяется трек" : "Проверяется медиатека") : status.finishedAt ? (status.error ? "Проверка завершилась с ошибкой" : `Готово · предложений ${status.created || 0}`) : "Аудит не запущен";
+    if (!status.running && status.finishedAt && state.activeTab === "metadata") loadMetadataRecovery();
+  } catch (err) { badge.textContent = "Статус аудита недоступен"; }
 }
 
 async function deleteTrackLyrics(trackId) {
@@ -1919,16 +2510,19 @@ async function enqueueWhisperKaraoke() {
 // -----------------------------------------------------------------------------
 // 5. Staging-буфер рефакторинга: Side-by-Side обложки и чистый диф тегов
 // -----------------------------------------------------------------------------
-async function loadStagingData() {
+async function loadStagingData(append = false) {
   const container = document.getElementById("staging-cards-container");
   if (!container) return;
 
   try {
-    const res = await fetchApi("/staging?status=pending");
-    state.stagingItems = res.items || [];
+    const cursor = append && state.stagingNextCursor ? `&cursor=${encodeURIComponent(state.stagingNextCursor)}` : "";
+    const res = await fetchApi(`/staging?status=pending&limit=100${cursor}`);
+    state.stagingItems = append ? state.stagingItems.concat(res.items || []) : (res.items || []);
+    state.stagingNextCursor = res.nextCursor || "";
   } catch (err) {
     console.error("Ошибка загрузки Staging:", err);
-    state.stagingItems = [];
+    if (!append) state.stagingItems = [];
+    state.stagingNextCursor = "";
   }
 
   const badgeStaging = document.getElementById("badge-staging-count");
@@ -2129,7 +2723,7 @@ async function loadStagingData() {
         ` : ""}
       </div>
     `;
-  }).join("");
+  }).join("") + (state.stagingNextCursor ? `<div class="staging-load-more"><button type="button" class="btn btn-secondary" onclick="loadStagingData(true)">Показать ещё исправления</button></div>` : "");
 }
 
 async function applyStaging(id) {

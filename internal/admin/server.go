@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/F5GO/poisq/internal/ai"
 	"github.com/F5GO/poisq/internal/aligner"
@@ -54,7 +55,22 @@ type AdminServer struct {
 	biographyJobs interface {
 		Request(context.Context, string, bool) (<-chan struct{}, artistbio.JobState, error)
 	}
-	handler http.Handler
+	metadataRepo   *db.MetadataRepository
+	mediaInfoRepo  *db.MediaInfoRepository
+	policyRepo     *db.MetadataPolicyRepository
+	analysisRepo   *db.AudioAnalysisRepository
+	writebackRepo  *db.WritebackRepository
+	historyRepo    *db.MetadataHistoryRepository
+	analysisSvc    *metadata.AudioAnalysisService
+	analysisJobMu  sync.Mutex
+	analysisJobs   map[string]bool
+	analysisSlots  chan struct{}
+	nfoSvc         *metadata.NFOService
+	enrichmentRepo *db.MediaEnrichmentRepository
+	enrichmentSvc  *metadata.MediaEnrichmentService
+	auditMu        sync.RWMutex
+	auditStatus    metadataAuditStatus
+	handler        http.Handler
 }
 
 // NewAdminServer конструирует HTTP-сервер панели управления poisq.
@@ -91,6 +107,21 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/scan/sync", s.handleScanSync)
 	mux.HandleFunc("/api/v1/scan/audit", s.handleScanAudit)
+	mux.HandleFunc("/api/v1/metadata/track", s.handleMetadataTrack)
+	mux.HandleFunc("/api/v1/metadata/tags/preview", s.handleMetadataTagsPreview)
+	mux.HandleFunc("/api/v1/metadata/tags/apply", s.handleMetadataTagsApply)
+	mux.HandleFunc("/api/v1/metadata/history", s.handleMetadataHistory)
+	mux.HandleFunc("/api/v1/metadata/history/revert/preview", s.handleMetadataHistoryRevertPreview)
+	mux.HandleFunc("/api/v1/metadata/history/revert/apply", s.handleMetadataHistoryRevertApply)
+	mux.HandleFunc("/api/v1/metadata/lock", s.handleMetadataLock)
+	mux.HandleFunc("/api/v1/metadata/policy", s.handleMetadataPolicy)
+	mux.HandleFunc("/api/v1/metadata/refresh", s.handleMetadataRefresh)
+	mux.HandleFunc("/api/v1/metadata/nfo", s.handleMetadataNFO)
+	mux.HandleFunc("/api/v1/metadata/analyze", s.handleMetadataAnalyze)
+	mux.HandleFunc("/api/v1/metadata/replaygain", s.handleMetadataReplayGain)
+	mux.HandleFunc("/api/v1/metadata/artwork", s.handleMetadataArtwork)
+	mux.HandleFunc("/api/v1/metadata/similar", s.handleMetadataSimilar)
+	mux.HandleFunc("/api/v1/metadata/writeback", s.handleMetadataWriteback)
 
 	mux.HandleFunc("/api/v1/staging", s.handleStagingList)
 	mux.HandleFunc("/api/v1/staging/apply", s.handleStagingApply)

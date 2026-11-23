@@ -1,0 +1,198 @@
+/*
+ * poisq Docs — Токены дизайн-системы «Мастеринг» для VitePress
+ *
+ * Что делает этот код и для чего он нужен:
+ * Переносит цветовую палитру, типографику и радиусы из poisq Studio
+ * (internal/admin/ui/css/tokens.css) в CSS-переменные VitePress (--vp-*).
+ * Палитра строго монохромная (нейтральный серый в светлой теме, графит в тёмной),
+ * акцент — чёрный/белый, единственный цвет — красный для опасных предупреждений.
+ */
+
+:root {
+  /* ---------- Базовые токены poisq Studio (светлая тема) ---------- */
+  --bg-page: #EBEBEB;
+  --bg-surface: #F7F7F7;
+  --bg-surface-elevated: #FFFFFF;
+  --bg-surface-secondary: #EFEFEF;
+  --bg-subtle: #E3E3E3;
+  --bg-hover: #E8E8E8;
+
+  --border-subtle: #D4D4D4;
+  --border-medium: #BDBDBD;
+  --border-active: #111111;
+  --border-focus: rgba(17, 17, 17, 0.25);
+
+  --text-primary: #141414;
+  --text-secondary: #474747;
+  --text-muted: #5F5F5F;
+  --text-inverse: #F7F7F7;
+
+  --signal: #111111;
+  --signal-strong: #111111;
+  --signal-hover: #333333;
+  --signal-soft: #E4E4E4;
+  --signal-border: rgba(17, 17, 17, 0.35);
+
+  --color-red: #C0262D;
+  --color-red-bg: #FADEDF;
+  --color-red-border: rgba(192, 38, 45, 0.35);
+
+  --navbar-bg: #F7F7F7;
+  --navbar-border: #D4D4D4;
+
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  --scrollbar-thumb: #BDBDBD;
+  --scrollbar-thumb-hover: #9A9A9A;
+
+  /* ---------- Маппинг на переменные VitePress ---------- */
+  --vp-font-family-base: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --vp-font-family-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --vp-nav-height: 52px;
+  --vp-nav-logo-height: 22px;
+  --vp-layout-max-width: 1360px;
+
+  --vp-c-bg: var(--bg-surface);
+  --vp-c-bg-alt: var(--bg-page);
+  --vp-c-bg-elv: var(--bg-surface-elevated);
+  --vp-c-bg-soft: var(--bg-surface-secondary);
+
+  --vp-c-border: var(--border-subtle);
+  --vp-c-divider: var(--border-subtle);
+  --vp-c-gutter: var(--border-subtle);
+
+  --vp-c-text-1: var(--text-primary);
+  --vp-c-text-2: var(--text-secondary);
+  --vp-c-text-3: var(--text-muted);
+
+  --vp-c-default-1: var(--text-primary);
+  --vp-c-default-2: var(--text-secondary);
+  --vp-c-default-3: var(--text-muted);
+  --vp-c-default-soft: var(--bg-subtle);
+
+  /* Акцент: чёрный (никакого фиолетового/синего) */
+  --vp-c-brand-1: var(--signal);
+  --vp-c-brand-2: var(--signal-hover);
+  --vp-c-brand-3: var(--signal-strong);
+  --vp-c-brand-soft: var(--signal-soft);
+
+  --vp-c-tip-1: var(--text-primary);
+  --vp-c-tip-2: var(--text-secondary);
+  --vp-c-tip-3: var(--signal);
+  --vp-c-tip-soft: var(--bg-surface-secondary);
+
+  --vp-c-warning-1: var(--text-primary);
+  --vp-c-warning-2: var(--text-secondary);
+  --vp-c-warning-3: #555555;
+  --vp-c-warning-soft: #EDEDED;
+
+  --vp-c-danger-1: var(--color-red);
+  --vp-c-danger-2: var(--color-red);
+  --vp-c-danger-3: var(--color-red);
+  --vp-c-danger-soft: var(--color-red-bg);
+
+  --vp-c-important-1: var(--text-primary);
+  --vp-c-important-2: var(--text-secondary);
+  --vp-c-important-3: var(--signal);
+  --vp-c-important-soft: var(--bg-subtle);
+
+  /* Кнопки */
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-text: var(--text-inverse);
+  --vp-button-brand-bg: var(--signal-strong);
+  --vp-button-brand-hover-border: transparent;
+  --vp-button-brand-hover-text: var(--text-inverse);
+  --vp-button-brand-hover-bg: var(--signal-hover);
+  --vp-button-brand-active-border: transparent;
+  --vp-button-brand-active-text: var(--text-inverse);
+  --vp-button-brand-active-bg: var(--signal-strong);
+
+  --vp-button-alt-border: var(--border-medium);
+  --vp-button-alt-text: var(--text-primary);
+  --vp-button-alt-bg: var(--bg-surface-elevated);
+  --vp-button-alt-hover-border: var(--text-muted);
+  --vp-button-alt-hover-text: var(--text-primary);
+  --vp-button-alt-hover-bg: var(--bg-hover);
+
+  /* Hero без градиентов */
+  --vp-home-hero-name-color: var(--text-primary);
+  --vp-home-hero-name-background: none;
+  --vp-home-hero-image-background-image: none;
+  --vp-home-hero-image-filter: none;
+
+  /* Код */
+  --vp-code-block-bg: #141414;
+  --vp-code-tab-bg: #1C1C1C;
+  --vp-code-tab-divider: rgba(255, 255, 255, 0.08);
+  --vp-code-tab-text-color: #9A9A9A;
+  --vp-code-tab-active-text-color: #F2F2F2;
+  --vp-code-tab-active-bar-color: #F2F2F2;
+  --vp-code-color: var(--text-primary);
+  --vp-code-bg: var(--bg-subtle);
+  --vp-code-line-highlight-color: rgba(255, 255, 255, 0.08);
+
+  /* Навбар и сайдбар */
+  --vp-nav-bg-color: var(--navbar-bg);
+  --vp-sidebar-bg-color: var(--bg-surface-secondary);
+  --vp-local-nav-bg-color: var(--navbar-bg);
+
+  /* Кастомные блоки */
+  --vp-custom-block-info-bg: var(--bg-surface-secondary);
+  --vp-custom-block-info-border: var(--border-subtle);
+  --vp-custom-block-tip-bg: var(--bg-surface-secondary);
+  --vp-custom-block-tip-border: var(--border-subtle);
+  --vp-custom-block-warning-bg: #EDEDED;
+  --vp-custom-block-warning-border: var(--border-medium);
+  --vp-custom-block-danger-bg: var(--color-red-bg);
+  --vp-custom-block-danger-border: var(--color-red-border);
+  --vp-custom-block-danger-text: var(--color-red);
+}
+
+/* ---------- Тёмная тема: графит без оттенка ---------- */
+.dark {
+  --bg-page: #0E0E0E;
+  --bg-surface: #161616;
+  --bg-surface-elevated: #1E1E1E;
+  --bg-surface-secondary: #1A1A1A;
+  --bg-subtle: #232323;
+  --bg-hover: #202020;
+
+  --border-subtle: #2D2D2D;
+  --border-medium: #3E3E3E;
+  --border-active: #F2F2F2;
+  --border-focus: rgba(242, 242, 242, 0.35);
+
+  --text-primary: #EDEDED;
+  --text-secondary: #A8A8A8;
+  --text-muted: #8C8C8C;
+  --text-inverse: #0E0E0E;
+
+  --signal: #F2F2F2;
+  --signal-strong: #F2F2F2;
+  --signal-hover: #D0D0D0;
+  --signal-soft: rgba(242, 242, 242, 0.12);
+  --signal-border: rgba(242, 242, 242, 0.4);
+
+  --color-red: #FF7B80;
+  --color-red-bg: rgba(255, 123, 128, 0.14);
+  --color-red-border: rgba(255, 123, 128, 0.4);
+
+  --navbar-bg: #161616;
+  --navbar-border: #2D2D2D;
+
+  --scrollbar-thumb: #3E3E3E;
+  --scrollbar-thumb-hover: #5A5A5A;
+
+  --vp-c-warning-3: #A8A8A8;
+  --vp-c-warning-soft: rgba(242, 242, 242, 0.07);
+  --vp-custom-block-warning-bg: rgba(242, 242, 242, 0.05);
+  --vp-custom-block-warning-border: var(--border-medium);
+
+  --vp-code-block-bg: #0E0E0E;
+  --vp-code-tab-bg: #161616;
+  --vp-code-bg: #232323;
+}

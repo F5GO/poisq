@@ -42,6 +42,7 @@ var allowedWriteExts = map[string]bool{
 	".jpg":  true,
 	".jpeg": true,
 	".png":  true,
+	".nfo":  true,
 }
 
 // PathGuard проверяет и нормализует пути внутри примонтированной медиатеки.

@@ -32,3 +32,8 @@ __pycache__/
 
 # Чужие репозитории для подсматривания (не коммитим)
 references/
+
+# Зависимости и сборка документации VitePress
+docs/node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/

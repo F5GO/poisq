@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/F5GO/poisq/internal/httpclient"
 )
@@ -37,13 +38,34 @@ type MBArtistInfo struct {
 
 // MBReleaseInfo содержит данные официального альбома/релиза из MusicBrainz.
 type MBReleaseInfo struct {
-	ReleaseMBID     string `json:"releaseMbid"`
-	ArtistMBID      string `json:"artistMbid"`
-	CanonicalArtist string `json:"canonicalArtist"`
-	AlbumTitle      string `json:"albumTitle"`
-	Year            int    `json:"year"`
-	TrackCount      int    `json:"trackCount"`
-	Score           int    `json:"score"`
+	ReleaseMBID      string `json:"releaseMbid"`
+	ReleaseGroupMBID string `json:"releaseGroupMbid"`
+	ArtistMBID       string `json:"artistMbid"`
+	CanonicalArtist  string `json:"canonicalArtist"`
+	AlbumTitle       string `json:"albumTitle"`
+	Year             int    `json:"year"`
+	TrackCount       int    `json:"trackCount"`
+	Score            int    `json:"score"`
+}
+
+type MBReleaseTrack struct {
+	ReleaseTrackMBID string `json:"releaseTrackMbid"`
+	RecordingMBID    string `json:"recordingMbid"`
+	Title            string `json:"title"`
+	DiscNumber       int    `json:"discNumber"`
+	TrackNumber      int    `json:"trackNumber"`
+	DurationMillis   int    `json:"durationMillis"`
+}
+
+type MBReleaseDetails struct {
+	ReleaseMBID      string           `json:"releaseMbid"`
+	ReleaseGroupMBID string           `json:"releaseGroupMbid"`
+	Tracks           []MBReleaseTrack `json:"tracks"`
+}
+
+type MBTrackMatch struct {
+	Track MBReleaseTrack `json:"track"`
+	Score int            `json:"score"`
 }
 
 // MBReleaseGroupInfo is a canonical release-group entry belonging to one
@@ -93,6 +115,9 @@ type mbReleaseSearchResp struct {
 		Score        int    `json:"score"`
 		Date         string `json:"date"`
 		TrackCount   int    `json:"track-count"`
+		ReleaseGroup struct {
+			ID string `json:"id"`
+		} `json:"release-group"`
 		ArtistCredit []struct {
 			Name   string `json:"name"`
 			Artist struct {
@@ -101,6 +126,27 @@ type mbReleaseSearchResp struct {
 			} `json:"artist"`
 		} `json:"artist-credit"`
 	} `json:"releases"`
+}
+
+type mbReleaseDetailsResp struct {
+	ID           string `json:"id"`
+	ReleaseGroup struct {
+		ID string `json:"id"`
+	} `json:"release-group"`
+	Media []struct {
+		Position int `json:"position"`
+		Tracks   []struct {
+			ID        string `json:"id"`
+			Position  int    `json:"position"`
+			Number    string `json:"number"`
+			Title     string `json:"title"`
+			Length    int    `json:"length"`
+			Recording struct {
+				ID    string `json:"id"`
+				Title string `json:"title"`
+			} `json:"recording"`
+		} `json:"tracks"`
+	} `json:"media"`
 }
 
 type mbReleaseGroupBrowseResp struct {
@@ -481,11 +527,14 @@ func escapeLuceneQuery(s string) string {
 }
 
 func validMusicBrainzID(value string) bool {
-	if len(value) < 8 || len(value) > 64 {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
 		return false
 	}
-	for _, r := range value {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') && r != '-' {
+	for index, r := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
 			return false
 		}
 	}
@@ -560,14 +609,136 @@ func (mb *MusicBrainzClient) LookupRelease(ctx context.Context, artist, album st
 	}
 
 	return &MBReleaseInfo{
-		ReleaseMBID:     top.ID,
-		ArtistMBID:      artistMBID,
-		CanonicalArtist: NormalizeNFC(canonicalArtist),
-		AlbumTitle:      NormalizeNFC(top.Title),
-		Year:            year,
-		TrackCount:      top.TrackCount,
-		Score:           top.Score,
+		ReleaseMBID:      top.ID,
+		ReleaseGroupMBID: top.ReleaseGroup.ID,
+		ArtistMBID:       artistMBID,
+		CanonicalArtist:  NormalizeNFC(canonicalArtist),
+		AlbumTitle:       NormalizeNFC(top.Title),
+		Year:             year,
+		TrackCount:       top.TrackCount,
+		Score:            top.Score,
 	}, nil
+}
+
+func (mb *MusicBrainzClient) LookupReleaseDetails(ctx context.Context, releaseMBID string) (*MBReleaseDetails, error) {
+	releaseMBID = strings.TrimSpace(releaseMBID)
+	if !validMusicBrainzID(releaseMBID) {
+		return nil, fmt.Errorf("invalid MusicBrainz release id")
+	}
+	endpoint := fmt.Sprintf("%s/release/%s?inc=recordings+release-groups&fmt=json", mb.baseURL, url.PathEscape(releaseMBID))
+	body, status, _, err := mb.rc.DoWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", musicBrainzUserAgent)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("MusicBrainz release details: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("MusicBrainz release details failed")
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("MusicBrainz release details HTTP %d", status)
+	}
+	var parsed mbReleaseDetailsResp
+	if err := json.Unmarshal(body, &parsed); err != nil || !strings.EqualFold(parsed.ID, releaseMBID) {
+		return nil, fmt.Errorf("invalid MusicBrainz release details response")
+	}
+	if len(parsed.Media) > 20 {
+		return nil, fmt.Errorf("MusicBrainz release has too many media")
+	}
+	result := &MBReleaseDetails{ReleaseMBID: releaseMBID}
+	if validMusicBrainzID(parsed.ReleaseGroup.ID) {
+		result.ReleaseGroupMBID = parsed.ReleaseGroup.ID
+	}
+	for _, medium := range parsed.Media {
+		if len(medium.Tracks) > 500 || len(result.Tracks)+len(medium.Tracks) > 500 {
+			return nil, fmt.Errorf("MusicBrainz release has too many tracks")
+		}
+		for _, track := range medium.Tracks {
+			if !validMusicBrainzID(track.ID) || !validMusicBrainzID(track.Recording.ID) {
+				continue
+			}
+			title := NormalizeNFC(strings.TrimSpace(track.Title))
+			if title == "" {
+				title = NormalizeNFC(strings.TrimSpace(track.Recording.Title))
+			}
+			position := track.Position
+			if position <= 0 {
+				position, _ = strconv.Atoi(track.Number)
+			}
+			if title == "" || position <= 0 || position > 99999 || medium.Position <= 0 || medium.Position > 99999 || track.Length < 0 {
+				continue
+			}
+			result.Tracks = append(result.Tracks, MBReleaseTrack{
+				ReleaseTrackMBID: track.ID, RecordingMBID: track.Recording.ID, Title: title,
+				DiscNumber: medium.Position, TrackNumber: position, DurationMillis: track.Length,
+			})
+		}
+	}
+	return result, nil
+}
+
+func MatchMusicBrainzTrack(title string, trackNumber, discNumber, durationSeconds int, details *MBReleaseDetails) (*MBTrackMatch, bool) {
+	if details == nil || strings.TrimSpace(title) == "" || len(details.Tracks) == 0 {
+		return nil, false
+	}
+	normalizedTitle := comparableMusicTitle(title)
+	bestScore := -1
+	bestIndex := -1
+	tied := false
+	for index, candidate := range details.Tracks {
+		positionMatch := trackNumber > 0 && candidate.TrackNumber == trackNumber && (discNumber <= 0 || candidate.DiscNumber == discNumber)
+		titleMatch := normalizedTitle != "" && comparableMusicTitle(candidate.Title) == normalizedTitle
+		durationMatch := durationSeconds > 0 && candidate.DurationMillis > 0 && absInt(candidate.DurationMillis-durationSeconds*1000) <= 5000
+		if !(positionMatch && (titleMatch || durationMatch)) && !(titleMatch && durationMatch) {
+			continue
+		}
+		score := 0
+		if positionMatch {
+			score += 45
+		}
+		if discNumber > 0 && candidate.DiscNumber == discNumber {
+			score += 10
+		}
+		if titleMatch {
+			score += 30
+		}
+		if durationMatch {
+			score += 15
+		}
+		if score > bestScore {
+			bestScore, bestIndex, tied = score, index, false
+		} else if score == bestScore {
+			tied = true
+		}
+	}
+	if bestIndex < 0 || tied {
+		return nil, false
+	}
+	return &MBTrackMatch{Track: details.Tracks[bestIndex], Score: bestScore}, true
+}
+
+func comparableMusicTitle(value string) string {
+	value = strings.ToLower(NormalizeNFC(strings.TrimSpace(value)))
+	var builder strings.Builder
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 // ArtistNames возвращает каноничное имя артиста и его реальные алиасы из MusicBrainz
