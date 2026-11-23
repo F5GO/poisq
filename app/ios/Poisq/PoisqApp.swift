@@ -7,7 +7,7 @@ struct PoisqApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel.shared
 
-    init() { SystemIntegration.shared.start() }      // виджеты, Live Activity, Spotlight, команды Siri
+    init() { SystemIntegration.shared.start() }      // виджеты, Spotlight, команды Siri
 
     var body: some Scene {
         WindowGroup {

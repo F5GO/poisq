@@ -8,12 +8,34 @@ private final class HomeModel {
     var playlists: [Playlist] = []
     var favoriteSongs: [Song] = []
     var favoriteArtists: [Artist] = []
+    /// «Быстрый выбор»: похожие на недавнее, любимые и случайные треки.
+    var quickPicks: [Song] = []
+    /// Заранее собранные первые порции станций: обложка карточки — первый трек, запуск — без ожидания сети.
+    var stationLists: [String: [Song]] = [:]
+    /// «Новое в медиатеке»: треки недавно добавленных альбомов вперемешку. Тот же список играет станция «Новое».
+    var newSongs: [Song] = []
     var isLoading = false
     var failed = false
+    /// Первая загрузка завершилась: до неё на месте «Быстрого выбора» заглушка, чтобы главная не прыгала.
+    var loadedOnce = false
+    /// «Быстрый выбор» и станции не пересобираются при каждом появлении главной, иначе список меняется под пальцем.
+    private var builtKey = ""
+    private var builtAt = Date.distantPast
+    private var preparing: Set<String> = []
+    /// Станции, чей список пора обновить. Старый список (и обложка) остаётся на карточке, пока не придёт новый.
+    private var refreshNeeded: Set<String> = []
+    /// Меняется при смене сервера или медиатеки: ответы для прежней медиатеки отбрасываются.
+    private var generation = 0
+    private static let rebuildInterval: TimeInterval = 3 * 3600
+
+    private static func similar(to seed: Song?, client: SubsonicClient) async -> [Song] {
+        guard let seed else { return [] }
+        return (try? await client.similarSongs(id: seed.id, count: 12)) ?? []
+    }
 
     /// Базовая загрузка стандартным API: только видимые блоки, параллельно.
     /// (Расширение poisq позже заменит это одним запросом.)
-    func load(client: SubsonicClient?, library: String?, items: [HomeItem]) async {
+    func load(client: SubsonicClient?, library: String?, items: [HomeItem], seed: Song?, key: String, force: Bool) async {
         guard let client else { return }
         // Недавние и случайные альбомы нужны быстрым действиям, даже если их полки скрыты.
         let requested = Set(items.filter { $0.albumListType != nil }).union([.recent, .random])
@@ -22,14 +44,23 @@ private final class HomeModel {
         let needsStarred = true
         guard !wanted.isEmpty || needsStarred || items.contains(.playlists) else { albums = [:]; failed = false; return }
         isLoading = true
-        defer { isLoading = false }
+        defer { isLoading = false; loadedOnce = true }
         // Остальные блоки (плейлисты, избранные песни и артисты) — своими запросами, ошибка одного не ломает главную.
         async let pl: [Playlist]? = items.contains(.playlists) ? try? await client.playlists() : nil
         async let st: SearchResults? = needsStarred ? try? await client.starred(musicFolderId: library) : nil
+        // Пересобираем по запросу (потянули вниз), при смене сервера или медиатеки и раз в несколько часов.
+        let fresh = force || key != builtKey || Date().timeIntervalSince(builtAt) > Self.rebuildInterval
+        let wantsPicks = fresh && items.contains(.quickPicks)
+        async let rnd: [Song]? = wantsPicks ? try? await client.randomSongs(count: 20, musicFolderId: library) : nil
+        let wantsNew = fresh && items.contains(.newSongs)
+        async let fetchedNew: [Song] = wantsNew ? HomeStarter.prepare(.newest, client: client, folder: library, favorites: []) : []
         let (gotPlaylists, gotStarred) = await (pl, st)
         playlists = gotPlaylists ?? []
         favoriteSongs = gotStarred?.songs ?? []
         favoriteArtists = Array((gotStarred?.artists ?? []).prefix(20))
+        // Похожие — на то, что играет, иначе на случайный любимый; идут параллельно с полками альбомов.
+        let pickSeed = wantsPicks ? (seed ?? favoriteSongs.randomElement()) : nil
+        async let sim = Self.similar(to: pickSeed, client: client)
         guard !wanted.isEmpty else { albums = [:]; failed = false; return }
         var loaded: [HomeItem: [Album]] = [:]
         var errors = 0
@@ -44,11 +75,70 @@ private final class HomeModel {
         }
         failed = errors == wanted.count
         if !failed { albums = loaded }     // при частичной ошибке оставляем то, что загрузилось
+        if wantsPicks {
+            let picks = HomeMix.quickPicks(similar: await sim, favorites: favoriteSongs.shuffled(), random: await rnd ?? [])
+            if !picks.isEmpty { quickPicks = picks }   // сервер не ответил — оставляем прежний список
+        }
+        if fresh && gotStarred != nil {
+            if key != builtKey {
+                quickPicks = wantsPicks ? quickPicks : []
+                stationLists = [:]                  // чужая медиатека — старые станции не показываем
+                generation += 1
+            }
+            refreshNeeded = Set(stationLists.keys)  // вместе с быстрым выбором обновляются и станции
+            if wantsNew {
+                let fetched = await fetchedNew
+                if !fetched.isEmpty || key != builtKey { newSongs = fetched }
+                if !newSongs.isEmpty {
+                    stationLists[HomeStation.newest.id] = newSongs
+                    refreshNeeded.remove(HomeStation.newest.id)
+                }
+            }
+            builtKey = key
+            builtAt = Date()
+        }
     }
+
+    /// Готовит недостающие и устаревшие станции параллельно; каждая появляется, как только готова.
+    /// Работает в своей задаче, а не в задаче экрана: смена ключа `.task` или уход с главной не обрывает подготовку
+    /// на полпути (раньше оборванная станция так и оставалась без обложки).
+    func prepareStations(_ stations: [HomeStation], client: SubsonicClient?, folder: String?, favorites: [Song],
+                         warmCover: @escaping @MainActor @Sendable (String) async -> Void) {
+        guard let client else { return }
+        let ids = Set(stations.map(\.id))
+        stationLists = stationLists.filter { ids.contains($0.key) }      // сменился текущий трек — «Похоже на…» другая
+        refreshNeeded.formIntersection(ids)
+        let todo = stations.filter { (stationLists[$0.id] == nil || refreshNeeded.contains($0.id)) && !preparing.contains($0.id) }
+        guard !todo.isEmpty else { return }
+        preparing.formUnion(todo.map(\.id))
+        let gen = generation
+        Task { [weak self] in
+            await withTaskGroup(of: (String, [Song]).self) { group in
+                for station in todo {
+                    group.addTask { (station.id, await HomeStarter.prepare(station, client: client, folder: folder, favorites: favorites)) }
+                }
+                for await (id, songs) in group {
+                    guard let self else { continue }
+                    self.preparing.remove(id)
+                    // Не вышло — остаётся прежний список, попробуем при следующем показе главной.
+                    guard gen == self.generation, !songs.isEmpty else { continue }
+                    self.stationLists[id] = songs
+                    self.refreshNeeded.remove(id)
+                    // Обложку грузим сразу, не дожидаясь, пока карточка появится на экране.
+                    if let cover = songs.first?.coverArt { Task { await warmCover(cover) } }
+                }
+            }
+        }
+    }
+
+    /// Станция запущена — её список израсходован, в следующий раз будет новый.
+    func consume(_ station: HomeStation) { refreshNeeded.insert(station.id) }
 }
 
 private enum HomeDestination: Hashable {
     case downloads, queue
+    /// Трековый блок главной целиком.
+    case tracks(HomeItem)
 }
 
 /// Заголовок — имя сервера. Справа — кнопка-аватар с меню; по нажатию на заголовок — выбор сервера и медиатеки.
@@ -59,6 +149,7 @@ struct HomeView: View {
     @State private var editingTabs = false
     @Binding var path: NavigationPath
     @AppStorage("homeSongsMode") private var songsMode = false
+    @State private var chipBusy: HomeQuickAction?
 
     /// Меняется при смене сервера, медиатеки или набора видимых блоков.
     private var loadKey: String { model.contentKey + "|\(model.offline)|" + model.homeLayout.visible.map(\.rawValue).joined(separator: ",") }
@@ -87,15 +178,17 @@ struct HomeView: View {
                         } description: {
                             Text("Check the connection to the server.")
                         } actions: {
-                            Button("Retry") { Task { await reload() } }.buttonStyle(.glass)
+                            Button("Retry") { Task { await reload(force: true) } }.buttonStyle(.glass)
                         }
                     }
                 }
                 .padding(.vertical, 8)
             }
             .overlay { if home.albums.isEmpty && home.isLoading && !songsMode { ProgressView() } }
-            .refreshable { await reload() }
+            .refreshable { await reload(force: true) }
             .task(id: loadKey) { await reload() }
+            // Новый текущий трек или жанры после загрузки — дособираем станции.
+            .task(id: stations.map(\.id).joined(separator: "|")) { prepareStations() }
             .toolbarVisibility(.hidden, for: .navigationBar)
             // Панели навигации нет — системный эффект края прокрутки (iOS 26) мягко скрывает контент под статус-баром, без цветной плашки.
             .safeAreaBar(edge: .top, spacing: 0) { Color.clear.frame(height: 0) }
@@ -106,6 +199,7 @@ struct HomeView: View {
                 case .downloads: DownloadedView()
                 case .queue:
                     if let player = model.player { QueueView(player: player) }
+                case .tracks(let item): TrackList(title: item.title, songs: songs(for: item))
                 }
             }
             .sheet(isPresented: $editing) { HomeEditView() }
@@ -157,33 +251,71 @@ struct HomeView: View {
     }
 
     @ViewBuilder private var quickActions: some View {
-        let actions = model.homeLayout.visibleQuickActions
+        // Пустые источники не показываем; как только появится содержимое — чип встанет на своё место.
+        let actions = model.homeLayout.visibleQuickActions.filter(isAvailable)
         if !actions.isEmpty {
-            HStack(spacing: 8) {
-                ForEach(actions) { action in
-                    quickAction(action, expanded: actions.count < 4)
-                }
-            }
-            .padding(.horizontal, 20)
-            .animation(.snappy, value: actions.map(\.rawValue))
+            SourceChips(actions: actions,
+                        emphasizeFirst: model.player?.current == nil && actions.first == .flow,
+                        busy: chipBusy,
+                        isEnabled: isEnabled,
+                        run: run)
         }
     }
 
-    @ViewBuilder private func quickAction(_ action: HomeQuickAction, expanded: Bool) -> some View {
+    private func isAvailable(_ action: HomeQuickAction) -> Bool {
         switch action {
-        case .shuffleAll:
-            QuickActionTile(title: action.title, systemImage: action.icon, expanded: expanded) { shuffleAll() }
-        case .randomAlbum:
-            QuickActionTile(title: action.title, systemImage: action.icon, expanded: expanded) { openRandomAlbum() }
-                .disabled(randomAlbum == nil)
-        case .favoriteSongs:
-            QuickActionTile(title: action.title, systemImage: action.icon, expanded: expanded) { playFavorites() }
-                .disabled(activeFavoriteSongs.isEmpty)
-        case .downloads:
-            QuickActionTile(title: action.title, systemImage: action.icon, expanded: expanded) {
-                path.append(HomeDestination.downloads)
-            }
+        case .favoriteSongs: !activeFavoriteSongs.isEmpty
+        case .downloads: !model.downloadedSongs.isEmpty
+        case .randomAlbum: randomAlbum != nil
+        case .flow, .newest, .shuffleAll: true
         }
+    }
+
+    private func isEnabled(_ action: HomeQuickAction) -> Bool {
+        switch action {
+        case .flow, .newest: !model.offline
+        default: true
+        }
+    }
+
+    private func run(_ action: HomeQuickAction) {
+        switch action {
+        case .flow: startStation(.myFlow, from: action)
+        case .newest: startStation(.newest, from: action)
+        case .shuffleAll: shuffleAll()
+        case .downloads: playDownloads()
+        case .favoriteSongs: playFavorites()
+        case .randomAlbum: openRandomAlbum()
+        }
+    }
+
+    private func startStation(_ station: HomeStation, from chip: HomeQuickAction) {
+        chipBusy = chip
+        Task {
+            let started = await HomeStarter.start(station, app: model, favorites: activeFavoriteSongs,
+                                                  prepared: home.stationLists[station.id])
+            chipBusy = nil
+            if started { stationStarted(station) }
+        }
+    }
+
+    private func stationStarted(_ station: HomeStation) {
+        home.consume(station)
+        prepareStations()
+    }
+
+    private func prepareStations() {
+        guard !model.offline, model.homeLayout.visible.contains(where: { $0 == .stations || $0 == .quickActions }) else { return }
+        home.prepareStations(stations, client: model.client, folder: model.selectedLibraryID, favorites: activeFavoriteSongs) { [model] id in
+            _ = await model.coverImage(id, pixels: 500)              // тот же размер, что у CoverArtView на 150 pt
+        }
+    }
+
+    /// Загруженное вперемешку; пока ничего не загружено — открываем экран загрузок.
+    private func playDownloads() {
+        let songs = model.downloadedSongs
+        guard !songs.isEmpty else { path.append(HomeDestination.downloads); return }
+        model.player?.play(Array(songs.shuffled().prefix(200)))
     }
 
     private var randomAlbum: Album? {
@@ -194,6 +326,36 @@ struct HomeView: View {
     private var activeFavoriteSongs: [Song] {
         guard let player = model.player else { return home.favoriteSongs }
         return home.favoriteSongs.filter(player.isFavorite)
+    }
+
+    /// Мой поток, похожее на текущий трек, любимые жанры и новое в медиатеке.
+    private var stations: [HomeStation] {
+        var list: [HomeStation] = [.myFlow]
+        if let player = model.player, !player.isRadio, let current = player.current { list.append(.similar(current)) }
+        list += HomeMix.topGenres(home.favoriteSongs + home.quickPicks).map(HomeStation.genre)
+        list.append(.newest)
+        return list
+    }
+
+    private static let placeholderSongs = (0..<6).map { Song(id: "placeholder-\($0)", title: "Song title here", artist: "Artist name") }
+
+    private func songs(for item: HomeItem) -> [Song] {
+        switch item {
+        case .quickPicks: home.quickPicks
+        case .recentSongs: model.history.log.recent(limit: 50)
+        case .newSongs: home.newSongs
+        case .rediscover:
+            model.history.log.notRecently(from: activeFavoriteSongs, olderThan: 30 * 86_400, now: .now, limit: 50)
+        default: []
+        }
+    }
+
+    private func subtitle(for item: HomeItem) -> LocalizedStringKey? {
+        switch item {
+        case .newSongs: "From recently added albums"
+        case .rediscover: "Favorites you haven't played in a month"
+        default: nil
+        }
     }
 
     private var modeControls: [HomeItem] {
@@ -233,6 +395,27 @@ struct HomeView: View {
             if let player = model.player, player.current != nil {
                 ResumeQueueCard(player: player) { path.append(HomeDestination.queue) }
             }
+        } else if item == .quickPicks {
+            if !home.quickPicks.isEmpty {
+                TrackPagesSection(title: item.title, subtitle: "Similar to what you play", songs: home.quickPicks) {
+                    path.append(HomeDestination.tracks(item))
+                }
+            } else if !home.loadedOnce {
+                // Держим место под блок, пока он грузится: остальное не сдвигается, когда треки приходят.
+                TrackPagesSection(title: item.title, subtitle: "Similar to what you play", songs: Self.placeholderSongs)
+                    .redacted(reason: .placeholder)
+                    .allowsHitTesting(false)
+            }
+        } else if item == .recentSongs || item == .newSongs || item == .rediscover {
+            let songs = songs(for: item)
+            if !songs.isEmpty {
+                TrackPagesSection(title: item.title, subtitle: subtitle(for: item), songs: Array(songs.prefix(12))) {
+                    path.append(HomeDestination.tracks(item))
+                }
+            }
+        } else if item == .stations {
+            StationShelf(stations: stations, favorites: activeFavoriteSongs, prepared: home.stationLists,
+                         onStarted: stationStarted)
         } else if item == .playlists {
             if !home.playlists.isEmpty { PlaylistShelf(playlists: home.playlists) }
         } else if item == .favoriteSongs {
@@ -241,7 +424,7 @@ struct HomeView: View {
             if !home.favoriteArtists.isEmpty { ArtistShelf(artists: home.favoriteArtists) }
         } else if item == .recent {
             if let list = home.albums[.recent], !list.isEmpty {
-                RecentAlbumRows(albums: list)
+                AlbumPagesSection(title: item.title, albums: Array(list.prefix(model.homeLayout.recentlyPlayedLimit)))
             }
         } else if let list = home.albums[item], !list.isEmpty {
             AlbumShelf(title: item.title, albums: list)
@@ -285,9 +468,12 @@ struct HomeView: View {
         }
     }
 
-    private func reload() async {
+    private func reload(force: Bool = false) async {
         guard !model.offline else { return }
-        await home.load(client: model.client, library: model.selectedLibraryID, items: model.homeLayout.visible)
+        await home.load(client: model.client, library: model.selectedLibraryID, items: model.homeLayout.visible,
+                        seed: model.player?.isRadio == true ? nil : model.player?.current,
+                        key: model.contentKey, force: force)
+        prepareStations()
         model.player?.synchronizeFavorites(home.favoriteSongs)
     }
 }
@@ -327,39 +513,6 @@ struct ServerAvatar: View {
     }
 }
 
-/// Компактное системное действие в верхней части главной.
-private struct QuickActionTile: View {
-    let title: LocalizedStringKey
-    let systemImage: String
-    let expanded: Bool
-    let action: () -> Void
-
-    var body: some View {
-        VStack(spacing: 7) {
-            Button(action: action) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 19, weight: .semibold))
-                    .frame(maxWidth: expanded ? .infinity : nil)
-                    .frame(width: expanded ? nil : 52, height: 52)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.roundedRectangle(radius: 16))
-            .accessibilityLabel(title)
-            .frame(maxWidth: expanded ? .infinity : nil)
-
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-                .frame(maxWidth: .infinity, minHeight: 24, alignment: .top)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
 /// Горизонтальная полка с альбомами.
 private struct AlbumShelf: View {
     let title: LocalizedStringKey
@@ -378,75 +531,6 @@ private struct AlbumShelf: View {
                 .padding(.horizontal, 20)
             }
             .scrollTargetBehavior(.viewAligned)
-        }
-    }
-}
-
-/// Недавние альбомы — компактными строками, чтобы главная не состояла только из квадратных полок.
-private struct RecentAlbumRows: View {
-    @Environment(AppModel.self) private var model
-    let albums: [Album]
-    @State private var loadingAlbumID: String?
-    private var shown: [Album] { Array(albums.prefix(model.homeLayout.recentlyPlayedLimit)) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Recently Played").font(.title2.bold()).padding(.horizontal, 20)
-            VStack(spacing: 0) {
-                ForEach(Array(shown.enumerated()), id: \.element.id) { index, album in
-                    HStack(spacing: 12) {
-                        NavigationLink(value: album) {
-                            HStack(spacing: 12) {
-                                CoverArtView(id: album.coverArt, size: 58, radius: 10)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(album.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                                    Text(albumSubtitle(album)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .albumMenu(album)
-
-                        Button { play(album) } label: {
-                            if loadingAlbumID == album.id {
-                                ProgressView().controlSize(.small)
-                            } else {
-                                Image(systemName: "play.fill").font(.subheadline.weight(.semibold))
-                            }
-                        }
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.circle)
-                        .frame(width: 40, height: 40)
-                        .disabled(loadingAlbumID != nil)
-                        .accessibilityLabel("Play")
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    if index < shown.count - 1 {
-                        Divider().padding(.leading, 82)
-                    }
-                }
-            }
-            .background(.regularMaterial, in: .rect(cornerRadius: 18))
-            .padding(.horizontal, 20)
-        }
-    }
-
-    private func albumSubtitle(_ album: Album) -> String {
-        let count = album.songCount.map { String(localized: "\($0) songs") }
-        return [album.artist, count].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-
-    private func play(_ album: Album) {
-        guard loadingAlbumID == nil else { return }
-        loadingAlbumID = album.id
-        Task {
-            let local = model.downloadedSongs.filter { $0.albumId == album.id }.sorted { ($0.track ?? 0) < ($1.track ?? 0) }
-            let songs = model.offline ? local : ((try? await model.client?.album(id: album.id).songs) ?? local)
-            if !songs.isEmpty { model.player?.play(songs) }
-            loadingAlbumID = nil
         }
     }
 }
@@ -611,59 +695,64 @@ private struct SongRowsSection: View {
     }
 }
 
-/// Текущая сессия: системная карточка продолжения вместо дублирования нескольких строк очереди.
+/// Текущая сессия: крупная карточка в зоне большого пальца на системном стекле (Liquid Glass).
+/// Нажатие на карточку открывает очередь, круглая кнопка — пауза и продолжение.
 private struct ResumeQueueCard: View {
     let player: Player
     let openQueue: () -> Void
 
     var body: some View {
         if let song = player.current {
-            ZStack {
+            HStack(spacing: 14) {
                 Button(action: openQueue) {
-                    Color.clear
-                        .frame(maxWidth: .infinity, minHeight: 76)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Queue")
-
-                HStack(spacing: 13) {
-                    HStack(spacing: 13) {
-                        CoverArtView(id: song.coverArt, size: 76, radius: 14)
+                    HStack(spacing: 14) {
+                        CoverArtView(id: song.coverArt, size: 96, radius: 14)
+                            .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(player.isPlaying ? String(localized: "Now Playing") : String(localized: "Continue"))
-                                .font(.caption2.weight(.bold))
+                                .font(.caption.weight(.bold))
                                 .foregroundStyle(.tint)
                                 .textCase(.uppercase)
-                            Text(song.title).font(.headline).lineLimit(1)
-                            if player.upcoming.isEmpty {
-                                Text(song.displayArtist ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            } else {
+                            Text(song.title).font(.title3.weight(.semibold)).lineLimit(2)
+                            Text(song.displayArtist ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                            if !player.upcoming.isEmpty {
                                 Text("\(player.upcoming.count) songs").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             }
                         }
                         Spacer(minLength: 0)
                     }
-                    .allowsHitTesting(false)
-
-                    Button { player.togglePlayPause() } label: {
-                        Label {
-                            Text(player.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
-                                .font(.subheadline.weight(.semibold))
-                        } icon: {
-                            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                                .font(.subheadline.weight(.bold))
-                                .contentTransition(.symbolEffect(.replace))
-                        }
-                        .frame(width: 108, height: 52)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .buttonBorderShape(.capsule)
-                    .accessibilityLabel(player.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
+                    .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
+                .accessibilityHint("Queue")
+
+                // Стекло вместо сплошной заливки — кнопка не спорит с обложкой; кольцо вокруг показывает, сколько трека прошло.
+                Button { player.togglePlayPause() } label: {
+                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.tint)
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(width: 50, height: 50)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .overlay {
+                    let fraction = player.duration > 0 ? min(max(player.progress / player.duration, 0), 1) : 0
+                    ZStack {
+                        Circle().stroke(.secondary.opacity(0.25), lineWidth: 3)
+                        Circle()
+                            .trim(from: 0, to: fraction)
+                            .stroke(.tint, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                    .padding(-6)
+                    .allowsHitTesting(false)
+                }
+                .padding(6)
+                .accessibilityLabel(player.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
             }
-            .padding(12)
-            .background(.regularMaterial, in: .rect(cornerRadius: 22))
+            .padding(14)
+            .glassEffect(.regular, in: .rect(cornerRadius: 26))
             .padding(.horizontal, 20)
             .sensoryFeedback(.impact(weight: .light), trigger: player.isPlaying)
         }

@@ -60,7 +60,7 @@
 | CarPlay | 🟡 (код есть, нужен entitlement) | ✅ | ✅ | ✅ | ✅ | 🟡 |
 | Виджеты | ✅ | ? | ✅ | ? | — | ✅ |
 | Siri, Shortcuts, App Intents | ✅ | ? | ? | — | ✅ | — |
-| Live Activity / Dynamic Island | ✅ | ? | ? | ? | ? | ? |
+| Live Activity / Dynamic Island | убрано: на экране блокировки дублировала системный плеер | ? | ? | ? | ? | ? |
 | iPad и Mac | — (только iPhone) | ✅ (macOS) | ✅ | ? | ✅ | ✅ |
 | Поделиться песней (ссылка createShare или текст) | ✅ | ? | ? | ? | ? | ✅ |
 | Локализация | ✅ ru, en | ? | ✅ | ? | ✅ | ? |

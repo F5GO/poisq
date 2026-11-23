@@ -1147,7 +1147,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Загружено"
+            "value": "Загруженное"
           }
         }
       }
@@ -3969,6 +3969,176 @@
           "stringUnit": {
             "state": "translated",
             "value": "Нет доступных колонок. Колонки настраиваются в poisq Studio."
+          }
+        }
+      }
+    },
+    "Quick Picks": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Быстрый выбор"
+          }
+        }
+      }
+    },
+    "Stations": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Станции"
+          }
+        }
+      }
+    },
+    "Play All": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Играть все"
+          }
+        }
+      }
+    },
+    "My Flow": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мой поток"
+          }
+        }
+      }
+    },
+    "Similar to %@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Похоже на «%@»"
+          }
+        }
+      }
+    },
+    "New in Library": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новое в медиатеке"
+          }
+        }
+      }
+    },
+    "Starts playing": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начинает воспроизведение"
+          }
+        }
+      }
+    },
+    "Sources": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Источники"
+          }
+        }
+      }
+    },
+    "Flow": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поток"
+          }
+        }
+      }
+    },
+    "Shuffle Library": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перемешать"
+          }
+        }
+      }
+    },
+    "Loved": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Любимое"
+          }
+        }
+      }
+    },
+    "New": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новое"
+          }
+        }
+      }
+    },
+    "Similar to what you play": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Похожее на то, что вы слушаете"
+          }
+        }
+      }
+    },
+    "Recent Tracks": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Недавние треки"
+          }
+        }
+      }
+    },
+    "Haven't Heard in a While": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Давно не слушал"
+          }
+        }
+      }
+    },
+    "From recently added albums": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Из недавно добавленных альбомов"
+          }
+        }
+      }
+    },
+    "Favorites you haven't played in a month": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Любимое, что не играло больше месяца"
           }
         }
       }

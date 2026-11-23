@@ -29,7 +29,6 @@ targets:
         CFBundleDisplayName: poisq
         CFBundleLocalizations: [en, ru]
         UIBackgroundModes: [audio]
-        NSSupportsLiveActivities: true
         CFBundleURLTypes:
           - CFBundleURLName: app.poisq.ios
             CFBundleURLSchemes: [poisq]

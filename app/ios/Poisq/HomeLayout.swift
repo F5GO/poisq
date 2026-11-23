@@ -1,22 +1,26 @@
 import SwiftUI
 
-/// Действие в компактной панели главной. Состав и порядок настраиваются отдельно от блоков.
+/// Чип-источник над карточкой плеера: нажатие сразу включает музыку. Состав и порядок настраиваются отдельно от блоков.
 enum HomeQuickAction: String, CaseIterable, Codable, Identifiable {
-    case shuffleAll, randomAlbum, favoriteSongs, downloads
+    case flow, shuffleAll, downloads, favoriteSongs, newest, randomAlbum
     var id: String { rawValue }
 
     var title: LocalizedStringKey {
         switch self {
-        case .shuffleAll: "Shuffle all"
+        case .flow: "Flow"
+        case .shuffleAll: "Shuffle Library"
         case .randomAlbum: "Random Album"
-        case .favoriteSongs: "Favorite Songs"
-        case .downloads: "Downloads"
+        case .favoriteSongs: "Loved"
+        case .downloads: "Downloaded"
+        case .newest: "New"
         }
     }
 
     var icon: String {
         switch self {
+        case .flow: "infinity"
         case .shuffleAll: "shuffle"
+        case .newest: "sparkles"
         case .randomAlbum: "square.stack"
         case .favoriteSongs: "heart.fill"
         case .downloads: "arrow.down.circle.fill"
@@ -26,12 +30,17 @@ enum HomeQuickAction: String, CaseIterable, Codable, Identifiable {
 
 /// Блок главной, который можно скрыть или переставить.
 enum HomeItem: String, CaseIterable, Codable, Identifiable {
-    case quickActions, pinned, upNext, recent, newest, frequent, favorites, random, playlists, favoriteSongs, favoriteArtists
+    case quickPicks, quickActions, upNext, stations, recentSongs, newSongs, rediscover, pinned, recent, newest, frequent, favorites, random, playlists, favoriteSongs, favoriteArtists
     var id: String { rawValue }
 
     var title: LocalizedStringKey {
         switch self {
-        case .quickActions: "Quick Actions"
+        case .quickActions: "Sources"
+        case .quickPicks: "Quick Picks"
+        case .stations: "Stations"
+        case .recentSongs: "Recent Tracks"
+        case .newSongs: "New in Library"
+        case .rediscover: "Haven't Heard in a While"
         case .upNext: "Continue"
         case .recent: "Recently Played"
         case .newest: "Recently Added"
@@ -49,6 +58,11 @@ enum HomeItem: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .quickActions: "square.grid.2x2"
         case .upNext: "play.circle"
+        case .quickPicks: "music.note"
+        case .stations: "dot.radiowaves.left.and.right"
+        case .recentSongs: "clock.arrow.circlepath"
+        case .newSongs: "sparkles"
+        case .rediscover: "arrow.counterclockwise.heart"
         case .favorites, .favoriteSongs, .favoriteArtists: "heart.fill"
         case .pinned: "rectangle.grid.2x2"
         case .playlists: "music.note.list"
@@ -59,7 +73,7 @@ enum HomeItem: String, CaseIterable, Codable, Identifiable {
     /// Тип списка в getAlbumList2; nil — блок не из альбомов.
     var albumListType: String? {
         switch self {
-        case .quickActions, .upNext, .pinned, .playlists, .favoriteSongs, .favoriteArtists: nil
+        case .quickActions, .quickPicks, .upNext, .stations, .recentSongs, .newSongs, .rediscover, .pinned, .playlists, .favoriteSongs, .favoriteArtists: nil
         case .recent: "recent"
         case .newest: "newest"
         case .frequent: "frequent"
@@ -85,7 +99,10 @@ final class HomeLayout {
     private(set) var quickActionEntries: [QuickActionEntry]
     private static let key = "homeLayout"
     private static let quickActionsKey = "homeQuickActions"
-    private static let commandCenterMigrationKey = "homeLayoutCommandCenterV2"
+    /// Главная вокруг треков: быстрый выбор наверху, чипы источников и «Продолжить» — в зоне большого пальца.
+    private static let tracksMigrationKey = "homeLayoutTracksV4"
+    /// Трековые блоки ниже станций: новые блоки иначе встали бы в самый конец главной.
+    private static let trackShelvesMigrationKey = "homeLayoutTrackShelvesV5"
 
     struct QuickActionEntry: Codable, Identifiable, Equatable {
         var item: HomeQuickAction
@@ -117,21 +134,35 @@ final class HomeLayout {
             .flatMap { try? JSONDecoder().decode([QuickActionEntry].self, from: $0) } ?? []
         let knownActions = savedActions.filter { saved in HomeQuickAction.allCases.contains(saved.item) }
         let missingActions = HomeQuickAction.allCases.filter { item in !knownActions.contains { $0.item == item } }
-        quickActionEntries = knownActions + missingActions.map { QuickActionEntry(item: $0, isVisible: true) }
+        let mergedActions = knownActions + missingActions.map { QuickActionEntry(item: $0, isVisible: true) }
+        // Чипы заменили панель действий: один раз ставим их в новый порядок, видимость сохраняем.
+        quickActionEntries = UserDefaults.standard.bool(forKey: Self.tracksMigrationKey) ? mergedActions
+            : HomeQuickAction.allCases.compactMap { item in mergedActions.first { $0.item == item } }
 
         let saved = UserDefaults.standard.data(forKey: Self.key).flatMap { try? JSONDecoder().decode([Entry].self, from: $0) } ?? []
         // Новые блоки из будущих версий добавляются в конец, исчезнувшие — отбрасываются.
         let known = saved.filter { s in HomeItem.allCases.contains(s.item) }
         let missing = HomeItem.allCases.filter { c in !known.contains { $0.item == c } }
         let complete = known + missing.map { Entry(item: $0, isVisible: $0.defaultVisible) }
-        if !UserDefaults.standard.bool(forKey: Self.commandCenterMigrationKey) {
-            let leading: [HomeItem] = [.quickActions, .pinned, .upNext]
+        if !UserDefaults.standard.bool(forKey: Self.tracksMigrationKey) {
+            let leading: [HomeItem] = [.quickPicks, .quickActions, .upNext, .stations]
             entries = leading.compactMap { item in complete.first { $0.item == item } }
                 + complete.filter { !leading.contains($0.item) }
-            UserDefaults.standard.set(true, forKey: Self.commandCenterMigrationKey)
+            UserDefaults.standard.set(true, forKey: Self.tracksMigrationKey)
             save()
+            saveQuickActions()
         } else {
             entries = complete
+        }
+        if !UserDefaults.standard.bool(forKey: Self.trackShelvesMigrationKey) {
+            let added: [HomeItem] = [.recentSongs, .newSongs, .rediscover]
+            var rest = entries.filter { !added.contains($0.item) }
+            let moved = added.compactMap { item in entries.first { $0.item == item } }
+            let index = rest.firstIndex { $0.item == .stations }.map { $0 + 1 } ?? rest.count
+            rest.insert(contentsOf: moved, at: index)
+            entries = rest
+            UserDefaults.standard.set(true, forKey: Self.trackShelvesMigrationKey)
+            save()
         }
     }
 

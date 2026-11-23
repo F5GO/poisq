@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import PoisqCore
 import PoisqPlayback
 
@@ -11,6 +12,28 @@ enum AppFiles {
     }()
     static func session(_ serverID: UUID) -> URL { dir.appending(path: "session-\(serverID.uuidString).json") }
     static let scrobbles = dir.appending(path: "scrobbles.json")
+    static func history(_ serverID: UUID) -> URL { dir.appending(path: "history-\(serverID.uuidString).json") }
+}
+
+/// История прослушиваний текущего сервера на устройстве — для «Недавних треков» и «Давно не слушал».
+@MainActor @Observable
+final class PlayHistoryStore {
+    private(set) var log = PlayHistoryLog()
+    private var serverID: UUID?
+
+    func load(serverID: UUID) {
+        self.serverID = serverID
+        log = (try? Data(contentsOf: AppFiles.history(serverID))).flatMap { try? JSONDecoder().decode(PlayHistoryLog.self, from: $0) } ?? PlayHistoryLog()
+    }
+
+    func record(_ song: Song, at date: Date, serverID: UUID) {
+        guard serverID == self.serverID else { return }          // трек дослушан уже после смены сервера
+        log.record(song, at: date)
+        // Раз в трек и максимум 500 записей — пишем сразу, без фоновых задач, чтобы записи не обгоняли друг друга.
+        try? JSONEncoder().encode(log).write(to: AppFiles.history(serverID), options: .atomic)
+    }
+
+    static func delete(serverID: UUID) { try? FileManager.default.removeItem(at: AppFiles.history(serverID)) }
 }
 
 /// Сессия плеера на устройстве: что играло, на каком месте, режимы shuffle и повтора.

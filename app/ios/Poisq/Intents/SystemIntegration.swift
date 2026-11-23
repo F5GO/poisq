@@ -1,11 +1,10 @@
 import SwiftUI
 import WidgetKit
-import ActivityKit
 import CoreSpotlight
 import PoisqCore
 import PoisqPlayback
 
-/// Системная интеграция: виджеты, Live Activity, Spotlight, переход по ссылкам.
+/// Системная интеграция: виджеты, Spotlight, переход по ссылкам.
 /// Следит за `AppModel` и ничего не знает о прослушиваниях: в Spotlight попадает только каталог.
 @MainActor
 final class SystemIntegration {
@@ -17,7 +16,6 @@ final class SystemIntegration {
     private var catalogTask: Task<Void, Never>?
     private var catalogKey: String?          // для какого сервера/медиатеки каталог уже обновлён
     private var lastCatalogAt = Date.distantPast
-    private var activity: Activity<PlaybackActivityAttributes>?
     private var lastTrack: SharedTrack?
     private var wasSignedIn = false
     private var lastSpotlightSignature: String?
@@ -30,7 +28,7 @@ final class SystemIntegration {
         scheduleRefresh()
     }
 
-    // MARK: Команды (виджеты, Live Activity, Siri)
+    // MARK: Команды (виджеты, Siri)
 
     func perform(_ command: PlaybackCommand) {
         guard let player = model.player else { return }
@@ -70,12 +68,11 @@ final class SystemIntegration {
         refreshCatalogIfNeeded()
     }
 
-    // MARK: Сейчас играет: виджет и Live Activity
+    // MARK: Сейчас играет: виджет
 
     private func publishNowPlaying() async {
         guard let player = model.player, let song = player.current, player.isActive || player.isLoading else {
             if lastTrack != nil { lastTrack = nil; SharedStore.write(SharedTrack?.none, "nowplaying.json"); WidgetCenter.shared.reloadTimelines(ofKind: "NowPlaying") }
-            await endActivity()
             return
         }
         let file = await saveCover(song.coverArt)
@@ -85,34 +82,6 @@ final class SystemIntegration {
         lastTrack = t
         SharedStore.write(t, "nowplaying.json")
         WidgetCenter.shared.reloadTimelines(ofKind: "NowPlaying")
-        await updateActivity(t)
-    }
-
-    private func updateActivity(_ t: SharedTrack) async {
-        guard UserDefaults.standard.object(forKey: "liveActivityEnabled") as? Bool ?? true else { await endActivity(); return }
-        let state = PlaybackActivityAttributes.ContentState(title: t.title, artist: t.artist, isPlaying: t.isPlaying, coverFile: t.coverFile)
-        let content = ActivityContent(state: state, staleDate: nil)
-        if await Self.updateRunningActivity(content) {
-        } else if ActivityAuthorizationInfo().areActivitiesEnabled {
-            // Запрос разрешён только на переднем плане; из фона (кнопка виджета) просто пропускаем.
-            activity = try? Activity.request(attributes: PlaybackActivityAttributes(), content: content)
-        }
-    }
-
-    private func endActivity() async {
-        activity = nil
-        await Self.endAllActivities()
-    }
-
-    // Activity не Sendable: работаем с ней вне главного актора, не передавая через границу изоляции.
-    private nonisolated static func updateRunningActivity(_ content: ActivityContent<PlaybackActivityAttributes.ContentState>) async -> Bool {
-        guard let a = Activity<PlaybackActivityAttributes>.activities.first(where: { $0.activityState == .active }) else { return false }
-        await a.update(content)
-        return true
-    }
-
-    private nonisolated static func endAllActivities() async {
-        for a in Activity<PlaybackActivityAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
     }
 
     // MARK: Обложки в общем кэше
@@ -201,10 +170,7 @@ final class SystemIntegration {
         SharedStore.write([SharedAlbum]?.none, "recent-albums.json")
         pruneCovers(keeping: [])
         WidgetCenter.shared.reloadAllTimelines()
-        Task {
-            await endActivity()
-            try? await CSSearchableIndex.default().deleteAllSearchableItems()
-        }
+        Task { try? await CSSearchableIndex.default().deleteAllSearchableItems() }
     }
 
     // MARK: Переход по ссылке

@@ -787,7 +787,7 @@ public final class Player {
     }
 
     /// Порядок без соседей из одного альбома или от одного исполнителя; не больше `maxPerAlbum` треков с альбома.
-    nonisolated static func spread(_ pool: [Song], after last: Song?, maxPerAlbum: Int, limit: Int) -> [Song] {
+    public nonisolated static func spread(_ pool: [Song], after last: Song?, maxPerAlbum: Int, limit: Int) -> [Song] {
         var rest = pool
         var out: [Song] = []
         var perAlbum: [String: Int] = [:]

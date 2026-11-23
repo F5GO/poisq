@@ -98,12 +98,13 @@ final class AppModel {
     var pendingPlaylist: Playlist?
     /// Песни, которые сейчас добавляют в плейлист (показывает окно выбора плейлиста).
     var playlistTarget: PlaylistTarget?
-    /// Растёт, когда нужно открыть полный экран плеера (нажатие на виджет или Live Activity).
+    /// Растёт, когда нужно открыть полный экран плеера (нажатие на виджет).
     var openPlayerRequest = 0
     /// Что показать в системном окне «Поделиться».
     var shareItems: ShareItems?
     /// Закреплённое на главной.
     let pins = PinStore()
+    let history = PlayHistoryStore()
     /// Растёт после изменения плейлистов — списки перезагружаются.
     var playlistsVersion = 0
     private let covers = CoverCache()
@@ -250,6 +251,7 @@ final class AppModel {
         cache.clear(serverID: id)
         SessionStore.delete(serverID: id)
         scrobbles.removeAll(serverID: id)
+        PlayHistoryStore.delete(serverID: id)
         let wasActive = id == activeID
         servers.removeAll { $0.id == id }
         saveServers()
@@ -305,8 +307,11 @@ final class AppModel {
             guard let self, self.scrobbleEnabled, !self.offline else { return }
             Task { try? await client.scrobble(songID: song.id, submission: false) }
         }
+        history.load(serverID: sid)
         player.onListened = { [weak self] song, started in
-            guard let self, self.scrobbleEnabled else { return }
+            guard let self else { return }
+            self.history.record(song, at: started, serverID: sid)
+            guard self.scrobbleEnabled else { return }
             self.scrobbles.add(serverID: sid, songID: song.id, time: started)
             Task { await self.flushScrobbles() }
         }

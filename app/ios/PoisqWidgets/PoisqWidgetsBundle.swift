@@ -6,7 +6,6 @@ struct PoisqWidgetsBundle: WidgetBundle {
     var body: some Widget {
         NowPlayingWidget()
         RecentAlbumsWidget()
-        PlaybackLiveActivity()
     }
 }
 

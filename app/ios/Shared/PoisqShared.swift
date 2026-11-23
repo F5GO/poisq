@@ -1,6 +1,5 @@
 import Foundation
 import AppIntents
-import ActivityKit
 
 // Код, общий для приложения и расширения виджетов (оба таргета компилируют папку Shared/).
 // Расширение не ходит в сеть: оно читает только то, что приложение положило в общий контейнер App Group.
@@ -61,7 +60,7 @@ enum DeepLink {
         case album(id: String, name: String)
         case artist(id: String, name: String)
         case playlist(id: String, name: String)
-        /// Открыть полный экран плеера (нажатие на виджет «Сейчас играет» и Live Activity).
+        /// Открыть полный экран плеера (нажатие на виджет «Сейчас играет»).
         case player
     }
 
@@ -122,16 +121,5 @@ struct PreviousTrackIntent: AudioPlaybackIntent {
     @MainActor func perform() async throws -> some IntentResult {
         PlaybackCommands.handler?(.previous)
         return .result()
-    }
-}
-
-// MARK: Live Activity
-
-struct PlaybackActivityAttributes: ActivityAttributes {
-    struct ContentState: Codable, Hashable {
-        var title: String
-        var artist: String
-        var isPlaying: Bool
-        var coverFile: String?
     }
 }
