@@ -17,6 +17,7 @@ import (
 
 const (
 	ffprobeTimeout    = 10 * time.Second
+	ffprobeWaitDelay  = 100 * time.Millisecond
 	ffprobeOutputMax  = 4 << 20
 	ffprobeStderrMax  = 2 << 10
 	localProbeVersion = 1
@@ -89,6 +90,7 @@ func (p *FFProbeAudioProber) Probe(ctx context.Context, path, trackID string) (L
 	defer cancel()
 	cmd := exec.CommandContext(probeCtx, p.executable,
 		"-v", "error", "-show_format", "-show_streams", "-of", "json", path)
+	cmd.WaitDelay = ffprobeWaitDelay
 	stdout := &limitedBuffer{limit: ffprobeOutputMax}
 	stderr := &limitedBuffer{limit: ffprobeStderrMax}
 	cmd.Stdout = stdout
