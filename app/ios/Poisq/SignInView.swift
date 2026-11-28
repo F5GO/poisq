@@ -22,6 +22,7 @@ struct SignInView: View {
     @State private var secure: SecureSetup?
     @State private var showScanner = false
     @State private var keyChangeCode: String?
+    @State private var showKeyDetails = false
     private struct SecureSetup {
         let profileID: UUID                    // под этим ID канал хранит токен устройства в Keychain
         let pairing: SecureServerPairing
@@ -164,35 +165,49 @@ struct SignInView: View {
         }
     }
 
-    private func secureStatus(_ s: SecureSetup) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            switch s.state {
-            case .checking:
+    @ViewBuilder private func secureStatus(_ s: SecureSetup) -> some View {
+        switch s.state {
+        case .checking:
+            HStack(spacing: 8) {
                 ProgressView()
-                Text("Checking the secure connection…")
-            case .verified:
-                Image(systemName: "lock.shield.fill").foregroundStyle(.green)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Secure connection verified")
+                Text("Checking the secure connection…").font(.footnote).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+        case .verified:
+            VStack(spacing: 10) {
+                Label("Connection is secure", systemImage: "lock.shield.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.green)
+                Button { showKeyDetails = true } label: {
                     Text(s.pairing.emojiFingerprint.joined(separator: " "))
-                        .font(.title2)
-                        .accessibilityLabel(Text("Key emoji"))
-                    Text("Compare the emoji with poisq Studio. If they differ, don't sign in.")
-                        .foregroundStyle(.secondary)
-                    Text("Key \(s.pairing.fingerprint)").font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                        .font(.largeTitle)
                 }
-            case .failed(let message):
-                Image(systemName: "lock.trianglebadge.exclamationmark.fill").foregroundStyle(.red)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(message)
-                    Button("Try Again") { verify() }.font(.footnote.weight(.semibold))
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Key emoji"))
+                .accessibilityHint(Text("Shows how to check the key"))
+                .popover(isPresented: $showKeyDetails) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Compare the emoji with poisq Studio. If they differ, don't sign in.")
+                        Text("Key \(s.pairing.fingerprint)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                    }
+                    .font(.footnote)
+                    .padding()
+                    .frame(idealWidth: 280)
+                    .presentationCompactAdaptation(.popover)
                 }
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity)
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        case .failed(let message):
+            VStack(spacing: 8) {
+                Label(message, systemImage: "lock.trianglebadge.exclamationmark.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                Button("Try Again") { verify() }.font(.footnote.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
         }
-        .font(.footnote)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
     }
 
     /// Текст из сканера или буфера. Некорректный или чужой код оставляет форму без изменений.

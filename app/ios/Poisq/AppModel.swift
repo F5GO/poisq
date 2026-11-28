@@ -101,6 +101,8 @@ final class AppModel {
     private var sessionTickTask: Task<Void, Never>?
     private var lastServerSave = Date.distantPast
     private var pingClient: SubsonicClient?
+    /// Защищённое соединение проверено последним обменом через канал (зелёная точка на главной).
+    private(set) var secureVerified = false
     private var reachabilityTask: Task<Void, Never>?
     private var lastOffline = false
     /// Режим «только загруженные»: музыка берётся с устройства, сеть не нужна.
@@ -417,6 +419,7 @@ final class AppModel {
         }
         Task { await restoreSession(player: player, client: client, serverID: sid) }
         self.pingClient = pingClient
+        secureVerified = false
         startReachability()
         player.artworkProvider = { [weak self] song in
             guard let id = song.coverArt else { return nil }
@@ -498,13 +501,30 @@ final class AppModel {
     /// Проверка, отвечает ли сервер. Ошибку сети считаем недоступностью; ответ сервера (даже «ошибка») — доступностью.
     func checkServer() async {
         guard let pingClient else { return }
-        guard network.isConnected else { setReachable(false); return }
+        guard network.isConnected else { setReachable(false); secureVerified = false; return }
+        if let channel = pingClient.channel {
+            // Был успешный обмен за последнюю минуту — он уже доказал и связь, и шифрование: радио лишний раз не будим.
+            if let last = await channel.lastVerified, Date().timeIntervalSince(last) < 55 {
+                secureVerified = true
+                setReachable(true)
+                return
+            }
+        }
         do {
             try await pingClient.ping(); setReachable(true)
-            if let channel = pingClient.channel, let id = activeID { await persistSecureState(profileID: id, channel: channel) }
+            if let channel = pingClient.channel, let id = activeID {
+                secureVerified = await channel.lastVerified != nil
+                await persistSecureState(profileID: id, channel: channel)
+            }
             await returnToPrimaryIfPossible()
         }
-        catch is URLError { setReachable(await failover()) }
+        catch let failure as SecureChannel.Failure {
+            // Ключ не прошёл проверку, ответ не расшифровался или устройство отозвано — соединение не считается защищённым.
+            secureVerified = false
+            // Ответ пришёл — сервер доступен; ошибка 5xx за CDN означает, что Studio сейчас недоступен.
+            if case .http(let code) = failure, code >= 500 { setReachable(false) } else { setReachable(true) }
+        }
+        catch is URLError { secureVerified = false; setReachable(await failover()) }
         catch SubsonicError.http(let code) where code >= 500 || code == 404 { setReachable(await failover()) }
         catch SubsonicError.decoding { setReachable(await failover()) }
         catch { setReachable(true) }

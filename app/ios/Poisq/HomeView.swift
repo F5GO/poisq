@@ -227,6 +227,11 @@ struct HomeView: View {
     private func titleLabel(showsChevron: Bool) -> some View {
         HStack(spacing: 6) {
             Text(libraryName).font(.title2.weight(.semibold)).lineLimit(1)
+            if model.secureVerified {
+                // Горит только после реальной проверки: ответ через канал расшифрован ключами сессии.
+                Circle().fill(.green).frame(width: 8, height: 8)
+                    .accessibilityLabel(Text("Connection is secure"))
+            }
             if showsChevron {
                 Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             }

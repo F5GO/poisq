@@ -1,4 +1,5 @@
 import Foundation
+import os
 import AudioToolbox
 import AudioStreaming
 import PoisqCore
@@ -8,7 +9,15 @@ import PoisqCore
 /// Батарея тратится в основном на радио, поэтому кусок крупный, а чтение идёт пачками с упреждением
 /// до `readAhead`; дальше загрузка ждёт, пока плеер не разберёт буфер, и радио простаивает.
 /// Первый кусок после старта и перемотки маленький — для быстрого начала звука.
-/// Всё состояние меняется только на `underlyingQueue` (очередь источников AudioPlayer).
+/// Состояние меняется на `underlyingQueue` (очередь источников AudioPlayer); флаг паузы — атомарный,
+/// потому что плеер вызывает `suspend()` с главного потока (пауза, перемотка).
+///
+/// Поведение повторяет сетевой источник AudioStreaming, которого ждёт плеер:
+/// - перемотка (`seek`) снимает паузу: после неё плеер не вызывает `resume()`;
+/// - первый кусок после старта или перемотки тоже снимает паузу: плеер просит перемотку сразу после старта,
+///   откладывает её до разбора заголовка и без данных так и остался бы ждать;
+/// - данные отдаются по одному срезу за проход очереди: пауза и перемотка плеера встают между срезами,
+///   а не ждут всего буфера (иначе при остановленном выводе очередь блокировалась навсегда).
 final class SecureAudioSource: NSObject, CoreAudioStreamSource, @unchecked Sendable {
     static let firstChunk = 256 << 10
     static let chunk = 4 << 20
@@ -26,7 +35,13 @@ final class SecureAudioSource: NSObject, CoreAudioStreamSource, @unchecked Senda
     private let url: URL
     private let fetcher: SecureMediaFetching
     private var generation = 0
-    private var suspended = false
+    private let suspendedFlag = OSAllocatedUnfairLock(initialState: false)
+    private var suspended: Bool {
+        get { suspendedFlag.withLock { $0 } }
+        set { suspendedFlag.withLock { $0 = newValue } }
+    }
+    private var deliveryScheduled = false
+    private var firstChunkPending = true
     private var pending: [Data] = []
     private var pendingBytes = 0
     private var finishedFetching = false
@@ -49,7 +64,7 @@ final class SecureAudioSource: NSObject, CoreAudioStreamSource, @unchecked Senda
         position = max(0, offset)
         if length > 0, position >= length {
             finishedFetching = true
-            deliver()
+            scheduleDelivery()
             return
         }
         startFetching(from: position, generation: generation)
@@ -61,7 +76,7 @@ final class SecureAudioSource: NSObject, CoreAudioStreamSource, @unchecked Senda
 
     func resume() {
         suspended = false
-        deliver()
+        underlyingQueue.async { self.scheduleDelivery() }
     }
 
     private func reset() {
@@ -74,6 +89,8 @@ final class SecureAudioSource: NSObject, CoreAudioStreamSource, @unchecked Senda
         pendingBytes = 0
         finishedFetching = false
         endReported = false
+        suspended = false
+        firstChunkPending = true
     }
 
     private func startFetching(from offset: Int, generation gen: Int) {
@@ -135,18 +152,32 @@ final class SecureAudioSource: NSObject, CoreAudioStreamSource, @unchecked Senda
 
     private func received(_ chunk: SecureMediaChunk, end: Bool, generation gen: Int) {
         guard gen == generation else { return }
+        if firstChunkPending {
+            firstChunkPending = false
+            suspended = false            // как ответ сервера у сетевого источника
+        }
         if let total = chunk.total { length = total }
         if !chunk.data.isEmpty {
             pending.append(chunk.data)
             pendingBytes += chunk.data.count
         }
         if end { finishedFetching = true }
-        deliver()
+        scheduleDelivery()
     }
 
-    /// Отдаёт буфер плееру срезами; плеер может приостановить источник прямо из dataAvailable.
+    /// Ставит отдачу следующего среза в очередь, если она ещё не стоит.
+    private func scheduleDelivery() {
+        guard !deliveryScheduled else { return }
+        deliveryScheduled = true
+        underlyingQueue.async {
+            self.deliveryScheduled = false
+            self.deliver()
+        }
+    }
+
+    /// Отдаёт плееру один срез и уступает очередь; следующий срез — отдельным проходом.
     private func deliver() {
-        while !suspended, !pending.isEmpty {
+        if !suspended, !pending.isEmpty {
             let head = pending[0]
             let n = min(Self.slice, head.count)
             let slice = head.prefix(n)
@@ -163,7 +194,9 @@ final class SecureAudioSource: NSObject, CoreAudioStreamSource, @unchecked Senda
             roomWaiter = nil
             waiter.resume()
         }
-        if pending.isEmpty, finishedFetching, !endReported, !suspended {
+        if !pending.isEmpty {
+            if !suspended { scheduleDelivery() }
+        } else if finishedFetching, !endReported, !suspended {
             endReported = true
             delegate?.endOfFileOccurred(source: self)
         }

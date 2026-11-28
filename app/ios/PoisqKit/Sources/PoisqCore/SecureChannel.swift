@@ -69,6 +69,9 @@ public actor SecureChannel {
     public private(set) var certificate: SecureWorkingCertificate?
     /// Highest accepted epoch: a lower one is rejected as a rollback.
     public private(set) var acceptedEpoch: UInt32?
+    /// Время последнего ответа, прошедшего расшифровку и проверку подлинности ключами сессии.
+    /// Это доказательство, что шифрование работает: ключи получены handshake с ключом, закреплённым по QR.
+    public private(set) var lastVerified: Date?
 
     private let transport: SecureChannelTransport
     private let now: @Sendable () -> Date
@@ -171,6 +174,7 @@ public actor SecureChannel {
                 do {
                     let response = try SecureChannelWire.openRecords(data, s2c: current.s2c, header: body.prefix(SecureChannelWire.callHeaderSize),
                                                                      counter: counter, maxRecord: current.maxRecord, limit: responseLimit)
+                    lastVerified = now()
                     return (response, current.id)
                 } catch {
                     throw Failure.malformedResponse

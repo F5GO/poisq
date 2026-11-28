@@ -4273,16 +4273,6 @@
         }
       }
     },
-    "Secure connection verified": {
-      "localizations": {
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Защищённое соединение проверено"
-          }
-        }
-      }
-    },
     "Key %@": {
       "localizations": {
         "ru": {
@@ -4349,6 +4339,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сверьте эмодзи с poisq Studio. Если не совпадают — не входите."
+          }
+        }
+      }
+    },
+    "Connection is secure": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Соединение защищено"
+          }
+        }
+      }
+    },
+    "Shows how to check the key": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показывает, как сверить ключ"
           }
         }
       }
