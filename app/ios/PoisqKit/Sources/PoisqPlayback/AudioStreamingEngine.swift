@@ -87,7 +87,11 @@ public final class AudioStreamingEngine: NSObject, PlaybackEngine {
 
     private func secureSource(for url: URL) -> SecureAudioSource? {
         guard url.scheme == SubsonicClient.secureStreamScheme, let secureMedia else { return nil }
-        return SecureAudioSource(url: url, fetcher: secureMedia, queue: player.sourceQueue)
+        let source = SecureAudioSource(url: url, fetcher: secureMedia, queue: player.sourceQueue)
+        source.onBuffered = { [weak self] fraction in
+            Task { @MainActor in self?.bufferHandler?(url, fraction) }
+        }
+        return source
     }
 
     public func play(_ url: URL) {
@@ -104,6 +108,8 @@ public final class AudioStreamingEngine: NSObject, PlaybackEngine {
     public func setRate(_ rate: Float) { player.rate = min(max(rate, 0.5), 2) }
     public func setMetadataHandler(_ handler: ((String) -> Void)?) { metadataHandler = handler }
     private var metadataHandler: ((String) -> Void)?
+    public func setBufferHandler(_ handler: ((URL, Double) -> Void)?) { bufferHandler = handler }
+    private var bufferHandler: ((URL, Double) -> Void)?
 
     public func enqueue(_ url: URL) {
         if let source = secureSource(for: url) {

@@ -112,6 +112,8 @@ public final class Player {
     private var refilling = false
     private var suppressIdle = false
     private var playingURL: URL?
+    /// Докуда загружены треки, которые движок читает потоком (ключ — ссылка трека в очереди).
+    private var streamBuffer: [URL: Double] = [:]
     /// Не nil — очередь восстановлена после перезапуска, движок ещё не запущен; значение — позиция в секундах.
     private var restoredPosition: Double?
     private var pendingSeek: Double?
@@ -140,6 +142,10 @@ public final class Player {
         engine.onStateChanged = { [weak self] s in self?.engineStateChanged(s) }
         engine.onError = { [weak self] _ in self?.playbackFailed() }
         engine.setMetadataHandler { [weak self] title in self?.streamTitle = title }
+        engine.setBufferHandler { [weak self] url, fraction in
+            guard let self, self.urlToSong[url] != nil else { return }
+            self.streamBuffer[url] = fraction
+        }
     }
 
     /// Перед окном AirPlay: система показывает устройства только для активной аудиосессии.
@@ -170,6 +176,11 @@ public final class Player {
     }
 
     public var isActive: Bool { state == .active }
+
+    /// Докуда движок загрузил трек из очереди при чтении потоком; nil — трек не читается потоком или ещё не начал.
+    public func streamBuffered(for song: Song) -> Double? {
+        queuedURL[song.id].flatMap { streamBuffer[$0] }
+    }
     public var isLoading: Bool { state == .loading }
     public var progress: Double { restoredPosition ?? engine.progress }
     public var duration: Double { engine.duration > 0 ? engine.duration : Double(current?.duration ?? 0) }
@@ -687,6 +698,7 @@ public final class Player {
                 enqueuedIDs.remove(dropped.id)
             }
             queue.removeFirst(i)
+            streamBuffer = streamBuffer.filter { urlToSong[$0.key] != nil }
         }
         extendForRepeat()
         onTrackChange?(song, upcoming)

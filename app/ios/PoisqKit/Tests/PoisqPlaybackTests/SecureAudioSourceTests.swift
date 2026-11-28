@@ -1,3 +1,4 @@
+import os
 import Foundation
 import AudioStreaming
 import AudioToolbox
@@ -55,12 +56,14 @@ private func waitUntil(_ timeout: Duration = .seconds(5), _ condition: () -> Boo
 private let trackURL = URL(string: "poisq-secure://stream?id=t1&suffix=flac")!
 
 @Suite struct SecureAudioSourceTests {
-    @Test func readsWholeTrackInOrderWithSmallFirstChunk() async throws {
+    @Test func readsWholeTrackInOrderWithGrowingChunks() async throws {
         let fetcher = FakeFetcher(size: 9 << 20 + 777)
         let queue = DispatchQueue(label: "test.source")
         let source = SecureAudioSource(url: trackURL, fetcher: fetcher, queue: queue)
         let recorder = Recorder()
         source.delegate = recorder
+        let buffered = OSAllocatedUnfairLock(initialState: [Double]())
+        source.onBuffered = { f in buffered.withLock { $0.append(f) } }
         #expect(source.audioFileHint == kAudioFileFLACType)
         queue.sync { source.seek(at: 0) }
         await waitUntil { recorder.snapshot.1 == 1 }
@@ -69,8 +72,16 @@ private let trackURL = URL(string: "poisq-secure://stream?id=t1&suffix=flac")!
         #expect(ends == 1 && errors == 0)
         #expect(queue.sync { source.length } == fetcher.file.count)
         let lengths = fetcher.lock.withLock { fetcher.requests.map(\.length) }
-        #expect(lengths.first == SecureAudioSource.firstChunk)
-        #expect(lengths.dropFirst().allSatisfy { $0 == SecureAudioSource.chunk })
+        // Кусок удваивается от первого до предела: 256 КБ, 512 КБ, 1 МБ, 2 МБ, 4 МБ, 4 МБ…
+        var expected = SecureAudioSource.firstChunk
+        for length in lengths {
+            #expect(length == expected)
+            expected = min(expected * 2, SecureAudioSource.chunk)
+        }
+        // Доля загруженного растёт и доходит до конца трека.
+        let reports = buffered.withLock { $0 }
+        #expect(reports == reports.sorted())
+        #expect(reports.last == 1)
     }
 
     @Test func stopsReadingAheadWhilePlayerBufferIsFull() async throws {

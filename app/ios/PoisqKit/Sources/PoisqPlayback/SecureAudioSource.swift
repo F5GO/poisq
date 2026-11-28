@@ -8,7 +8,8 @@ import PoisqCore
 ///
 /// Батарея тратится в основном на радио, поэтому кусок крупный, а чтение идёт пачками с упреждением
 /// до `readAhead`; дальше загрузка ждёт, пока плеер не разберёт буфер, и радио простаивает.
-/// Первый кусок после старта и перемотки маленький — для быстрого начала звука.
+/// Первый кусок после старта и перемотки маленький — для быстрого начала звука, дальше размер удваивается до `chunk`:
+/// кусок приходит только целиком, и на медленной сети сразу большой кусок не успевал бы до конца буфера.
 /// Состояние меняется на `underlyingQueue` (очередь источников AudioPlayer); флаг паузы — атомарный,
 /// потому что плеер вызывает `suspend()` с главного потока (пауза, перемотка).
 ///
@@ -26,6 +27,8 @@ final class SecureAudioSource: NSObject, CoreAudioStreamSource, @unchecked Senda
     static let retryDelays: [Duration] = [.milliseconds(500), .seconds(1), .seconds(2)]
 
     weak var delegate: AudioStreamSourceDelegate?
+    /// Докуда трек уже загружен (доля длины) — для полосы прокрутки. Вызывается на `underlyingQueue` после каждого куска.
+    var onBuffered: (@Sendable (Double) -> Void)?
     let underlyingQueue: DispatchQueue
     let audioFileHint: AudioFileTypeID
 
@@ -116,7 +119,7 @@ final class SecureAudioSource: NSObject, CoreAudioStreamSource, @unchecked Senda
                 let end = chunk.pastEnd || chunk.data.isEmpty || chunk.total.map { cursor >= $0 } ?? (chunk.data.count < size)
                 self.underlyingQueue.async { self.received(chunk, end: end, generation: gen) }
                 if end { return }
-                size = Self.chunk
+                size = min(size * 2, Self.chunk)
             }
         }
     }
@@ -162,6 +165,7 @@ final class SecureAudioSource: NSObject, CoreAudioStreamSource, @unchecked Senda
             pendingBytes += chunk.data.count
         }
         if end { finishedFetching = true }
+        if length > 0 { onBuffered?(min(Double(position + pendingBytes) / Double(length), 1)) }
         scheduleDelivery()
     }
 

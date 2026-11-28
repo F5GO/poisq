@@ -37,6 +37,8 @@ public protocol PlaybackEngine: AnyObject {
     func setRate(_ rate: Float)
     /// Метаданные потока (ICY `StreamTitle` у радио). nil — убрать обработчик.
     func setMetadataHandler(_ handler: ((String) -> Void)?)
+    /// Докуда загружен трек по ссылке (доля длины) — для полосы прокрутки. nil — убрать обработчик.
+    func setBufferHandler(_ handler: ((URL, Double) -> Void)?)
 
     /// Вызывается, когда трек начал играть (в т.ч. при gapless-переходе).
     var onTrackStarted: ((URL) -> Void)? { get set }
@@ -48,4 +50,5 @@ public protocol PlaybackEngine: AnyObject {
 public extension PlaybackEngine {
     func setRate(_ rate: Float) {}
     func setMetadataHandler(_ handler: ((String) -> Void)?) {}
+    func setBufferHandler(_ handler: ((URL, Double) -> Void)?) {}
 }

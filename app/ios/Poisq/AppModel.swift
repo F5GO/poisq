@@ -268,18 +268,21 @@ final class AppModel {
         return out
     }
 
-    /// Изменение имени, адреса, логина и пароля. Пустой пароль — оставить прежний.
     /// Какая часть трека уже на устройстве — для затемнения полосы прокрутки: загруженный трек целиком, иначе кеш.
+    /// Играющий потоком трек показывает загруженное плеером, если его больше, чем в кеше.
     /// nil — ничего не известно (кеш выключен или трек ещё не начал качаться).
     func bufferedFraction(for song: Song) -> Double? {
         guard let sid = activeID, let client else { return nil }
         if downloads.isDownloaded(song, serverID: sid) { return 1 }
-        return cache.fraction(for: song, serverID: sid, quality: cacheQuality(client))
+        let cached = cache.fraction(for: song, serverID: sid, quality: cacheQuality(client))
+        guard let streamed = player?.streamBuffered(for: song) else { return cached }
+        return max(cached ?? 0, streamed)
     }
 
     /// Канал отдаёт только исходный файл, поэтому кеш защищённого профиля всегда хранит оригинал.
     private func cacheQuality(_ client: SubsonicClient) -> StreamQuality { client.channel == nil ? playbackQuality : .original }
 
+    /// Изменение имени, адреса, логина и пароля. Пустой пароль — оставить прежний.
     func updateServer(_ id: UUID, name: String, address: String, username: String, password: String,
                       alternates: [String] = [], headers: [String: String]? = nil) async throws {
         guard let i = servers.firstIndex(where: { $0.id == id }) else { return }
@@ -406,7 +409,10 @@ final class AppModel {
         }
         player.onTrackChange = { [weak self] current, upcoming in
             guard let self, !self.offline, self.cacheOnCellular || !self.network.isExpensive else { return }
-            self.cache.prefetch([current] + upcoming.prefix(2), client: client, serverID: sid, quality: self.cacheQuality(client),
+            // Защищённый профиль не кеширует играющий трек: поток уже читает его через канал,
+            // а вторая полная загрузка того же файла отнимала у потока канал, и звук ждал.
+            let songs = client.channel == nil ? [current] + upcoming.prefix(2) : Array(upcoming.prefix(2))
+            self.cache.prefetch(songs, client: client, serverID: sid, quality: self.cacheQuality(client),
                                 isDownloaded: { self.downloads.isDownloaded($0, serverID: sid) })
         }
         player.onNowPlaying = { [weak self] song in

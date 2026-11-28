@@ -82,18 +82,21 @@ final class CacheManager {
         progress[key] = nil
     }
 
-    /// Подкачивает треки в кеш (уже скачанные пропускаются).
+    /// Очередь подкачки: качается один файл за раз, чтобы не отнимать канал у играющего потока
+    /// и не держать радио под несколькими загрузками сразу. Новый список заменяет ещё не начатые файлы.
+    private var queued: [(key: String, run: () async -> Void)] = []
+    private var running = false
+
+    /// Подкачивает треки в кеш по порядку (уже скачанные пропускаются).
     /// Защищённый профиль качает так же, как офлайн-загрузки: билет из канала, шифротекст по нему, расшифровка в файл кеша.
     func prefetch(_ songs: [Song], client: SubsonicClient, serverID: UUID, quality: StreamQuality, isDownloaded: (Song) -> Bool) {
-        for song in songs where !isDownloaded(song) {
+        queued = songs.compactMap { song -> (key: String, run: () async -> Void)? in
+            guard !isDownloaded(song) else { return nil }
             let dest = file(song, serverID, quality)
             let key = dest.path
-            guard !FileManager.default.fileExists(atPath: key), !inflight.contains(key) else { continue }
+            guard !FileManager.default.fileExists(atPath: key), !inflight.contains(key) else { return nil }
             if let channel = client.channel {
-                inflight.insert(key)
-                progress[key] = 0
-                Task { [session] in
-                    defer { Task { @MainActor in self.finish(key) } }
+                return (key, { [session] in
                     guard let ticket = try? await channel.downloadTicket(songID: song.id) else { return }
                     let watcher = DownloadWatcher(refuseRedirects: true) { value in Task { @MainActor in self.report(key, value) } }
                     guard let (tmp, response) = try? await session.download(for: URLRequest(url: ticket.url), delegate: watcher)
@@ -104,15 +107,11 @@ final class CacheManager {
                         Self.store(dest) { try SecureBlob.decrypt(from: tmp, to: $0, key: ticket.key, size: ticket.size, chunkSize: ticket.chunkSize) }
                     }.value
                     if ok { self.trim() }
-                }
-                continue
+                })
             }
-            guard let remote = try? client.fileURL(for: song, quality: quality) else { continue }
-            inflight.insert(key)
-            progress[key] = 0
+            guard let remote = try? client.fileURL(for: song, quality: quality) else { return nil }
             let request = client.request(for: remote)
-            Task { [session] in
-                defer { Task { @MainActor in self.finish(key) } }
+            return (key, { [session] in
                 let watcher = DownloadWatcher(refuseRedirects: false) { value in Task { @MainActor in self.report(key, value) } }
                 guard let (tmp, response) = try? await session.download(for: request, delegate: watcher),
                       let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
@@ -122,7 +121,22 @@ final class CacheManager {
                     return
                 }
                 if Self.store(dest, { try FileManager.default.moveItem(at: tmp, to: $0) }) { self.trim() }
-            }
+            })
+        }
+        pump()
+    }
+
+    private func pump() {
+        guard !running, !queued.isEmpty else { return }
+        let job = queued.removeFirst()
+        running = true
+        inflight.insert(job.key)
+        progress[job.key] = 0
+        Task {
+            await job.run()
+            finish(job.key)
+            running = false
+            pump()
         }
     }
 
@@ -201,6 +215,7 @@ private final class DownloadWatcher: NSObject, URLSessionTaskDelegate, @unchecke
     deinit { observation?.invalidate() }
 
     func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        task.priority = URLSessionTask.lowPriority     // подкачка уступает запросам интерфейса и потока
         let callback = onProgress
         observation = task.progress.observe(\.fractionCompleted) { progress, _ in callback(progress.fractionCompleted) }
     }
