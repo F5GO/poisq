@@ -830,7 +830,7 @@ private struct ResumeQueueCard: View {
                 // Та же кнопка, что на экране плеера: символ без подложки, по центру между полосой и краем карточки.
                 Button { player.togglePlayPause() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 34))
+                        .font(.system(size: 46))
                         .contentTransition(.symbolEffect(.replace))
                         .frame(width: 76)
                         .frame(maxHeight: .infinity)
