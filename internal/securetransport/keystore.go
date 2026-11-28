@@ -37,6 +37,10 @@ type KeyStore struct {
 	// lastEpoch — последняя выпущенная эпоха. Хранится отдельно: даже когда все ключи истекли,
 	// новая эпоха должна быть больше всех ранее выданных, иначе клиент отвергнет её как откат.
 	lastEpoch uint32
+	// blobKey запечатывает билеты офлайн-загрузок. Билет хранит случайный ключ файла, поэтому сам blobKey
+	// ничего не шифрует напрямую; его смена делает недействительными все выданные билеты.
+	blobKey      [32]byte
+	blobKeyAdded bool
 }
 
 type workingKey struct {
@@ -51,6 +55,7 @@ type storedKeys struct {
 	RootSeed       []byte          `json:"rootSeed"`
 	NextRootPublic []byte          `json:"nextRootPublic"`
 	LastEpoch      uint32          `json:"lastEpoch"`
+	BlobKey        []byte          `json:"blobKey,omitempty"`
 	Working        []storedWorking `json:"working"`
 }
 
@@ -84,6 +89,12 @@ func OpenKeyStore(dir string, now time.Time) (*KeyStore, error) {
 			return nil, err
 		}
 	}
+	if s.blobKeyAdded {
+		if err := s.persistLocked(); err != nil {
+			return nil, err
+		}
+		s.blobKeyAdded = false
+	}
 	if _, err := s.Rotate(now); err != nil {
 		return nil, err
 	}
@@ -103,6 +114,9 @@ func (s *KeyStore) create() error {
 		return err
 	}
 	s.root, s.nextRoot = root, nextPublic
+	if _, err := rand.Read(s.blobKey[:]); err != nil {
+		return err
+	}
 	// Следующий корень пишется до основного файла: обязательство не должно ссылаться на потерянный ключ.
 	if err := writeFileAtomic(filepath.Join(s.dir, nextRootFile), nextPrivate.Seed()); err != nil {
 		return err
@@ -123,6 +137,18 @@ func (s *KeyStore) load(raw []byte) error {
 	s.root = ed25519.NewKeyFromSeed(st.RootSeed)
 	s.nextRoot = ed25519.PublicKey(st.NextRootPublic)
 	s.lastEpoch = st.LastEpoch
+	switch len(st.BlobKey) {
+	case 32:
+		copy(s.blobKey[:], st.BlobKey)
+	case 0:
+		// Хранилище из версии без офлайн-загрузок: ключ билетов создаётся при первом открытии.
+		if _, err := rand.Read(s.blobKey[:]); err != nil {
+			return err
+		}
+		s.blobKeyAdded = true
+	default:
+		return errors.New("secure transport: keys file has a malformed blob key")
+	}
 	if s.installationID == [16]byte{} {
 		return errors.New("secure transport: keys file has a zero installation ID")
 	}
@@ -212,6 +238,7 @@ func (s *KeyStore) persistLocked() error {
 		RootSeed:       s.root.Seed(),
 		NextRootPublic: s.nextRoot,
 		LastEpoch:      s.lastEpoch,
+		BlobKey:        s.blobKey[:],
 	}
 	for _, w := range s.working {
 		st.Working = append(st.Working, storedWorking{Private: w.private.Bytes(), Certificate: w.raw})
@@ -222,6 +249,9 @@ func (s *KeyStore) persistLocked() error {
 	}
 	return writeFileAtomic(filepath.Join(s.dir, keysFile), raw)
 }
+
+// BlobKey возвращает ключ, которым запечатываются билеты офлайн-загрузок.
+func (s *KeyStore) BlobKey() [32]byte { return s.blobKey }
 
 // InstallationID возвращает идентификатор установки.
 func (s *KeyStore) InstallationID() [16]byte { return s.installationID }

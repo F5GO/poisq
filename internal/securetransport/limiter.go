@@ -44,8 +44,11 @@ func (l *rateLimiter) allow(key string, now time.Time) bool {
 		b = &bucket{tokens: l.burst, last: now}
 		l.buckets[key] = b
 	}
-	b.tokens = min(l.burst, b.tokens+now.Sub(b.last).Minutes()*l.perMinute)
-	b.last = now
+	// Часы могут пойти назад (коррекция NTP): отрицательный интервал не должен опустошать корзину.
+	if elapsed := now.Sub(b.last); elapsed > 0 {
+		b.tokens = min(l.burst, b.tokens+elapsed.Minutes()*l.perMinute)
+		b.last = now
+	}
 	if b.tokens < 1 {
 		return false
 	}

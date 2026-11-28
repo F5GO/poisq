@@ -253,6 +253,7 @@ func main() {
 		securetransport.NewNavidromeVerifier(cfg.NavidromeURL, nil),
 	)
 	secureServer.SetAccounts(secureAccounts)
+	secureServer.SetUpstream(proxyServer)
 	proxyServer.SetSecureTransport(secureServer)
 	go func() {
 		ticker := time.NewTicker(time.Hour)

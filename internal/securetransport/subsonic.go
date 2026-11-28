@@ -74,7 +74,8 @@ func NewSubsonicHandler(upstream http.Handler) Handler {
 		}
 		upCtx, cancel := detachedContext(ctx)
 		defer cancel()
-		req, err := upstreamRequest(upCtx, sess, method, query)
+		user, password, _ := sess.User()
+		req, err := upstreamRequest(upCtx, user, password, method, query)
 		if err != nil {
 			return writeStatus(w, StatusBadRequest)
 		}
@@ -97,8 +98,7 @@ func detachedContext(parent context.Context) (context.Context, context.CancelFun
 }
 
 // upstreamRequest строит внутренний запрос к прокси от имени пользователя сессии: клиентская авторизация отбрасывается.
-func upstreamRequest(ctx context.Context, sess *Session, method string, query url.Values) (*http.Request, error) {
-	user, password, _ := sess.User()
+func upstreamRequest(ctx context.Context, user, password, method string, query url.Values) (*http.Request, error) {
 	for _, k := range subsonicAuthParams {
 		query.Del(k)
 	}
@@ -152,7 +152,8 @@ func serveMedia(ctx context.Context, upstream http.Handler, sess *Session, body 
 	}
 	upCtx, cancel := detachedContext(ctx)
 	defer cancel()
-	req, err := upstreamRequest(upCtx, sess, method, query)
+	user, password, _ := sess.User()
+	req, err := upstreamRequest(upCtx, user, password, method, query)
 	if err != nil {
 		return writeStatus(w, StatusBadRequest)
 	}

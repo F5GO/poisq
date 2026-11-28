@@ -227,7 +227,31 @@ struct SecureMediaInteropTests {
         queue.sync { source.seek(at: mid) }
         await waitUntil(.seconds(30)) { tail.snapshot.1 == 1 }
         #expect(tail.snapshot.0 == data.subdata(in: mid..<data.count))
+
+        // Офлайн-загрузка: билет по каналу, зашифрованный файл обычным GET через Studio, расшифровка на устройстве.
+        let ticket = try await channel.downloadTicket(songID: "t1")
+        #expect(!ticket.url.absoluteString.contains("alice"))
+        var request = URLRequest(url: base.appending(path: String(ticket.url.path.dropFirst())))
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let (blob, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        #expect(blob.count == SecureBlob.cipherSize(size: ticket.size, chunkSize: ticket.chunkSize))
+        let src = FileManager.default.temporaryDirectory.appending(path: "interop-blob-\(UUID().uuidString)")
+        let dst = FileManager.default.temporaryDirectory.appending(path: "interop-plain-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: src); try? FileManager.default.removeItem(at: dst) }
+        try blob.write(to: src)
+        try SecureBlob.decrypt(from: src, to: dst, key: ticket.key, size: ticket.size, chunkSize: ticket.chunkSize)
+        #expect(SHA256Hex.of(try Data(contentsOf: dst)) == env["POISQ_INTEROP_TRACK_SHA"], "offline download differs")
+        // Докачка с середины даёт те же байты.
+        var resume = request
+        resume.setValue("bytes=\(blob.count / 2)-", forHTTPHeaderField: "Range")
+        let (part, partResponse) = try await URLSession.shared.data(for: resume)
+        #expect((partResponse as? HTTPURLResponse)?.statusCode == 206 && part == blob.subdata(in: blob.count / 2..<blob.count))
+
         await channel.signOut()
+        // После выхода (отзыва устройства) билет больше не действует.
+        let (_, revoked) = try await URLSession.shared.data(for: request)
+        #expect((revoked as? HTTPURLResponse)?.statusCode == 404)
     }
 }
 

@@ -105,6 +105,34 @@ final class DownloadManager: NSObject {
         // Занято = уже скачанное + то, что скачивается сейчас (по размеру из метаданных сервера).
         var used = totalBytes() + active.keys.reduce(Int64(0)) { $0 + (pending.get($1).map { Self.estimatedSize(of: $0.song, quality: $0.quality) } ?? 0) }
         var skipped = 0
+        if let channel = client.channel {
+            // Защищённый профиль: исходный файл по билету из канала; CDN видит только шифротекст.
+            for song in songs {
+                let key = DownloadedTrack.key(serverID, song.id)
+                guard tracks[key] == nil, active[key] == nil else { continue }
+                let size = Self.estimatedSize(of: song, quality: .original)
+                if let limit = limitBytes, used + size > limit { skipped += 1; continue }
+                used += size
+                pending.set(key, song, quality: .original)
+                failedKeys.remove(key)
+                active[key] = 0
+                Task {
+                    do {
+                        let ticket = try await channel.downloadTicket(songID: song.id)
+                        guard active[key] != nil else { return }        // загрузку успели отменить
+                        pending.setTicket(key, ticket)
+                        var request = URLRequest(url: ticket.url)
+                        request.allowsCellularAccess = allowsCellular
+                        let task = session.downloadTask(with: request)
+                        task.taskDescription = key
+                        task.resume()
+                    } catch {
+                        failed(key: key)
+                    }
+                }
+            }
+            return skipped
+        }
         for song in songs {
             let key = DownloadedTrack.key(serverID, song.id)
             guard tracks[key] == nil, active[key] == nil, let url = try? client.fileURL(for: song, quality: quality) else { continue }
@@ -178,7 +206,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
 
     /// Файл надо переместить прямо здесь: после выхода из метода система его удаляет.
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let key = downloadTask.taskDescription, let item = pending.get(key),
+        guard let key = downloadTask.taskDescription, let item = pending.item(key),
               let http = downloadTask.response as? HTTPURLResponse, http.statusCode == 200,
               let serverID = UUID(uuidString: String(key.split(separator: "|").first ?? "")) else {
             if let key = downloadTask.taskDescription { Task { @MainActor in self.failed(key: key) } }
@@ -207,13 +235,26 @@ extension DownloadManager: URLSessionDownloadDelegate {
         do {
             try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? FileManager.default.removeItem(at: dest)
-            try FileManager.default.moveItem(at: location, to: dest)
+            if let ticket = item.ticket {
+                // Расшифровываем один раз здесь (система удалит файл после выхода из метода); дальше трек
+                // хранится под защитой данных iOS и не расшифровывается при каждом воспроизведении.
+                try SecureBlob.decrypt(from: location, to: dest, key: ticket.key, size: ticket.size, chunkSize: ticket.chunkSize)
+            } else {
+                try FileManager.default.moveItem(at: location, to: dest)
+            }
             let bytes = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
             let track = DownloadedTrack(song: song, serverID: serverID, relativePath: rel, bytes: bytes, qualityKbps: item.quality.rawValue)
             Task { @MainActor in self.finished(key: key, track: track) }
         } catch {
             Task { @MainActor in self.failed(key: key) }
         }
+    }
+
+    /// Редиректы у загрузок защищённого профиля не выполняются: билет действует только на адресе Studio.
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                                newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        let secure = task.taskDescription.flatMap { pending.item($0)?.ticket } != nil
+        completionHandler(secure ? nil : request)
     }
 
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -234,6 +275,8 @@ extension DownloadManager: URLSessionDownloadDelegate {
 /// Метаданные загружаемых треков: нужны делегату, который может сработать после перезапуска приложения.
 final class PendingStore: @unchecked Sendable {
     struct Item: Codable { let song: Song; let qualityKbps: Int
+        /// Билет защищённого профиля: ссылка и ключ файла. Файл лежит в Application Support под защитой данных iOS.
+        var ticket: SecureDownloadTicket?
         var quality: StreamQuality { StreamQuality(rawValue: qualityKbps) ?? .original }
     }
     private let lock = NSLock()
@@ -245,8 +288,12 @@ final class PendingStore: @unchecked Sendable {
     }
     func set(_ key: String, _ song: Song, quality: StreamQuality) { lock.withLock { items[key] = Item(song: song, qualityKbps: quality.rawValue); persist() } }
     func get(_ key: String) -> (song: Song, quality: StreamQuality)? { lock.withLock { items[key].map { ($0.song, $0.quality) } } }
+    func item(_ key: String) -> (song: Song, quality: StreamQuality, ticket: SecureDownloadTicket?)? {
+        lock.withLock { items[key].map { ($0.song, $0.quality, $0.ticket) } }
+    }
+    func setTicket(_ key: String, _ ticket: SecureDownloadTicket) { lock.withLock { items[key]?.ticket = ticket; persist() } }
     func remove(_ key: String) { lock.withLock { items[key] = nil; persist() } }
-    private func persist() { try? JSONEncoder().encode(items).write(to: url, options: .atomic) }
+    private func persist() { try? JSONEncoder().encode(items).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]) }
 }
 
 /// Нужен, чтобы система могла разбудить приложение и дозавершить фоновые загрузки.

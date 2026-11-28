@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -67,6 +68,8 @@ type Server struct {
 
 	accounts *Accounts
 	hellos   *rateLimiter
+	upstream http.Handler // обработчик прокси Studio для офлайн-загрузок
+	blobs    *rateLimiter
 
 	mu       sync.Mutex
 	sessions map[[16]byte]*Session
@@ -109,6 +112,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case PathPrefix + "call":
 		s.call(w, r)
 	default:
+		if token, ok := strings.CutPrefix(r.URL.Path, PathPrefix+"blob/"); ok && token != "" && !strings.Contains(token, "/") {
+			s.serveBlob(w, r, token)
+			return
+		}
 		http.NotFound(w, r)
 	}
 }
@@ -270,6 +277,12 @@ func (s *Server) dispatch(ctx context.Context, sess *Session, request []byte, w 
 	switch request[0] {
 	case OpPing:
 		return PingHandler(ctx, sess, request, w)
+	case OpTicket:
+		if _, _, ok := sess.User(); !ok {
+			_, err := w.Write([]byte{StatusForbidden})
+			return err
+		}
+		return s.issueTicket(ctx, sess, request[1:], w)
 	case OpLogin, OpResume, OpSignOut:
 		if s.accounts == nil {
 			_, err := w.Write([]byte{StatusUnavailable})

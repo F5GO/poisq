@@ -215,6 +215,20 @@ func (s *DeviceStore) Resume(ctx context.Context, token [32]byte) (Device, [32]b
 	return d, next, password, nil
 }
 
+// Credentials возвращает пользователя и пароль Navidrome действующего устройства (для офлайн-загрузок).
+func (s *DeviceStore) Credentials(ctx context.Context, id string) (string, string, error) {
+	var user, enc string
+	err := s.db.QueryRowContext(ctx, "SELECT username, password_enc FROM secure_devices WHERE id = ?", id).Scan(&user, &enc)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrDeviceUnknown
+	}
+	if err != nil {
+		return "", "", err
+	}
+	password, err := s.cipher.Decrypt(enc)
+	return user, password, err
+}
+
 // List возвращает устройства, новые входы первыми.
 func (s *DeviceStore) List(ctx context.Context) ([]Device, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, username, name, created_at, last_used_at FROM secure_devices
