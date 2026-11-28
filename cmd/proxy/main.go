@@ -273,6 +273,22 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	var lanHTTPServer *http.Server
+	if cfg.LANListenAddr != "" {
+		lanHTTPServer = &http.Server{
+			Addr:              cfg.LANListenAddr,
+			Handler:           proxyServer.LANHandler(),
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
+		go func() {
+			log.Printf("[INFO] Домашний Subsonic-прокси без шифрования слушает %s (не пробрасывайте его через FRP)", cfg.LANListenAddr)
+			if err := lanHTTPServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatalf("[FATAL] Ошибка домашнего HTTP-сервера: %v", err)
+			}
+		}()
+	}
+
 	go func() {
 		log.Printf("[INFO] Публичный Subsonic-прокси (Умный поиск) слушает %s", cfg.ListenAddr)
 		if err := publicHTTPServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -352,6 +368,9 @@ func main() {
 	defer cancel()
 
 	_ = publicHTTPServer.Shutdown(shutdownCtx)
+	if lanHTTPServer != nil {
+		_ = lanHTTPServer.Shutdown(shutdownCtx)
+	}
 	_ = adminHTTPServer.Shutdown(shutdownCtx)
 	syncWG.Wait()
 	_ = castService.Close()

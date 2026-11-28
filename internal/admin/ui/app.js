@@ -308,6 +308,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initNavidromeAccountForm();
   initPublicAccessForm();
   initSecureTransportForm();
+  initSecureOnlyForm();
   initBiographyStudio();
   initMetadataStudio();
   window.addEventListener("popstate", applyRoute);
@@ -3871,6 +3872,25 @@ async function loadSecureDevices(payload = null) {
   return res;
 }
 
+function initSecureOnlyForm() {
+  document.getElementById("form-secure-only")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const all = !!document.getElementById("secure-only-all")?.checked;
+    const users = (document.getElementById("secure-only-users")?.value || "").split(",").map(s => s.trim()).filter(Boolean);
+    if (all && !await confirmDialog({
+      title: "Запретить вход без шифрования всем?",
+      message: "Обычные Subsonic-клиенты перестанут работать через публичный вход. Приложение poisq продолжит работать через Secure Transport.",
+      confirmLabel: "Запретить",
+      tone: "danger"
+    })) return;
+    const btn = document.getElementById("btn-save-secure-only");
+    if (btn) btn.disabled = true;
+    const res = await loadPublicAccess({ secureOnly: all, secureOnlyUsers: users });
+    if (btn) btn.disabled = false;
+    if (res) showToast("Настройки входа сохранены", "success");
+  });
+}
+
 async function loadPublicAccess(payload = null) {
   const box = document.getElementById("public-access-navidrome-web");
   const status = document.getElementById("public-access-status");
@@ -3880,7 +3900,9 @@ async function loadPublicAccess(payload = null) {
   try {
     res = payload ? await fetchApi("/public-access", "POST", payload) : await fetchApi("/public-access");
   } catch (err) {
-    if (status) status.textContent = `Ошибка: ${err.message}`;
+    // Ошибку показываем в той карточке, из которой сохраняли.
+    const target = payload && ("secureOnly" in payload) ? document.getElementById("secure-only-status") : status;
+    if (target) target.textContent = `Ошибка: ${err.message}`;
     return null;
   }
   if (status) status.textContent = "";
@@ -3888,6 +3910,18 @@ async function loadPublicAccess(payload = null) {
   if (badge) {
     badge.className = res.navidromeWebOpen ? "badge badge-danger" : "badge badge-success";
     badge.textContent = res.navidromeWebOpen ? "Веб открыт" : "Только Subsonic";
+  }
+  const all = document.getElementById("secure-only-all");
+  const users = document.getElementById("secure-only-users");
+  const soBadge = document.getElementById("secure-only-badge");
+  const soStatus = document.getElementById("secure-only-status");
+  if (all) all.checked = !!res.secureOnly;
+  if (users) users.value = (res.secureOnlyUsers || []).join(", ");
+  if (soStatus) soStatus.textContent = "";
+  if (soBadge) {
+    const n = (res.secureOnlyUsers || []).length;
+    soBadge.className = res.secureOnly || n ? "badge badge-success" : "badge badge-muted";
+    soBadge.textContent = res.secureOnly ? "Запрещён всем" : (n ? `Запрещён: ${n}` : "Разрешён");
   }
   return res;
 }

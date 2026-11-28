@@ -88,11 +88,26 @@ func NewSubsonicHandler(upstream http.Handler) Handler {
 	}
 }
 
+type channelOriginKey struct{}
+
+// IsChannelRequest сообщает, что внутренний запрос к прокси пришёл из защищённого канала. Метку ставит только
+// securetransport в контексте; внешний клиент не может её подделать. По ней прокси не применяет к каналу
+// политику «только защищённый вход».
+func IsChannelRequest(ctx context.Context) bool {
+	v, _ := ctx.Value(channelOriginKey{}).(bool)
+	return v
+}
+
+// ChannelContext помечает контекст внутреннего запроса как пришедший из канала.
+func ChannelContext(parent context.Context) context.Context {
+	return context.WithValue(parent, channelOriginKey{}, true)
+}
+
 // detachedContext отменяется вместе с parent, но не несёт его значений. Внутри HTTP-сервера httputil.ReverseProxy
 // на ошибке копирования вызывает panic(http.ErrAbortHandler) и обрывает соединение вместе с зашифрованным ответом;
 // без http.ServerContextKey он только пишет в журнал, а канал завершает ответ сам.
 func detachedContext(parent context.Context) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ChannelContext(context.Background()))
 	stop := context.AfterFunc(parent, cancel)
 	return ctx, func() { stop(); cancel() }
 }

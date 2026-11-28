@@ -2,6 +2,7 @@ package security
 
 import (
 	"path"
+	"sort"
 	"strings"
 	"sync/atomic"
 )
@@ -10,6 +11,62 @@ import (
 // Нулевое значение и nil закрывают веб-интерфейс Navidrome: при любой ошибке настройки вход остаётся закрытым.
 type PublicAccess struct {
 	navidromeWebOpen atomic.Bool
+	secureOnly       atomic.Pointer[secureOnlyPolicy]
+}
+
+// secureOnlyPolicy — кому обычный (незашифрованный) Subsonic на :4534 запрещён.
+type secureOnlyPolicy struct {
+	all   bool
+	users map[string]bool // имена в нижнем регистре: Navidrome сравнивает их без учёта регистра
+}
+
+// SetSecureOnly задаёт режим «только защищённый вход»: для всей установки или для отдельных аккаунтов.
+func (a *PublicAccess) SetSecureOnly(all bool, users []string) {
+	p := &secureOnlyPolicy{all: all, users: make(map[string]bool, len(users))}
+	for _, u := range users {
+		if u = strings.ToLower(strings.TrimSpace(u)); u != "" {
+			p.users[u] = true
+		}
+	}
+	a.secureOnly.Store(p)
+}
+
+// SecureOnly возвращает текущий режим; аккаунты — по алфавиту.
+func (a *PublicAccess) SecureOnly() (all bool, users []string) {
+	if a == nil {
+		return false, nil
+	}
+	p := a.secureOnly.Load()
+	if p == nil {
+		return false, nil
+	}
+	for u := range p.users {
+		users = append(users, u)
+	}
+	sort.Strings(users)
+	return p.all, users
+}
+
+// PlainSubsonicAllowed решает, пропускать ли обычный Subsonic-запрос пользователя user.
+// Пустое имя — авторизация без имени (apiKey, jwt): при включённых флагах аккаунтов она отклоняется,
+// иначе утёкший ключ отмеченного пользователя обходил бы флаг.
+func (a *PublicAccess) PlainSubsonicAllowed(user string) bool {
+	if a == nil {
+		return true
+	}
+	p := a.secureOnly.Load()
+	switch {
+	case p == nil:
+		return true
+	case p.all:
+		return false
+	case len(p.users) == 0:
+		return true
+	case user == "":
+		return false
+	default:
+		return !p.users[strings.ToLower(user)]
+	}
 }
 
 // NavidromeWebOpen сообщает, пропускает ли :4534 запросы к веб-интерфейсу и собственному API Navidrome.

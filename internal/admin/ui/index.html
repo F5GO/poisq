@@ -655,6 +655,30 @@
       <div class="cast-card">
         <div class="cast-card-header">
           <div>
+            <h2 class="cast-section-title cast-title-inline">Вход без шифрования</h2>
+            <p class="panel-desc">Обычный Subsonic на публичном входе можно запретить всем или отдельным аккаунтам. Дома сторонние клиенты подключаются к домашнему порту Studio (LAN_LISTEN_ADDR, например :4536), который не пробрасывается наружу. Пока аккаунты отмечены, запросы без имени пользователя (apiKey) на публичном входе тоже не принимаются.</p>
+          </div>
+          <span id="secure-only-badge" class="badge badge-muted">Проверка...</span>
+        </div>
+        <form id="form-secure-only" class="cast-form" autocomplete="off">
+          <label class="metadata-checkbox">
+            <input type="checkbox" id="secure-only-all" />
+            Только защищённый вход для всех аккаунтов
+          </label>
+          <div class="form-group">
+            <label class="form-label" for="secure-only-users">Аккаунты только с защищённым входом</label>
+            <input type="text" id="secure-only-users" class="form-input mono" placeholder="alice, bob" autocomplete="off" autocapitalize="off" spellcheck="false" />
+            <span class="form-hint">Имена пользователей Navidrome через запятую.</span>
+          </div>
+          <div class="cast-footer">
+            <p id="secure-only-status" class="form-hint cast-status-text" role="status"></p>
+            <button type="submit" class="btn btn-primary" id="btn-save-secure-only">Сохранить</button>
+          </div>
+        </form>
+      </div>
+      <div class="cast-card">
+        <div class="cast-card-header">
+          <div>
             <h2 class="cast-section-title cast-title-inline">Устройства</h2>
             <p class="panel-desc">Устройства, вошедшие через Secure Transport. Отзыв сразу завершает сессии устройства; для повторного входа нужен пароль. Смена пароля в Navidrome отзывает все устройства пользователя.</p>
           </div>

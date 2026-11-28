@@ -6,11 +6,17 @@
 package proxy
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"encoding/xml"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +41,22 @@ type Server struct {
 
 // SetSecureTransport подключает обработчик securetransport.PathPrefix. Вызывать до запуска HTTP-сервера.
 func (s *Server) SetSecureTransport(h http.Handler) { s.secure = h }
+
+type lanIngressKey struct{}
+
+// LANHandler — тот же прокси для домашнего порта (LAN_LISTEN_ADDR), который FRP не пробрасывает.
+// Метка входа ставится здесь, на стороне сервера, по слушающему сокету: заголовками её не подделать.
+// На домашнем порту не действуют фильтр веб-интерфейса Navidrome и политика «только защищённый вход».
+func (s *Server) LANHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), lanIngressKey{}, true)))
+	})
+}
+
+func isLANIngress(r *http.Request) bool {
+	v, _ := r.Context().Value(lanIngressKey{}).(bool)
+	return v
+}
 
 // SetPublicAccess подключает политику публичного входа из Studio. Вызывать до запуска HTTP-сервера.
 func (s *Server) SetPublicAccess(a *security.PublicAccess) { s.access = a }
@@ -165,8 +187,16 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 		}
 
 		// Веб-интерфейс и собственное API Navidrome закрыты, пока их явно не открыли в Studio: :4534 обслуживает только Subsonic.
-		if !srv.access.NavidromeWebOpen() && !security.IsSubsonicPath(r.URL.Path, r.URL.RawPath) {
+		lan := isLANIngress(r)
+		if !lan && !srv.access.NavidromeWebOpen() && !security.IsSubsonicPath(r.URL.Path, r.URL.RawPath) {
 			http.NotFound(w, r)
+			return
+		}
+
+		// «Только защищённый вход»: обычный Subsonic этих пользователей не принимается; запросы из канала проходят.
+		if !lan && strings.HasPrefix(r.URL.Path, "/rest/") && !securetransport.IsChannelRequest(r.Context()) &&
+			!srv.access.PlainSubsonicAllowed(subsonicUser(r)) {
+			writeSubsonicError(w, r, 50, "This account accepts only the secure poisq connection")
 			return
 		}
 
@@ -299,4 +329,43 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.handler.ServeHTTP(w, r)
+}
+
+// subsonicUser — имя пользователя обычного Subsonic-запроса из параметра u (в адресе или в теле формы POST).
+// Тело читается с ограничением и возвращается на место: дальше его читает прокси.
+func subsonicUser(r *http.Request) string {
+	if u := r.URL.Query().Get("u"); u != "" {
+		return u
+	}
+	if r.Method != http.MethodPost || r.Body == nil ||
+		!strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), r.Body))
+	if err != nil {
+		return ""
+	}
+	form, err := url.ParseQuery(string(body))
+	if err != nil {
+		return ""
+	}
+	return form.Get("u")
+}
+
+// writeSubsonicError отвечает ошибкой Subsonic в формате, который запросил клиент (по умолчанию XML).
+func writeSubsonicError(w http.ResponseWriter, r *http.Request, code int, message string) {
+	if f := r.URL.Query().Get("f"); f == "json" || f == "jsonp" {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]any{"subsonic-response": map[string]any{
+			"status": "failed", "version": "1.16.1", "error": map[string]any{"code": code, "message": message},
+		}})
+		return
+	}
+	w.Header().Set("Content-Type", "text/xml; charset=utf-8")
+	var msg strings.Builder
+	_ = xml.EscapeText(&msg, []byte(message))
+	_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>`+"\n"+
+		`<subsonic-response xmlns="http://subsonic.org/restapi" status="failed" version="1.16.1">`+
+		`<error code="`+strconv.Itoa(code)+`" message="`+msg.String()+`"/></subsonic-response>`)
 }

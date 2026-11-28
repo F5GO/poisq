@@ -45,3 +45,15 @@ func TestTrustedProxies(t *testing.T) {
 		t.Fatal("мусор в TRUSTED_PROXIES должен останавливать запуск")
 	}
 }
+
+func TestLANListenAddrIsOptIn(t *testing.T) {
+	t.Setenv("LAN_LISTEN_ADDR", "")
+	cfg, err := Load()
+	if err != nil || cfg.LANListenAddr != "" {
+		t.Fatalf("LAN port must be off by default: %q %v", cfg.LANListenAddr, err)
+	}
+	t.Setenv("LAN_LISTEN_ADDR", " :4536 ")
+	if cfg, err := Load(); err != nil || cfg.LANListenAddr != ":4536" {
+		t.Fatalf("LAN_LISTEN_ADDR: %q %v", cfg.LANListenAddr, err)
+	}
+}

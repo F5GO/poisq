@@ -22,6 +22,10 @@ type Config struct {
 	// ListenAddr — публичный адрес и порт Subsonic-прокси (только умный поиск, по умолчанию ":4534").
 	ListenAddr string
 
+	// LANListenAddr — домашний порт Subsonic-прокси без шифрования (пусто — выключен). FRP его не пробрасывает:
+	// на нём не действуют фильтр веб-интерфейса Navidrome и политика «только защищённый вход».
+	LANListenAddr string
+
 	// AdminListenAddr — внутренний адрес и порт панели управления и AI-комбайна (по умолчанию ":4535").
 	AdminListenAddr string
 
@@ -77,6 +81,7 @@ type Config struct {
 func Load() (*Config, error) {
 	listenAddr := getEnv("LISTEN_ADDR", ":4534")
 	adminListenAddr := getEnv("ADMIN_LISTEN_ADDR", ":4535")
+	lanListenAddr := strings.TrimSpace(os.Getenv("LAN_LISTEN_ADDR"))
 	rawNavidromeURL := getEnv("NAVIDROME_URL", "http://navidrome:4533")
 	dbPath := getEnv("NAVIDROME_DB_PATH", "/data/navidrome.db")
 	poisqDBPath := getEnv("POISQ_DB_PATH", "/data/poisq.db")
@@ -119,6 +124,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		ListenAddr:                listenAddr,
 		AdminListenAddr:           adminListenAddr,
+		LANListenAddr:             lanListenAddr,
 		NavidromeURL:              parsedURL,
 		NavidromeDBPath:           dbPath,
 		PoisqDBPath:               poisqDBPath,

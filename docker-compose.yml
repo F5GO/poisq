@@ -15,8 +15,10 @@ services:
     volumes:
       - /path/to/your/music:/music:ro # Navidrome читает теги, обложки и .lrc файлы из /music
       - navidrome_data:/data
-    ports:
-      - "4533:4533"
+    # Порт Navidrome не публикуется: к нему ходит только poisq по docker-сети. Дома обычные клиенты и веб-интерфейс
+    # Navidrome доступны через домашний порт poisq (:4536). Опубликуйте 4533 снова, только если нужен прямой доступ.
+    # ports:
+    #   - "4533:4533"
 
   # Умный поисковый прокси (:4534) и AI-комбайн для медиатеки (:4535)
   poisq:
@@ -26,13 +28,16 @@ services:
     depends_on:
       - navidrome
     ports:
-      # Публичный порт — только умный поиск и прозрачный Subsonic-прокси (lyrics отдает сам Navidrome)
+      # Публичный порт — Subsonic и Secure Transport; FRP пробрасывает в интернет только его
       - "4534:4534"
+      # Домашний порт — прозрачный прокси без шифрования для домашней сети; FRP его НЕ пробрасывает
+      - "4536:4536"
       # Внутренний порт веб-админки — доступен только с localhost / SSH-туннеля / VPN
       - "127.0.0.1:4535:4535"
     environment:
       LISTEN_ADDR: ":4534"
       ADMIN_LISTEN_ADDR: ":4535"
+      LAN_LISTEN_ADDR: ":4536"
       NAVIDROME_URL: "http://navidrome:4533"
       NAVIDROME_DB_PATH: "/data/navidrome.db"
       POISQ_DB_PATH: "/data/poisq.db"
