@@ -568,6 +568,23 @@
       <div class="cast-card">
         <div class="cast-card-header">
           <div>
+            <h2 class="cast-section-title cast-title-inline">Публичный вход Subsonic (:4534)</h2>
+            <p class="panel-desc">
+              Через публичный вход работает только Subsonic API. Веб-интерфейс и собственное API Navidrome закрыты: открывайте Navidrome напрямую в домашней сети или через VPN.
+            </p>
+          </div>
+          <span id="public-access-badge" class="badge badge-muted">Проверка...</span>
+        </div>
+        <label class="metadata-checkbox">
+          <input type="checkbox" id="public-access-navidrome-web" />
+          Открыть веб-интерфейс Navidrome через публичный вход (небезопасно)
+        </label>
+        <p id="public-access-status" class="form-hint cast-status-text" role="status"></p>
+      </div>
+
+      <div class="cast-card">
+        <div class="cast-card-header">
+          <div>
             <h2 class="cast-section-title cast-title-inline">Служебная учётная запись Navidrome</h2>
             <p class="panel-desc">
               Studio берёт из Navidrome аудиопоток, если файла нет в папке с музыкой, и обложки или фото артистов, которых нет на диске и в кэше Navidrome. Создайте в Navidrome отдельного пользователя без прав администратора и укажите его здесь.

@@ -232,6 +232,12 @@ func main() {
 	proxyServer := proxy.NewServer(cfg.NavidromeURL, engine, dict, aliasMgr, cfg.EnableDebugAPI)
 	proxyServer.SetTrustedProxies(cfg.TrustedProxies)
 	proxyServer.SetCast(castService)
+	// Веб-интерфейс Navidrome на :4534 закрыт по умолчанию и при ошибке чтения настройки.
+	publicAccess := &security.PublicAccess{}
+	if err := admin.LoadPublicAccess(poisqDB, publicAccess); err != nil {
+		log.Printf("[WARN] Политика публичного входа не прочитана, веб-интерфейс Navidrome закрыт: %v", err)
+	}
+	proxyServer.SetPublicAccess(publicAccess)
 	proxyServer.SetBiographyReader(bioStore)
 	proxyServer.SetBiographyCoordinator(bioCoordinator, cfg.BiographyFirstRequestWait)
 	publicHTTPServer := &http.Server{
@@ -260,6 +266,7 @@ func main() {
 	adminHandler.SetConfidenceRepository(confidenceRepo)
 	adminHandler.SetAlignerClient(alignerClient)
 	adminHandler.SetCast(castService)
+	adminHandler.SetPublicAccess(publicAccess)
 	adminHandler.SetBiographyStore(bioStore)
 	adminHandler.SetBiographyCoordinator(bioCoordinator)
 	adminHandler.SetMetadataControlServices(admin.MetadataControlServices{

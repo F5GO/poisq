@@ -306,6 +306,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initKeyModal();
   initCastForm();
   initNavidromeAccountForm();
+  initPublicAccessForm();
   initBiographyStudio();
   initMetadataStudio();
   window.addEventListener("popstate", applyRoute);
@@ -469,6 +470,7 @@ function activateTab(tabName) {
     loadKeysData();
     loadCastSettings();
     loadNavidromeAccount();
+    loadPublicAccess();
     loadJobsData(); // состояние паузы воркера для «Обслуживания»
   }
 }
@@ -3761,6 +3763,47 @@ function initNavidromeAccountForm() {
     const res = await loadNavidromeAccount({ clear: true });
     if (res) showToast("Учётная запись Navidrome удалена", "info");
   });
+}
+
+function initPublicAccessForm() {
+  const box = document.getElementById("public-access-navidrome-web");
+  box?.addEventListener("change", async () => {
+    const open = box.checked;
+    if (open && !await confirmDialog({
+      title: "Открыть веб-интерфейс Navidrome?",
+      message: "Панель и собственное API Navidrome станут доступны через публичный вход, в том числе через CDN.",
+      confirmLabel: "Открыть",
+      tone: "danger"
+    })) {
+      box.checked = false;
+      return;
+    }
+    box.disabled = true;
+    const res = await loadPublicAccess({ navidromeWebOpen: open });
+    box.disabled = false;
+    if (res) showToast(res.navidromeWebOpen ? "Веб-интерфейс Navidrome открыт" : "Веб-интерфейс Navidrome закрыт", res.navidromeWebOpen ? "info" : "success");
+  });
+}
+
+async function loadPublicAccess(payload = null) {
+  const box = document.getElementById("public-access-navidrome-web");
+  const status = document.getElementById("public-access-status");
+  const badge = document.getElementById("public-access-badge");
+  if (!box) return null;
+  let res;
+  try {
+    res = payload ? await fetchApi("/public-access", "POST", payload) : await fetchApi("/public-access");
+  } catch (err) {
+    if (status) status.textContent = `Ошибка: ${err.message}`;
+    return null;
+  }
+  if (status) status.textContent = "";
+  box.checked = !!res.navidromeWebOpen;
+  if (badge) {
+    badge.className = res.navidromeWebOpen ? "badge badge-danger" : "badge badge-success";
+    badge.textContent = res.navidromeWebOpen ? "Веб открыт" : "Только Subsonic";
+  }
+  return res;
 }
 
 async function loadNavidromeAccount(payload = null) {

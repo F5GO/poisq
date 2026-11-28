@@ -51,6 +51,7 @@ type AdminServer struct {
 	confidence    *db.ConfidenceRepository
 	alignerCli    *aligner.Client
 	cast          *cast.Service
+	publicAccess  *security.PublicAccess
 	biographies   *artistbio.Store
 	biographyJobs interface {
 		Request(context.Context, string, bool) (<-chan struct{}, artistbio.JobState, error)
@@ -149,6 +150,7 @@ func NewAdminServer(
 
 	mux.HandleFunc("/api/v1/keys", s.handleKeysAPI)
 	mux.HandleFunc("/api/v1/cast", s.handleCast)
+	mux.HandleFunc("/api/v1/public-access", s.handlePublicAccess)
 	mux.HandleFunc("/api/v1/navidrome/account", s.handleNavidromeAccount)
 	mux.HandleFunc("/api/v1/artist-biographies", s.handleArtistBiographies)
 	mux.HandleFunc("/api/v1/artist-biographies/detail", s.handleArtistBiographyDetail)

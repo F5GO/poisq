@@ -17,6 +17,7 @@ import (
 	"github.com/F5GO/poisq/internal/cache"
 	"github.com/F5GO/poisq/internal/cast"
 	"github.com/F5GO/poisq/internal/search"
+	"github.com/F5GO/poisq/internal/security"
 )
 
 // Server инкапсулирует HTTP-обработчик реверс-прокси и вспомогательные сервисы.
@@ -26,8 +27,12 @@ type Server struct {
 	biographies effectiveBiographyReader
 	bioJobs     biographyRequester
 	bioWait     time.Duration
-	trusted     []netip.Prefix // обратные прокси, чьим заголовкам о клиенте верим; пусто — никому
+	trusted     []netip.Prefix         // обратные прокси, чьим заголовкам о клиенте верим; пусто — никому
+	access      *security.PublicAccess // nil — веб-интерфейс Navidrome закрыт
 }
+
+// SetPublicAccess подключает политику публичного входа из Studio. Вызывать до запуска HTTP-сервера.
+func (s *Server) SetPublicAccess(a *security.PublicAccess) { s.access = a }
 
 // SetTrustedProxies задаёт адреса обратных прокси. Вызывать до запуска HTTP-сервера.
 func (s *Server) SetTrustedProxies(prefixes []netip.Prefix) { s.trusted = prefixes }
@@ -140,6 +145,12 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 				aliasHandler(w, r)
 				return
 			}
+			http.NotFound(w, r)
+			return
+		}
+
+		// Веб-интерфейс и собственное API Navidrome закрыты, пока их явно не открыли в Studio: :4534 обслуживает только Subsonic.
+		if !srv.access.NavidromeWebOpen() && !security.IsSubsonicPath(r.URL.Path, r.URL.RawPath) {
 			http.NotFound(w, r)
 			return
 		}
