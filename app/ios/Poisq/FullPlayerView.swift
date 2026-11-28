@@ -514,7 +514,7 @@ private struct PlayerScrubber: View {
                     dragFraction = nil
                 }
                 .sliderThumbVisibility(.hidden)
-                .overlay { BufferedTrack(played: fraction, loaded: player.current.flatMap(model.bufferedFraction), thickness: 6) }
+                .overlay { BufferedTrack(played: fraction, loaded: player.current.flatMap(model.bufferedFraction), thickness: 20.0 / 3) }
                 HStack {
                     Text(Self.format(fraction * duration))
                     Spacer()
