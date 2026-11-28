@@ -820,14 +820,15 @@ private struct ResumeQueueCard: View {
                 .buttonStyle(.plain)
                 .accessibilityHint("Queue")
 
-                // Системная выделенная стеклянная кнопка, как «Воспроизвести» в Музыке: цвет акцента, без самописных колец.
+                // Обычное системное стекло, как у быстрых действий главной: без заливки акцентом и самописных колец.
                 Button { player.togglePlayPause() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                         .font(.title2)
+                        .foregroundStyle(.primary)
                         .contentTransition(.symbolEffect(.replace))
                         .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
                 .accessibilityLabel(player.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
             }
