@@ -22,7 +22,6 @@ struct SignInView: View {
     @State private var secure: SecureSetup?
     @State private var showScanner = false
     @State private var keyChangeCode: String?
-    @State private var showKeyDetails = false
     private struct SecureSetup {
         let profileID: UUID                    // под этим ID канал хранит токен устройства в Keychain
         let pairing: SecureServerPairing
@@ -174,30 +173,8 @@ struct SignInView: View {
             }
             .frame(maxWidth: .infinity)
         case .verified:
-            VStack(spacing: 10) {
-                Label("Connection is secure", systemImage: "lock.shield.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.green)
-                Button { showKeyDetails = true } label: {
-                    Text(s.pairing.emojiFingerprint.joined(separator: " "))
-                        .font(.largeTitle)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("Key emoji"))
-                .accessibilityHint(Text("Shows how to check the key"))
-                .popover(isPresented: $showKeyDetails) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Compare the emoji with poisq Studio. If they differ, don't sign in.")
-                        Text("Key \(s.pairing.fingerprint)").font(.caption.monospaced()).foregroundStyle(.secondary)
-                    }
-                    .font(.footnote)
-                    .padding()
-                    .frame(idealWidth: 280)
-                    .presentationCompactAdaptation(.popover)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            SecureKeyBadge(pairing: s.pairing, verified: true)
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
         case .failed(let message):
             VStack(spacing: 8) {
                 Label(message, systemImage: "lock.trianglebadge.exclamationmark.fill")

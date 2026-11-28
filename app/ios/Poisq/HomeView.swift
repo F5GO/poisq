@@ -2,6 +2,50 @@ import SwiftUI
 import PoisqCore
 import PoisqPlayback
 
+/// Последнее содержимое главной на устройстве: при запуске (в том числе на медленной сети) экран сразу
+/// заполнен прежними полками, а ответы сервера заменяют их по мере прихода. Файл свой для сервера и медиатеки.
+struct HomeSnapshot: Codable {
+    var albums: [String: [Album]] = [:]
+    var playlists: [Playlist] = []
+    var favoriteSongs: [Song] = []
+    var favoriteArtists: [Artist] = []
+    var quickPicks: [Song] = []
+    var newSongs: [Song] = []
+    var stationLists: [String: [Song]] = [:]
+    var builtAt = Date.distantPast
+
+    private static let dir: URL = {
+        let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "home", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }()
+
+    /// Ключ содержимого — «сервер|медиатека»; в имени файла остаются только безопасные символы.
+    private static func file(_ key: String) -> URL {
+        let safe = key.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-"))) ?? ""
+        return dir.appending(path: "\(safe).json")
+    }
+
+    static func load(key: String) -> HomeSnapshot? {
+        (try? Data(contentsOf: file(key))).flatMap { try? JSONDecoder().decode(HomeSnapshot.self, from: $0) }
+    }
+
+    func save(key: String) {
+        guard let data = try? JSONEncoder().encode(self) else { return }
+        let url = Self.file(key)
+        Task.detached(priority: .utility) { try? data.write(to: url, options: .atomic) }
+    }
+
+    /// Все медиатеки удалённого сервера.
+    static func delete(serverID: UUID) {
+        let prefix = serverID.uuidString
+        for url in (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        where url.lastPathComponent.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+}
+
 @MainActor @Observable
 private final class HomeModel {
     var albums: [HomeItem: [Album]] = [:]
@@ -27,6 +71,37 @@ private final class HomeModel {
     /// Меняется при смене сервера или медиатеки: ответы для прежней медиатеки отбрасываются.
     private var generation = 0
     private static let rebuildInterval: TimeInterval = 3 * 3600
+    /// Медиатека, чьё содержимое сейчас на экране (из снимка или с сервера).
+    private var shownKey = ""
+
+    /// Показывает сохранённую главную медиатеки key; без снимка — пустой экран с заглушками, а не чужая медиатека.
+    private func restore(key: String) {
+        guard key != shownKey else { return }
+        shownKey = key
+        generation += 1
+        let snap = HomeSnapshot.load(key: key)
+        albums = Dictionary(uniqueKeysWithValues: (snap?.albums ?? [:]).compactMap { k, v in HomeItem(rawValue: k).map { ($0, v) } })
+        playlists = snap?.playlists ?? []
+        favoriteSongs = snap?.favoriteSongs ?? []
+        favoriteArtists = snap?.favoriteArtists ?? []
+        quickPicks = snap?.quickPicks ?? []
+        newSongs = snap?.newSongs ?? []
+        stationLists = snap?.stationLists ?? [:]
+        refreshNeeded = []
+        failed = false
+        loadedOnce = snap != nil
+        // Быстрый выбор и станции снимка живут по тем же правилам, что и собранные в этом запуске.
+        builtKey = snap == nil ? "" : key
+        builtAt = snap?.builtAt ?? .distantPast
+    }
+
+    private func persist() {
+        guard !shownKey.isEmpty else { return }
+        HomeSnapshot(albums: Dictionary(uniqueKeysWithValues: albums.map { ($0.key.rawValue, $0.value) }),
+                     playlists: playlists, favoriteSongs: favoriteSongs, favoriteArtists: favoriteArtists,
+                     quickPicks: quickPicks, newSongs: newSongs, stationLists: stationLists, builtAt: builtAt)
+            .save(key: shownKey)
+    }
 
     private static func similar(to seed: Song?, client: SubsonicClient) async -> [Song] {
         guard let seed else { return [] }
@@ -36,6 +111,7 @@ private final class HomeModel {
     /// Базовая загрузка стандартным API: только видимые блоки, параллельно.
     /// (Расширение poisq позже заменит это одним запросом.)
     func load(client: SubsonicClient?, library: String?, items: [HomeItem], seed: Song?, key: String, force: Bool) async {
+        restore(key: key)
         guard let client else { return }
         // Недавние и случайные альбомы нужны быстрым действиям, даже если их полки скрыты.
         let requested = Set(items.filter { $0.albumListType != nil }).union([.recent, .random])
@@ -44,7 +120,12 @@ private final class HomeModel {
         let needsStarred = true
         guard !wanted.isEmpty || needsStarred || items.contains(.playlists) else { albums = [:]; failed = false; return }
         isLoading = true
-        defer { isLoading = false; loadedOnce = true }
+        let gen = generation
+        defer {
+            isLoading = false
+            loadedOnce = true
+            if gen == generation, !failed { persist() }
+        }
         // Остальные блоки (плейлисты, избранные песни и артисты) — своими запросами, ошибка одного не ломает главную.
         async let pl: [Playlist]? = items.contains(.playlists) ? try? await client.playlists() : nil
         async let st: SearchResults? = needsStarred ? try? await client.starred(musicFolderId: library) : nil
@@ -55,9 +136,13 @@ private final class HomeModel {
         let wantsNew = fresh && items.contains(.newSongs)
         async let fetchedNew: [Song] = wantsNew ? HomeStarter.prepare(.newest, client: client, folder: library, favorites: []) : []
         let (gotPlaylists, gotStarred) = await (pl, st)
-        playlists = gotPlaylists ?? []
-        favoriteSongs = gotStarred?.songs ?? []
-        favoriteArtists = Array((gotStarred?.artists ?? []).prefix(20))
+        guard gen == generation else { return }       // пока ждали, сменилась медиатека
+        // Нет ответа — остаётся то, что уже на экране (в том числе из снимка).
+        if let gotPlaylists { playlists = gotPlaylists } else if !items.contains(.playlists) { playlists = [] }
+        if let gotStarred {
+            favoriteSongs = gotStarred.songs
+            favoriteArtists = Array(gotStarred.artists.prefix(20))
+        }
         // Похожие — на то, что играет, иначе на случайный любимый; идут параллельно с полками альбомов.
         let pickSeed = wantsPicks ? (seed ?? favoriteSongs.randomElement()) : nil
         async let sim = Self.similar(to: pickSeed, client: client)
@@ -73,18 +158,16 @@ private final class HomeModel {
                 if let list { loaded[item] = list } else { errors += 1 }
             }
         }
+        guard gen == generation else { return }
         failed = errors == wanted.count
-        if !failed { albums = loaded }     // при частичной ошибке оставляем то, что загрузилось
+        // Полка без ответа остаётся прежней, а не исчезает.
+        if !failed { albums = loaded.merging(albums.filter { requested.contains($0.key) }) { new, _ in new } }
         if wantsPicks {
             let picks = HomeMix.quickPicks(similar: await sim, favorites: favoriteSongs.shuffled(), random: await rnd ?? [])
             if !picks.isEmpty { quickPicks = picks }   // сервер не ответил — оставляем прежний список
         }
         if fresh && gotStarred != nil {
-            if key != builtKey {
-                quickPicks = wantsPicks ? quickPicks : []
-                stationLists = [:]                  // чужая медиатека — старые станции не показываем
-                generation += 1
-            }
+            if key != builtKey, !wantsPicks { quickPicks = [] }   // чужие станции и треки уже убрал restore
             refreshNeeded = Set(stationLists.keys)  // вместе с быстрым выбором обновляются и станции
             if wantsNew {
                 let fetched = await fetchedNew
@@ -127,6 +210,7 @@ private final class HomeModel {
                     // Обложку грузим сразу, не дожидаясь, пока карточка появится на экране.
                     if let cover = songs.first?.coverArt { Task { await warmCover(cover) } }
                 }
+                if let self, gen == self.generation { self.persist() }
             }
         }
     }
@@ -172,7 +256,7 @@ struct HomeView: View {
                         }
                         if model.homeLayout.visible.isEmpty { emptyLayout }
                     }
-                    if home.failed && !model.offline && !songsMode {
+                    if home.failed && home.albums.isEmpty && !model.offline && !songsMode {
                         ContentUnavailableView {
                             Label("Couldn't load", systemImage: "wifi.exclamationmark")
                         } description: {

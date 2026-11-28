@@ -1,4 +1,5 @@
 import SwiftUI
+import PoisqCore
 
 /// Изменение сохранённого сервера: имя, адрес, логин, пароль.
 struct ServerEditView: View {
@@ -29,17 +30,26 @@ struct ServerEditView: View {
                 Section("Name") {
                     TextField("Name", text: $name)
                 }
-                Section {
-                    TextField("Server address", text: $address)
-                        .textContentType(.URL).keyboardType(.URL)
-                    TextField("Username", text: $username).textContentType(.username)
-                    SecureField("New password", text: $password).textContentType(.password)
-                } header: {
-                    Text("Connection")
-                } footer: {
-                    Text("Leave the password empty to keep the current one. Changes to the connection are checked before saving.")
+                if let pairing = server.secure?.pairing {
+                    Section {
+                        SecureKeyBadge(pairing: pairing, verified: server.id == model.activeID && model.secureVerified)
+                            .padding(.vertical, 4)
+                    } footer: {
+                        Text("The address and key come from the QR code of poisq Studio. To change them, add the server again with a new QR code.")
+                    }
+                } else {
+                    Section {
+                        TextField("Server address", text: $address)
+                            .textContentType(.URL).keyboardType(.URL)
+                        TextField("Username", text: $username).textContentType(.username)
+                        SecureField("New password", text: $password).textContentType(.password)
+                    } header: {
+                        Text("Connection")
+                    } footer: {
+                        Text("Leave the password empty to keep the current one. Changes to the connection are checked before saving.")
+                    }
+                    ServerAdvancedFields(alternates: $alternates, headers: $headers)
                 }
-                ServerAdvancedFields(alternates: $alternates, headers: $headers)
                 if let errorText {
                     Section { Label(errorText, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red) }
                 }
@@ -50,7 +60,7 @@ struct ServerEditView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    if isWorking { ProgressView() } else { Button("Save", action: save).disabled(name.isEmpty || address.isEmpty || username.isEmpty) }
+                    if isWorking { ProgressView() } else { Button("Save", action: save).disabled(name.isEmpty || (!server.isSecure && (address.isEmpty || username.isEmpty))) }
                 }
             }
             .onChange(of: address) { errorText = nil }

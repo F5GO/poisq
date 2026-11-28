@@ -4362,6 +4362,26 @@
           }
         }
       }
+    },
+    "Encryption is on": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Шифрование включено"
+          }
+        }
+      }
+    },
+    "The address and key come from the QR code of poisq Studio. To change them, add the server again with a new QR code.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Адрес и ключ взяты из QR-кода poisq Studio. Чтобы их сменить, добавьте сервер заново по новому QR-коду."
+          }
+        }
+      }
     }
   },
   "version": "1.1"

@@ -331,6 +331,7 @@ final class AppModel {
         SessionStore.delete(serverID: id)
         scrobbles.removeAll(serverID: id)
         PlayHistoryStore.delete(serverID: id)
+        HomeSnapshot.delete(serverID: id)
         let wasActive = id == activeID
         servers.removeAll { $0.id == id }
         saveServers()

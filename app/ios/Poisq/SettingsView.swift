@@ -22,6 +22,10 @@ struct SettingsView: View {
                         LabeledContent("Address", value: s.url.host() ?? "—")
                         LabeledContent("User", value: s.username)
                         LabeledContent("Mode", value: model.capabilities.hasPoisq ? "poisq" : "Subsonic")
+                        if let pairing = s.secure?.pairing {
+                            SecureKeyBadge(pairing: pairing, verified: model.secureVerified)
+                                .padding(.vertical, 4)
+                        }
                     }
                 }
                 playbackSection
@@ -60,7 +64,13 @@ struct SettingsView: View {
                     Button { model.switchServer(to: server.id) } label: {
                         HStack {
                             VStack(alignment: .leading) {
-                                Text(server.name).foregroundStyle(.primary)
+                                HStack(spacing: 4) {
+                                    Text(server.name).foregroundStyle(.primary)
+                                    if server.isSecure {
+                                        Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.green)
+                                            .accessibilityLabel(Text("Encryption is on"))
+                                    }
+                                }
                                 Text(server.url.host() ?? "").font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
