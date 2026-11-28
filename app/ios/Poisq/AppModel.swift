@@ -370,6 +370,7 @@ final class AppModel {
         pins.load(serverID: profile.id)
         let engine = AudioStreamingEngine()
         engine.requestHeaders = headers
+        if client.channel != nil { engine.secureMedia = client }   // треки защищённого профиля читаются через канал
         covers.setHeaders(headers)
         prewarmStartupCovers(serverID: profile.id)
         equalizer.attach(engine)
@@ -448,6 +449,7 @@ final class AppModel {
         } else {
             let local = AudioStreamingEngine()
             local.requestHeaders = activeID.map(ServerHeaders.load) ?? [:]
+            if client.channel != nil { local.secureMedia = client }
             engine = local
         }
         equalizer.attach(engine)

@@ -49,6 +49,8 @@ public actor SecureChannel {
         case revoked
         case invalidInput
         case forbidden
+        /// The server can't read this media from an arbitrary position.
+        case rangeUnsupported
     }
 
     private struct Session {
@@ -124,6 +126,28 @@ public actor SecureChannel {
         return SubsonicResponse(httpStatus: Int(reply[1]) << 8 | Int(reply[2]),
                                 contentType: String(decoding: reply[4..<4 + n], as: UTF8.self),
                                 body: Data(reply[(4 + n)...]))
+    }
+
+    /// Byte range of the original audio: HTTP status, full size (nil if unknown) and bytes.
+    public func media(method: String, query: [URLQueryItem], offset: Int, length: Int) async throws -> (httpStatus: Int, total: Int?, body: Data) {
+        let m = Data(method.utf8)
+        guard !m.isEmpty, m.count <= 64, offset >= 0, (1...(8 << 20)).contains(length) else { throw Failure.invalidInput }
+        var c = URLComponents()
+        c.queryItems = query
+        let q = Data((c.percentEncodedQuery ?? "").utf8)
+        var body = Data([0x11, UInt8(m.count)]) + m + SecureChannelWire.bigEndian(UInt32(q.count)) + q
+        body += SecureChannelWire.bigEndian(UInt64(offset)) + SecureChannelWire.bigEndian(UInt32(length))
+        let reply = [UInt8](try await request(body, responseLimit: length + 64))
+        guard let status = reply.first else { throw Failure.malformedResponse }
+        switch status {
+        case 0x00: break
+        case 0x02: throw Failure.forbidden
+        case 0x09: throw Failure.rangeUnsupported
+        default: throw Failure.malformedResponse
+        }
+        guard reply.count >= 11 else { throw Failure.malformedResponse }
+        let total = reply[3..<11].reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+        return (Int(reply[1]) << 8 | Int(reply[2]), total == 0 ? nil : Int(total), Data(reply[11...]))
     }
 
     /// Raw request without sign-in (control exchange and sign-in operations).

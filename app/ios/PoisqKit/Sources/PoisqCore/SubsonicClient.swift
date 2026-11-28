@@ -11,6 +11,24 @@ public enum SubsonicError: Error, Sendable {
     case secureChannelOnly
 }
 
+/// Кусок исходного аудио защищённого профиля.
+public struct SecureMediaChunk: Sendable {
+    public let data: Data
+    /// Полный размер файла, если сервер его сообщил.
+    public let total: Int?
+    /// Запрошенное место за концом файла.
+    public let pastEnd: Bool
+
+    public init(data: Data, total: Int?, pastEnd: Bool) {
+        self.data = data; self.total = total; self.pastEnd = pastEnd
+    }
+}
+
+/// Чтение аудио кусками через защищённый канал; реализует SubsonicClient защищённого профиля.
+public protocol SecureMediaFetching: Sendable {
+    func mediaChunk(for url: URL, offset: Int, length: Int) async throws -> SecureMediaChunk
+}
+
 /// Клиент стандартного Subsonic/OpenSubsonic API. Работает с любым сервером.
 public final class SubsonicClient: Sendable {
     private let base: OSAllocatedUnfairLock<URL>
@@ -65,8 +83,21 @@ public final class SubsonicClient: Sendable {
         return url
     }
 
+    /// Схема синтетической ссылки на трек защищённого профиля: в ней только id и расширение, без учётных данных.
+    /// Плеер передаёт её движку, а тот читает байты через канал (SecureMediaFetching).
+    public static let secureStreamScheme = "poisq-secure"
+
     /// Ссылка на стрим. Оригинал отдаётся как есть, остальное сервер перекодирует.
+    /// У защищённого профиля — всегда исходные байты: перекодированный поток нельзя читать с произвольного места.
     public func streamURL(for song: Song, quality: StreamQuality = .original) throws -> URL {
+        if channel != nil {
+            var c = URLComponents()
+            c.scheme = Self.secureStreamScheme
+            c.host = "stream"
+            c.queryItems = [URLQueryItem(name: "id", value: song.id)] + (song.suffix.map { [URLQueryItem(name: "suffix", value: $0)] } ?? [])
+            guard let url = c.url else { throw SubsonicError.invalidURL }
+            return url
+        }
         var q = [URLQueryItem(name: "id", value: song.id)]
         if let format = quality.format, let rate = quality.maxBitRate {
             q.append(.init(name: "format", value: format))
@@ -522,5 +553,19 @@ public final class SubsonicClient: Sendable {
         guard let json else { return T() }
         let data = try JSONSerialization.data(withJSONObject: json)
         do { return try JSONDecoder().decode(T.self, from: data) } catch { throw SubsonicError.decoding }
+    }
+}
+
+extension SubsonicClient: SecureMediaFetching {
+    public func mediaChunk(for url: URL, offset: Int, length: Int) async throws -> SecureMediaChunk {
+        guard let channel, url.scheme == Self.secureStreamScheme,
+              let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "id" })?.value
+        else { throw SubsonicError.secureChannelOnly }
+        let r = try await channel.media(method: "stream", query: [URLQueryItem(name: "id", value: id)], offset: offset, length: length)
+        switch r.httpStatus {
+        case 200, 206: return SecureMediaChunk(data: r.body, total: r.total, pastEnd: false)
+        case 416: return SecureMediaChunk(data: Data(), total: r.total, pastEnd: true)
+        default: throw SubsonicError.http(r.httpStatus)
+        }
     }
 }

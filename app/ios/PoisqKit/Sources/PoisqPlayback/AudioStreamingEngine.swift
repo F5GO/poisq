@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import AudioToolbox
 import AudioStreaming
+import PoisqCore
 
 @MainActor
 public final class AudioStreamingEngine: NSObject, PlaybackEngine {
@@ -72,9 +73,24 @@ public final class AudioStreamingEngine: NSObject, PlaybackEngine {
     public var requestHeaders: [String: String] = [:]
     private func headers(for url: URL) -> [String: String] { url.isFileURL ? [:] : requestHeaders }
 
+    /// Чтение треков защищённого профиля через канал. Ссылки `poisq-secure://` без него не воспроизводятся.
+    public var secureMedia: SecureMediaFetching?
+    /// Формат вывода AudioPlayer по умолчанию; источник со своим потоком данных должен его указать.
+    private static let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44100, channels: 2, interleaved: true)!
+
+    private func secureSource(for url: URL) -> SecureAudioSource? {
+        guard url.scheme == SubsonicClient.secureStreamScheme, let secureMedia else { return nil }
+        return SecureAudioSource(url: url, fetcher: secureMedia, queue: player.sourceQueue)
+    }
+
     public func play(_ url: URL) {
         update(.loading)
         currentURL = url
+        if let source = secureSource(for: url) {
+            player.play(source: source, entryId: url.absoluteString, format: Self.outputFormat)
+            return
+        }
+        guard url.scheme != SubsonicClient.secureStreamScheme else { update(.idle); return }
         player.play(url: url, headers: headers(for: url))
     }
 
@@ -82,7 +98,14 @@ public final class AudioStreamingEngine: NSObject, PlaybackEngine {
     public func setMetadataHandler(_ handler: ((String) -> Void)?) { metadataHandler = handler }
     private var metadataHandler: ((String) -> Void)?
 
-    public func enqueue(_ url: URL) { player.queue(url: url, headers: headers(for: url)) }
+    public func enqueue(_ url: URL) {
+        if let source = secureSource(for: url) {
+            player.queue(source: source, entryId: url.absoluteString, format: Self.outputFormat)
+            return
+        }
+        guard url.scheme != SubsonicClient.secureStreamScheme else { return }
+        player.queue(url: url, headers: headers(for: url))
+    }
     public func dequeue(_ url: URL) { player.removeFromQueue(url: url) }
     public func skipToNext() { player.playNextInQueue() }
     public func setRepeatOne(_ on: Bool) { player.loopMode = on ? .single(times: nil) : .off }
