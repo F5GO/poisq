@@ -327,6 +327,9 @@ struct SecureChannelInteropTests {
         let issued = try #require(store.loadCredential())
         // Signed in: application ops reach the handler (unknown op answers 0x01 instead of 0x02 "forbidden").
         #expect(try await first.request(Data([0x40])) == Data([0x01]))
+        // Subsonic through the channel: Studio adds this user's authorization and Navidrome accepts it.
+        try await SubsonicClient(channel: first, username: user).ping()
+        await #expect(throws: SecureChannel.Failure.forbidden) { try await first.subsonic(method: "createUser", query: []) }
 
         // A new channel (app relaunch) resumes with the stored token, which rotates.
         let second = channel()

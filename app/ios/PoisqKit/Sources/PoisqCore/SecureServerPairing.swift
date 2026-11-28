@@ -7,6 +7,8 @@ public struct SecureServerPairing: Equatable, Sendable {
     /// Ed25519 root key of the installation; it signs working-key certificates and is pinned by the QR code.
     public let rootPublicKey: Data
     public let origin: URL
+    /// Canonical QR text, kept with the profile.
+    public let code: String
 
     /// Raw 16-byte installation ID.
     public var installationIDBytes: Data {
@@ -41,6 +43,7 @@ public struct SecureServerPairing: Equatable, Sendable {
               let text = String(data: address, encoding: .utf8),
               let origin = Self.parseOrigin(text) else { return nil }
 
+        self.code = fields.joined(separator: ":")
         installationID = String(id)
         rootPublicKey = key
         self.origin = origin

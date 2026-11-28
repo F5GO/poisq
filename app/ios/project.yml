@@ -29,6 +29,7 @@ targets:
         CFBundleDisplayName: poisq
         CFBundleLocalizations: [en, ru]
         UIBackgroundModes: [audio]
+        NSCameraUsageDescription: The camera scans the poisq QR code to set up a secure connection to your server.
         CFBundleURLTypes:
           - CFBundleURLName: app.poisq.ios
             CFBundleURLSchemes: [poisq]

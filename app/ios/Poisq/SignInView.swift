@@ -1,4 +1,5 @@
 import SwiftUI
+import PoisqCore
 
 struct SignInView: View {
     /// Показан поверх приложения («Add Server») — тогда есть кнопка закрытия.
@@ -17,7 +18,24 @@ struct SignInView: View {
     @FocusState private var focus: Field?
     private enum Field { case name, address, username, password }
 
-    private var canSubmit: Bool { !address.isEmpty && !username.isEmpty && !password.isEmpty && !isWorking }
+    // Защищённый режим: включается сканированием QR poisq, вход разрешён только по подтверждённому каналу.
+    @State private var secure: SecureSetup?
+    @State private var showScanner = false
+    @State private var keyChangeCode: String?
+    private struct SecureSetup {
+        let profileID: UUID                    // под этим ID канал хранит токен устройства в Keychain
+        let pairing: SecureServerPairing
+        let channel: SecureChannel
+        let address: String
+        var state: State = .checking
+        enum State: Equatable { case checking, verified, failed(String) }
+    }
+
+    private var canSubmit: Bool {
+        guard !username.isEmpty, !password.isEmpty, !isWorking else { return false }
+        if let secure { return secure.state == .verified }
+        return !address.isEmpty
+    }
 
     var body: some View {
         ScrollView {
@@ -59,6 +77,8 @@ struct SignInView: View {
                 .buttonStyle(.glass)
                 .controlSize(.large)
 
+                if let secure { secureStatus(secure) }
+
                 if let errorText {
                     Label(errorText, systemImage: "exclamationmark.triangle.fill")
                         .font(.footnote).foregroundStyle(.red)
@@ -81,13 +101,34 @@ struct SignInView: View {
         .scrollDismissesKeyboard(.interactively)
         .sheet(isPresented: $showAdvanced) {
             NavigationStack {
-                Form { ServerAdvancedFields(alternates: $alternates, headers: $headers) }
+                Form {
+                    Section {
+                        Button("Scan poisq QR", systemImage: "qrcode.viewfinder") {
+                            showAdvanced = false
+                            showScanner = true
+                        }
+                    } footer: {
+                        Text("Encrypts everything between the app and poisq Studio. The QR code is shown in poisq Studio → Settings → Secure Transport.")
+                    }
+                    if secure == nil { ServerAdvancedFields(alternates: $alternates, headers: $headers) }
+                }
                     .navigationTitle("Advanced")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done", systemImage: "checkmark") { showAdvanced = false } } }
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
             }
             .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showScanner) { SecureQRScannerSheet(onCode: accept) }
+        .confirmationDialog("The key of this server has changed", isPresented: Binding(get: { keyChangeCode != nil }, set: { if !$0 { keyChangeCode = nil } }),
+                            titleVisibility: .visible) {
+            Button("Use the New Key", role: .destructive) {
+                if let code = keyChangeCode, let pairing = SecureServerPairing(code: code) { startSecure(pairing) }
+                keyChangeCode = nil
+            }
+            Button("Cancel", role: .cancel) { keyChangeCode = nil }
+        } message: {
+            Text("The QR code has a different key than the saved server. This may mean someone is impersonating it. Continue only if you reset Secure Transport in poisq Studio yourself.")
         }
         .background { PaletteBackdrop() }
         .overlay(alignment: .topTrailing) {
@@ -106,7 +147,11 @@ struct SignInView: View {
         }
         .animation(.smooth, value: errorText)
         .sensoryFeedback(.error, trigger: errorText) { _, new in new != nil }
-        .onChange(of: address) { errorText = nil }
+        .onChange(of: address) {
+            errorText = nil
+            // Ручная правка адреса выводит форму из защищённого режима: новый адрес не закреплён QR.
+            if let s = secure, address != s.address { secure = nil }
+        }
         .onChange(of: username) { errorText = nil }
         .onChange(of: password) { errorText = nil }
     }
@@ -116,6 +161,73 @@ struct SignInView: View {
             Image(systemName: "music.note.house.fill")
                 .font(.system(size: 56)).foregroundStyle(.tint).symbolRenderingMode(.hierarchical)
             Text("poisq").font(.largeTitle.bold())
+        }
+    }
+
+    private func secureStatus(_ s: SecureSetup) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            switch s.state {
+            case .checking:
+                ProgressView()
+                Text("Checking the secure connection…")
+            case .verified:
+                Image(systemName: "lock.shield.fill").foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Secure connection verified")
+                    Text("Key \(s.pairing.fingerprint)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
+            case .failed(let message):
+                Image(systemName: "lock.trianglebadge.exclamationmark.fill").foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(message)
+                    Button("Try Again") { verify() }.font(.footnote.weight(.semibold))
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.footnote)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Текст из сканера или буфера. Некорректный или чужой код оставляет форму без изменений.
+    private func accept(_ code: String) {
+        guard let pairing = SecureServerPairing(code: code) else {
+            errorText = String(localized: "This is not a poisq QR code")
+            return
+        }
+        if let known = model.secureProfile(forHost: pairing.origin.host()), known.secure?.pairing?.rootPublicKey != pairing.rootPublicKey {
+            keyChangeCode = code                 // ключ известного сервера сменился — только после явного подтверждения
+            return
+        }
+        startSecure(pairing)
+    }
+
+    private func startSecure(_ pairing: SecureServerPairing) {
+        let id = UUID()
+        let channel = SecureChannel(pairing: pairing, credentials: SecureCredentialKeychain(profileID: id))
+        var host = pairing.origin.host() ?? ""
+        if let port = pairing.origin.port { host += ":\(port)" }
+        secure = SecureSetup(profileID: id, pairing: pairing, channel: channel, address: host)
+        address = host
+        errorText = nil
+        verify()
+    }
+
+    /// Контрольный обмен без учётных данных: подтверждает ключ установки и канал именно этого профиля.
+    private func verify() {
+        guard let s = secure else { return }
+        secure?.state = .checking
+        Task {
+            do {
+                try await s.channel.verify()
+                if secure?.channel === s.channel { secure?.state = .verified }
+            } catch {
+                let f = error as? SecureChannel.Failure
+                if secure?.channel === s.channel {
+                    secure?.state = .failed(f.map(SignInError.describe) ?? String(localized: "Couldn't connect to the server"))
+                }
+            }
         }
     }
 
@@ -129,9 +241,24 @@ struct SignInView: View {
     }
 
     private func submit() {
+        // Обработчик сам проверяет условия: отправка с клавиатуры идёт мимо disabled-кнопки.
         guard canSubmit else { return }
         focus = nil
         isWorking = true
+        if let s = secure {
+            Task {
+                defer { isWorking = false }
+                do {
+                    try await model.signInSecure(profileID: s.profileID, name: serverName, channel: s.channel, username: username, password: password)
+                    if isSheet { dismiss() }
+                } catch SignInError.secure(.handshakeFailed) {
+                    verify()                     // сессия истекла или потерялась — сначала снова подтверждаем канал
+                } catch {
+                    errorText = error.localizedDescription
+                }
+            }
+            return
+        }
         Task {
             defer { isWorking = false }
             do { try await model.signIn(name: serverName, address: address, username: username, password: password,

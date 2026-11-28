@@ -53,6 +53,18 @@ final class CoverCache: @unchecked Sendable {
     }
 
     func imageResult(key: String, url: @Sendable @escaping () throws -> URL) async -> Result {
+        let headers = lock.withLock { $0.headers }
+        return await imageResult(key: key) {
+            var req = URLRequest(url: try url())
+            headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+            return data
+        }
+    }
+
+    /// Обложка из произвольного источника (у защищённого профиля — через шифрованный канал).
+    func imageResult(key: String, fetch: @Sendable @escaping () async throws -> Data) async -> Result {
         if let hit = memory.object(forKey: key as NSString) {
             recordRecent(key)
             return Result(image: hit, fromCache: true)
@@ -60,7 +72,6 @@ final class CoverCache: @unchecked Sendable {
 
         let (task, isOwner) = lock.withLock { state -> (Task<Result, Never>, Bool) in
             if let existing = state.inflight[key] { return (existing, false) }
-            let headers = state.headers
             let file = dir.appending(path: Self.fileName(key))
             let created = Task<Result, Never>(priority: .userInitiated) {
                 // Декодируем здесь, вне главного потока: иначе каждая новая обложка распаковывается при отрисовке и греет CPU при прокрутке.
@@ -68,12 +79,7 @@ final class CoverCache: @unchecked Sendable {
                     let prepared = await img.byPreparingForDisplay() ?? img
                     return Result(image: prepared, fromCache: true)
                 }
-                guard let u = try? url() else { return Result(image: nil, fromCache: false) }
-                var req = URLRequest(url: u)
-                headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
-                guard let (data, resp) = try? await URLSession.shared.data(for: req),
-                      (resp as? HTTPURLResponse)?.statusCode == 200,
-                      let img = UIImage(data: data) else {
+                guard let data = try? await fetch(), let img = UIImage(data: data) else {
                     return Result(image: nil, fromCache: false)
                 }
                 try? data.write(to: file, options: .atomic)

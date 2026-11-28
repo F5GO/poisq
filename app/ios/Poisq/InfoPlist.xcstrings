@@ -1,0 +1,24 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSCameraUsageDescription": {
+      "comment": "Camera permission: scanning the poisq Secure Transport QR code.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The camera scans the poisq QR code to set up a secure connection to your server."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Камера сканирует QR poisq, чтобы настроить защищённое соединение с вашим сервером."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

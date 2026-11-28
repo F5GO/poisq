@@ -4,6 +4,9 @@ import PoisqPlayback
 
 enum SignInError: LocalizedError {
     case emptyFields, badAddress, badCredentials, unreachable, httpsUnreachable, notSubsonic
+    /// Адрес уже известен как защищённый: обычный вход отправил бы пароль в обход шифрования.
+    case secureAddress
+    case secure(SecureChannel.Failure)
 
     var errorDescription: String? {
         switch self {
@@ -13,6 +16,22 @@ enum SignInError: LocalizedError {
         case .unreachable: String(localized: "Couldn't connect to the server")
         case .httpsUnreachable: String(localized: "Couldn't connect over https. If the server has no encryption, enter the address with http://")
         case .notSubsonic: String(localized: "This doesn't look like a Subsonic server")
+        case .secureAddress: String(localized: "This server is protected. Sign in with the poisq QR code from Advanced")
+        case .secure(let f): Self.describe(f)
+        }
+    }
+
+    static func describe(_ f: SecureChannel.Failure) -> String {
+        switch f {
+        case .untrustedCertificate, .handshakeFailed: String(localized: "The server key doesn't match the QR code. Sign-in is stopped")
+        case .disabled: String(localized: "Secure Transport is turned off in poisq Studio")
+        case .rateLimited: String(localized: "Too many attempts. Try again later")
+        case .wrongCredentials: String(localized: "Wrong username or password")
+        case .serverUnavailable: String(localized: "poisq Studio couldn't reach Navidrome. Try again later")
+        case .tooManyDevices: String(localized: "This account has too many devices. Revoke one in poisq Studio")
+        case .revoked: String(localized: "This device was revoked. Sign in again")
+        case .invalidInput: String(localized: "Fill in the address, username and password")
+        default: String(localized: "Couldn't connect to the server")
         }
     }
 }
@@ -142,6 +161,10 @@ final class AppModel {
                 headers: [String: String] = [:], alternates: [String] = []) async throws {
         let user = username.trimmingCharacters(in: .whitespaces)
         guard !address.trimmingCharacters(in: .whitespaces).isEmpty, !user.isEmpty, !password.isEmpty else { throw SignInError.emptyFields }
+        // До любого сетевого запроса: на известный защищённый адрес пароль обычным входом не отправляем.
+        if ServerURL.candidates(from: address).contains(where: { secureProfile(forHost: $0.host()) != nil }) {
+            throw SignInError.secureAddress
+        }
         let url = try await verify(address: address, user: user, password: password, headers: headers)
         let title = name.trimmingCharacters(in: .whitespaces)
         let alt = Self.parseAlternates(alternates)
@@ -160,6 +183,50 @@ final class AppModel {
         ServerHeaders.save(headers, for: profile.id)
         saveServers()
         switchServer(to: profile.id)
+    }
+
+    /// Защищённый профиль с этим хостом (без учёта схемы и порта).
+    func secureProfile(forHost host: String?) -> ServerProfile? {
+        guard let host = host?.lowercased() else { return nil }
+        return servers.first { $0.secure?.pairing?.origin.host()?.lowercased() == host }
+    }
+
+    /// Защищённый вход: канал `channel` уже подтверждён формой, логин и пароль уходят только внутри него.
+    /// `profileID` — тот же, под которым канал хранит токен устройства в Keychain.
+    func signInSecure(profileID: UUID, name: String, channel: SecureChannel, username: String, password: String) async throws {
+        let user = username.trimmingCharacters(in: .whitespaces)
+        guard !user.isEmpty, !password.isEmpty else { throw SignInError.emptyFields }
+        guard await channel.hasValidSession else { throw SignInError.secure(.handshakeFailed) }
+        do {
+            try await channel.signIn(username: user, password: password, deviceName: UIDevice.current.name)
+        } catch let f as SecureChannel.Failure {
+            throw SignInError.secure(f)
+        }
+        let pairing = channel.pairing
+        let record = SecurePairingRecord(code: pairing.code, certificate: await channel.certificate?.rawValue,
+                                         acceptedEpoch: await channel.acceptedEpoch)
+        // Тот же аккаунт той же установки входит заново — прежний профиль заменяется.
+        for old in servers where old.secure?.pairing?.installationID == pairing.installationID && old.username == user && old.id != profileID {
+            removeServer(old.id)
+        }
+        let title = name.trimmingCharacters(in: .whitespaces)
+        var profile = ServerProfile(id: profileID, name: title.isEmpty ? (pairing.origin.host() ?? "poisq") : title,
+                                    url: pairing.origin, username: user)
+        profile.secure = record
+        servers.append(profile)
+        saveServers()
+        switchServer(to: profile.id)
+    }
+
+    /// Сохраняет обновлённый сертификат и эпоху защищённого профиля (ротация рабочего ключа).
+    private func persistSecureState(profileID: UUID, channel: SecureChannel) async {
+        let certificate = await channel.certificate?.rawValue, epoch = await channel.acceptedEpoch
+        guard let i = servers.firstIndex(where: { $0.id == profileID }), var record = servers[i].secure,
+              record.certificate != certificate || record.acceptedEpoch != epoch else { return }
+        record.certificate = certificate
+        record.acceptedEpoch = epoch
+        servers[i].secure = record
+        saveServers()
     }
 
     /// Проверяет доступность и логин/пароль, возвращает рабочий адрес.
@@ -203,6 +270,11 @@ final class AppModel {
     func updateServer(_ id: UUID, name: String, address: String, username: String, password: String,
                       alternates: [String] = [], headers: [String: String]? = nil) async throws {
         guard let i = servers.firstIndex(where: { $0.id == id }) else { return }
+        // Защищённый профиль привязан к ключу из QR: менять в нём можно только имя.
+        if servers[i].isSecure {
+            renameServer(id, to: name)
+            return
+        }
         let user = username.trimmingCharacters(in: .whitespaces)
         guard !user.isEmpty, !address.trimmingCharacters(in: .whitespaces).isEmpty,
               let effectivePassword = password.isEmpty ? Keychain.load(account: id.uuidString) : password
@@ -243,6 +315,11 @@ final class AppModel {
     }
 
     func removeServer(_ id: UUID) {
+        if let pairing = servers.first(where: { $0.id == id })?.secure?.pairing {
+            // Отзываем устройство и в Studio; токен удаляется из Keychain в любом случае.
+            let channel = SecureChannel(pairing: pairing, credentials: SecureCredentialKeychain(profileID: id))
+            Task { await channel.signOut() }
+        }
         Keychain.delete(account: id.uuidString)
         ServerHeaders.save([:], for: id)
         defaults.removeObject(forKey: "pins." + id.uuidString)
@@ -273,10 +350,24 @@ final class AppModel {
     }
 
     private func connect(_ profile: ServerProfile) {
-        guard let password = Keychain.load(account: profile.id.uuidString) else { return }
+        let client: SubsonicClient
+        let headers: [String: String]
+        let pingClient: SubsonicClient
+        if let record = profile.secure {
+            // Защищённый профиль: всё идёт через канал, пароля на устройстве нет.
+            guard let pairing = record.pairing else { return }
+            let channel = SecureChannel(pairing: pairing, credentials: SecureCredentialKeychain(profileID: profile.id),
+                                        certificate: record.certificate, acceptedEpoch: record.acceptedEpoch)
+            client = SubsonicClient(channel: channel, username: profile.username)
+            headers = [:]
+            pingClient = client
+        } else {
+            guard let password = Keychain.load(account: profile.id.uuidString) else { return }
+            headers = ServerHeaders.load(profile.id)
+            client = SubsonicClient(baseURL: profile.url, username: profile.username, password: password, headers: headers)
+            pingClient = SubsonicClient(baseURL: profile.url, username: profile.username, password: password, headers: headers, session: Self.shortSession)
+        }
         pins.load(serverID: profile.id)
-        let headers = ServerHeaders.load(profile.id)
-        let client = SubsonicClient(baseURL: profile.url, username: profile.username, password: password, headers: headers)
         let engine = AudioStreamingEngine()
         engine.requestHeaders = headers
         covers.setHeaders(headers)
@@ -324,7 +415,7 @@ final class AppModel {
             }
         }
         Task { await restoreSession(player: player, client: client, serverID: sid) }
-        pingClient = SubsonicClient(baseURL: profile.url, username: profile.username, password: password, headers: headers, session: Self.shortSession)
+        self.pingClient = pingClient
         startReachability()
         player.artworkProvider = { [weak self] song in
             guard let id = song.coverArt else { return nil }
@@ -406,7 +497,11 @@ final class AppModel {
     func checkServer() async {
         guard let pingClient else { return }
         guard network.isConnected else { setReachable(false); return }
-        do { try await pingClient.ping(); setReachable(true); await returnToPrimaryIfPossible() }
+        do {
+            try await pingClient.ping(); setReachable(true)
+            if let channel = pingClient.channel, let id = activeID { await persistSecureState(profileID: id, channel: channel) }
+            await returnToPrimaryIfPossible()
+        }
         catch is URLError { setReachable(await failover()) }
         catch SubsonicError.http(let code) where code >= 500 || code == 404 { setReachable(await failover()) }
         catch SubsonicError.decoding { setReachable(await failover()) }
@@ -415,7 +510,7 @@ final class AppModel {
 
     /// Основной адрес не отвечает — пробуем запасные по порядку. Нашли живой — переключаем клиент на него на лету.
     private func failover() async -> Bool {
-        guard let profile = activeServer, !profile.alternateURLs.isEmpty, let client, let pingClient,
+        guard let profile = activeServer, !profile.isSecure, !profile.alternateURLs.isEmpty, let client, let pingClient,
               let password = Keychain.load(account: profile.id.uuidString) else { return false }
         let headers = ServerHeaders.load(profile.id)
         for url in [profile.url] + profile.alternateURLs where url != client.baseURL {
@@ -438,7 +533,7 @@ final class AppModel {
 
     /// Когда работаем на запасном адресе, а основной ожил — возвращаемся на основной.
     private func returnToPrimaryIfPossible() async {
-        guard let profile = activeServer, let client, let pingClient, client.baseURL != profile.url,
+        guard let profile = activeServer, !profile.isSecure, let client, let pingClient, client.baseURL != profile.url,
               let password = Keychain.load(account: profile.id.uuidString) else { return }
         let probe = SubsonicClient(baseURL: profile.url, username: profile.username, password: password,
                                    headers: ServerHeaders.load(profile.id), session: Self.shortSession)
@@ -530,6 +625,9 @@ final class AppModel {
 
     func coverImageResult(_ id: String, pixels: Int) async -> CoverCache.Result {
         guard let client, let sid = activeID else { return CoverCache.Result(image: nil, fromCache: false) }
+        if client.channel != nil {
+            return await covers.imageResult(key: "\(sid.uuidString)_\(id)_\(pixels)") { try await client.coverArtData(id: id, size: pixels) }
+        }
         return await covers.imageResult(key: "\(sid.uuidString)_\(id)_\(pixels)") { try client.coverArtURL(id: id, size: pixels) }
     }
 

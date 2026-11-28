@@ -4142,6 +4142,196 @@
           }
         }
       }
+    },
+    "This server is protected. Sign in with the poisq QR code from Advanced": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот сервер защищён. Войдите через QR poisq в разделе «Дополнительно»"
+          }
+        }
+      }
+    },
+    "The server key doesn't match the QR code. Sign-in is stopped": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ключ сервера не совпадает с QR. Вход остановлен"
+          }
+        }
+      }
+    },
+    "Secure Transport is turned off in poisq Studio": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Secure Transport выключен в poisq Studio"
+          }
+        }
+      }
+    },
+    "Too many attempts. Try again later": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много попыток. Повторите позже"
+          }
+        }
+      }
+    },
+    "poisq Studio couldn't reach Navidrome. Try again later": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "poisq Studio не может связаться с Navidrome. Повторите позже"
+          }
+        }
+      }
+    },
+    "This account has too many devices. Revoke one in poisq Studio": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "У аккаунта слишком много устройств. Отзовите одно в poisq Studio"
+          }
+        }
+      }
+    },
+    "This device was revoked. Sign in again": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Устройство отозвано. Войдите заново"
+          }
+        }
+      }
+    },
+    "Scan poisq QR": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сканировать QR poisq"
+          }
+        }
+      }
+    },
+    "Encrypts everything between the app and poisq Studio. The QR code is shown in poisq Studio → Settings → Secure Transport.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Шифрует весь обмен между приложением и poisq Studio. QR показан в poisq Studio → Настройки → Secure Transport."
+          }
+        }
+      }
+    },
+    "The key of this server has changed": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ключ этого сервера изменился"
+          }
+        }
+      }
+    },
+    "Use the New Key": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать новый ключ"
+          }
+        }
+      }
+    },
+    "The QR code has a different key than the saved server. This may mean someone is impersonating it. Continue only if you reset Secure Transport in poisq Studio yourself.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В QR другой ключ, чем у сохранённого сервера. Возможно, кто-то выдаёт себя за него. Продолжайте, только если вы сами сбросили Secure Transport в poisq Studio."
+          }
+        }
+      }
+    },
+    "Checking the secure connection…": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка защищённого соединения…"
+          }
+        }
+      }
+    },
+    "Secure connection verified": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Защищённое соединение проверено"
+          }
+        }
+      }
+    },
+    "Key %@": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ключ %@"
+          }
+        }
+      }
+    },
+    "Try Again": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторить"
+          }
+        }
+      }
+    },
+    "This is not a poisq QR code": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это не QR poisq"
+          }
+        }
+      }
+    },
+    "Camera Unavailable": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Камера недоступна"
+          }
+        }
+      }
+    },
+    "Copy the code from poisq Studio and paste it here.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопируйте код в poisq Studio и вставьте его сюда."
+          }
+        }
+      }
     }
   },
   "version": "1.1"

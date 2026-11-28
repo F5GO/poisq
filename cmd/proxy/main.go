@@ -245,7 +245,8 @@ func main() {
 	if err := admin.LoadSecureTransport(poisqDB, secureTransport, time.Now()); err != nil {
 		log.Printf("[WARN] Настройки Secure Transport не применены, функция выключена: %v", err)
 	}
-	secureServer := securetransport.NewServer(secureTransport, securetransport.PingHandler, proxy.ExtractClientIP)
+	// Subsonic через канал идёт в тот же обработчик прокси внутри процесса: умный поиск и расширения poisq работают как обычно.
+	secureServer := securetransport.NewServer(secureTransport, securetransport.NewSubsonicHandler(proxyServer), proxy.ExtractClientIP)
 	// Вход по каналу: пароль проверяет Navidrome, Studio хранит устройства с паролем, зашифрованным мастер-ключом.
 	secureAccounts := securetransport.NewAccounts(
 		securetransport.NewDeviceStore(poisqDB, keyCipher),

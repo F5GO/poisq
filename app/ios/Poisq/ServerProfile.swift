@@ -1,4 +1,5 @@
 import Foundation
+import PoisqCore
 
 /// Сохранённый сервер. Пароль и значения заголовков здесь не хранятся — они в Keychain под ключом `id`.
 struct ServerProfile: Identifiable, Codable, Hashable {
@@ -14,6 +15,11 @@ struct ServerProfile: Identifiable, Codable, Hashable {
     var alternateURLs: [URL] = []
     /// Имена своих HTTP-заголовков (значения — в Keychain); нужны, чтобы показать список без чтения секретов.
     var headerNames: [String] = []
+    /// Защищённый профиль: QR сопряжения и проверенный сертификат. nil — обычный Subsonic-профиль.
+    var secure: SecurePairingRecord?
+
+    /// Профиль шифрует весь трафик до poisq Studio; запасные адреса и свои заголовки ему не нужны.
+    var isSecure: Bool { secure != nil }
 
     init(id: UUID = UUID(), name: String, url: URL, username: String, libraryID: String? = nil,
          aliases: [String: String] = [:], alternateURLs: [URL] = [], headerNames: [String] = []) {
@@ -32,7 +38,19 @@ struct ServerProfile: Identifiable, Codable, Hashable {
         aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
         alternateURLs = try c.decodeIfPresent([URL].self, forKey: .alternateURLs) ?? []
         headerNames = try c.decodeIfPresent([String].self, forKey: .headerNames) ?? []
+        secure = try c.decodeIfPresent(SecurePairingRecord.self, forKey: .secure)
     }
+}
+
+/// Данные защищённого профиля. Всё публичное: секрет (токен устройства) лежит только в Keychain.
+struct SecurePairingRecord: Codable, Hashable {
+    /// Текст QR: идентификатор установки, корневой ключ и внешний адрес.
+    var code: String
+    /// Последний проверенный сертификат рабочего ключа и наибольшая принятая эпоха (защита от отката).
+    var certificate: Data?
+    var acceptedEpoch: UInt32?
+
+    var pairing: SecureServerPairing? { SecureServerPairing(code: code) }
 }
 
 /// Свои HTTP-заголовки сервера. Значения часто секретные (токены Cloudflare Access), поэтому только Keychain.

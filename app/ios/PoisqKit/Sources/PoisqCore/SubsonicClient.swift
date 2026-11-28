@@ -7,6 +7,8 @@ public enum SubsonicError: Error, Sendable {
     case http(Int)
     case server(code: Int, message: String)
     case decoding
+    /// A direct URL with credentials is not allowed for a secure profile; the request must go through the channel.
+    case secureChannelOnly
 }
 
 /// Клиент стандартного Subsonic/OpenSubsonic API. Работает с любым сервером.
@@ -21,6 +23,8 @@ public final class SubsonicClient: Sendable {
     private let password: String
     private let salt: String
     private let session: URLSession
+    /// Secure profile: every request goes through the encrypted channel, and no URL carries credentials.
+    public let channel: SecureChannel?
     private static let apiVersion = "1.16.1"
     private static let clientName = "poisq"
 
@@ -30,13 +34,26 @@ public final class SubsonicClient: Sendable {
         self.username = username
         self.password = password
         self.session = session
+        self.channel = nil
         // Одна соль на клиента: ссылки на стрим стабильны для одного трека.
         self.salt = String((0..<12).map { _ in "abcdefghijklmnopqrstuvwxyz0123456789".randomElement()! })
+    }
+
+    /// Client of a secure profile: Studio authenticates requests by the channel session, so no password is kept here.
+    public init(channel: SecureChannel, username: String) {
+        self.base = OSAllocatedUnfairLock(initialState: channel.pairing.origin)
+        self.headers = [:]
+        self.username = username
+        self.password = ""
+        self.salt = ""
+        self.session = .shared
+        self.channel = channel
     }
 
     // MARK: URL building
 
     func url(_ method: String, _ extra: [URLQueryItem] = []) throws -> URL {
+        guard channel == nil else { throw SubsonicError.secureChannelOnly }
         guard var c = URLComponents(url: baseURL.appending(path: "rest/\(method)"), resolvingAgainstBaseURL: false)
         else { throw SubsonicError.invalidURL }
         let token = Insecure.MD5.hash(data: Data((password + salt).utf8)).map { String(format: "%02x", $0) }.joined()
@@ -81,10 +98,30 @@ public final class SubsonicClient: Sendable {
         return r
     }
 
-    private func call(_ method: String, _ extra: [URLQueryItem] = []) async throws -> [String: Any] {
+    /// Cover art bytes: through the channel for a secure profile, otherwise by URL with this server's headers.
+    public func coverArtData(id: String, size: Int = 600) async throws -> Data {
+        let query = [URLQueryItem(name: "id", value: id), .init(name: "size", value: String(size))]
+        let (data, status, contentType) = try await fetch("getCoverArt", query)
+        guard status == 200, !contentType.contains("json"), !contentType.contains("xml") else { throw SubsonicError.http(status) }
+        return data
+    }
+
+    /// One Subsonic request; returns body, HTTP status and content type.
+    private func fetch(_ method: String, _ extra: [URLQueryItem]) async throws -> (Data, Int, String) {
+        if let channel {
+            let common = [URLQueryItem(name: "v", value: Self.apiVersion), .init(name: "c", value: Self.clientName), .init(name: "f", value: "json")]
+            let r = try await channel.subsonic(method: method, query: common + extra)
+            return (r.body, r.httpStatus, r.contentType.lowercased())
+        }
         let (data, response) = try await session.data(for: request(for: url(method, extra)))
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw SubsonicError.http(http.statusCode)
+        let http = response as? HTTPURLResponse
+        return (data, http?.statusCode ?? 200, (http?.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased())
+    }
+
+    private func call(_ method: String, _ extra: [URLQueryItem] = []) async throws -> [String: Any] {
+        let (data, status, _) = try await fetch(method, extra)
+        if !(200..<300).contains(status) {
+            throw SubsonicError.http(status)
         }
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let body = root["subsonic-response"] as? [String: Any] else { throw SubsonicError.decoding }

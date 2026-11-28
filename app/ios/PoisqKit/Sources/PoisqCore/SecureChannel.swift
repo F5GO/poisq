@@ -101,6 +101,31 @@ public actor SecureChannel {
         try await exchange(request, signedIn: true, responseLimit: responseLimit).0
     }
 
+    /// Subsonic response returned through the channel.
+    public struct SubsonicResponse: Sendable {
+        public let httpStatus: Int
+        public let contentType: String
+        public let body: Data
+    }
+
+    /// Subsonic method through the channel. Studio adds the user's authorization itself; credentials never leave the device here.
+    public func subsonic(method: String, query: [URLQueryItem], responseLimit: Int = 64 << 20) async throws -> SubsonicResponse {
+        let m = Data(method.utf8)
+        guard !m.isEmpty, m.count <= 64 else { throw Failure.invalidInput }
+        var c = URLComponents()
+        c.queryItems = query
+        let q = Data((c.percentEncodedQuery ?? "").utf8)
+        let body = Data([0x10, UInt8(m.count)]) + m + SecureChannelWire.bigEndian(UInt32(q.count)) + q
+        let reply = [UInt8](try await request(body, responseLimit: responseLimit))
+        guard let status = reply.first else { throw Failure.malformedResponse }
+        guard status == 0 else { throw status == 0x02 ? Failure.forbidden : Failure.malformedResponse }
+        guard reply.count >= 4, reply.count >= 4 + Int(reply[3]) else { throw Failure.malformedResponse }
+        let n = Int(reply[3])
+        return SubsonicResponse(httpStatus: Int(reply[1]) << 8 | Int(reply[2]),
+                                contentType: String(decoding: reply[4..<4 + n], as: UTF8.self),
+                                body: Data(reply[(4 + n)...]))
+    }
+
     /// Raw request without sign-in (control exchange and sign-in operations).
     func call(_ request: Data, responseLimit: Int = 64 << 20) async throws -> Data {
         try await exchange(request, signedIn: false, responseLimit: responseLimit).0
