@@ -269,6 +269,14 @@ final class AppModel {
     }
 
     /// Изменение имени, адреса, логина и пароля. Пустой пароль — оставить прежний.
+    /// Какая часть трека уже на устройстве — для затемнения полосы прокрутки: загруженный трек целиком, иначе кеш.
+    /// nil — ничего не известно (кеш выключен или трек ещё не начал качаться).
+    func bufferedFraction(for song: Song) -> Double? {
+        guard let sid = activeID, let client else { return nil }
+        if downloads.isDownloaded(song, serverID: sid) { return 1 }
+        return cache.fraction(for: song, serverID: sid, quality: cacheQuality(client))
+    }
+
     /// Канал отдаёт только исходный файл, поэтому кеш защищённого профиля всегда хранит оригинал.
     private func cacheQuality(_ client: SubsonicClient) -> StreamQuality { client.channel == nil ? playbackQuality : .original }
 

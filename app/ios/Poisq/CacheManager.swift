@@ -8,6 +8,11 @@ import PoisqCore
 final class CacheManager {
     private(set) var sizeBytes: Int64 = 0
     private var inflight: Set<String> = []
+    /// Доля скачанного у файлов, которые качаются сейчас (ключ — путь файла кеша); для полосы загрузки в плеере.
+    private(set) var progress: [String: Double] = [:]
+    /// Ответы «файл готов / файла нет» по пути: полоса плеера спрашивает каждую секунду, диск трогаем один раз.
+    /// Сбрасывается при записи и очистке кеша.
+    @ObservationIgnored private var presence: [String: Bool] = [:]
     private let root: URL
     private let session: URLSession = {
         let c = URLSessionConfiguration.default
@@ -54,6 +59,29 @@ final class CacheManager {
         return url
     }
 
+    /// Сколько трека уже лежит в кеше: 1 — файл готов, nil — не качается и не скачан. Не трогает «возраст» файла.
+    func fraction(for song: Song, serverID: UUID, quality: StreamQuality) -> Double? {
+        let path = file(song, serverID, quality).path
+        if let p = progress[path] { return p }
+        if let known = presence[path] { return known ? 1 : nil }
+        let exists = FileManager.default.fileExists(atPath: path)
+        presence[path] = exists
+        return exists ? 1 : nil
+    }
+
+    /// Обновляет долю скачанного не чаще, чем на 2 %: плееру хватает, а лишних перерисовок нет.
+    private func report(_ key: String, _ value: Double) {
+        guard inflight.contains(key) else { return }
+        if let old = progress[key], value < 1, value - old < 0.02 { return }
+        progress[key] = min(max(value, 0), 1)
+    }
+
+    private func finish(_ key: String) {
+        inflight.remove(key)
+        presence[key] = nil          // файл мог появиться — следующий запрос проверит диск
+        progress[key] = nil
+    }
+
     /// Подкачивает треки в кеш (уже скачанные пропускаются).
     /// Защищённый профиль качает так же, как офлайн-загрузки: билет из канала, шифротекст по нему, расшифровка в файл кеша.
     func prefetch(_ songs: [Song], client: SubsonicClient, serverID: UUID, quality: StreamQuality, isDownloaded: (Song) -> Bool) {
@@ -63,10 +91,12 @@ final class CacheManager {
             guard !FileManager.default.fileExists(atPath: key), !inflight.contains(key) else { continue }
             if let channel = client.channel {
                 inflight.insert(key)
+                progress[key] = 0
                 Task { [session] in
-                    defer { Task { @MainActor in self.inflight.remove(key) } }
-                    guard let ticket = try? await channel.downloadTicket(songID: song.id),
-                          let (tmp, response) = try? await session.download(for: URLRequest(url: ticket.url), delegate: RefuseRedirects.shared)
+                    defer { Task { @MainActor in self.finish(key) } }
+                    guard let ticket = try? await channel.downloadTicket(songID: song.id) else { return }
+                    let watcher = DownloadWatcher(refuseRedirects: true) { value in Task { @MainActor in self.report(key, value) } }
+                    guard let (tmp, response) = try? await session.download(for: URLRequest(url: ticket.url), delegate: watcher)
                     else { return }
                     defer { try? FileManager.default.removeItem(at: tmp) }
                     guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
@@ -79,10 +109,12 @@ final class CacheManager {
             }
             guard let remote = try? client.fileURL(for: song, quality: quality) else { continue }
             inflight.insert(key)
+            progress[key] = 0
             let request = client.request(for: remote)
             Task { [session] in
-                defer { Task { @MainActor in self.inflight.remove(key) } }
-                guard let (tmp, response) = try? await session.download(for: request),
+                defer { Task { @MainActor in self.finish(key) } }
+                let watcher = DownloadWatcher(refuseRedirects: false) { value in Task { @MainActor in self.report(key, value) } }
+                guard let (tmp, response) = try? await session.download(for: request, delegate: watcher),
                       let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
                 let ct = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
                 if ct.contains("json") || ct.contains("xml") || ct.contains("html") {
@@ -111,6 +143,7 @@ final class CacheManager {
     }
 
     func clear(serverID: UUID? = nil) {
+        presence = [:]
         let target = serverID.map { root.appending(path: $0.uuidString) } ?? root
         try? FileManager.default.removeItem(at: target)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -128,7 +161,7 @@ final class CacheManager {
                 try? FileManager.default.removeItem(at: e.url)
                 total -= e.size
             }
-            await MainActor.run { self.sizeBytes = total }
+            await MainActor.run { self.sizeBytes = total; self.presence = [:] }
         }
     }
 
@@ -153,9 +186,27 @@ final class CacheManager {
     }
 }
 
-/// Шифротекст по билету берётся только с адреса билета: перенаправление считается ошибкой, как в загрузках.
-private final class RefuseRedirects: NSObject, URLSessionTaskDelegate {
-    static let shared = RefuseRedirects()
+/// Следит за загрузкой одного файла: доля скачанного (по прогрессу задачи) и, для шифротекста по билету,
+/// отказ от перенаправлений — шифротекст берётся только с адреса билета, как в загрузках.
+private final class DownloadWatcher: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let refuseRedirects: Bool
+    private let onProgress: @Sendable (Double) -> Void
+    private var observation: NSKeyValueObservation?
+
+    init(refuseRedirects: Bool, onProgress: @escaping @Sendable (Double) -> Void) {
+        self.refuseRedirects = refuseRedirects
+        self.onProgress = onProgress
+    }
+
+    deinit { observation?.invalidate() }
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        let callback = onProgress
+        observation = task.progress.observe(\.fractionCompleted) { progress, _ in callback(progress.fractionCompleted) }
+    }
+
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest) async -> URLRequest? { nil }
+                    newRequest request: URLRequest) async -> URLRequest? {
+        refuseRedirects ? nil : request
+    }
 }

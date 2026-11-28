@@ -492,6 +492,7 @@ private struct QualityLine: View {
 /// Полоса прогресса с перемоткой перетаскиванием и временем по краям.
 private struct PlayerScrubber: View {
     let player: Player
+    @Environment(AppModel.self) private var model
     @State private var dragFraction: Double?
     @State private var dragStart: Double?             // где был ползунок, когда палец его коснулся
 
@@ -513,6 +514,7 @@ private struct PlayerScrubber: View {
                     dragFraction = nil
                 }
                 .sliderThumbVisibility(.hidden)
+                .overlay { BufferedTrack(played: fraction, loaded: player.current.flatMap(model.bufferedFraction), thickness: 6) }
                 HStack {
                     Text(Self.format(fraction * duration))
                     Spacer()

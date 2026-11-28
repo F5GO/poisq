@@ -789,10 +789,11 @@ private struct SongRowsSection: View {
 private struct ResumeQueueCard: View {
     let player: Player
     let openQueue: () -> Void
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         if let song = player.current {
-            HStack(spacing: 14) {
+            HStack(spacing: 0) {
                 Button(action: openQueue) {
                     HStack(spacing: 14) {
                         CoverArtView(id: song.coverArt, size: 96, radius: 14)
@@ -807,32 +808,39 @@ private struct ResumeQueueCard: View {
                             if !player.upcoming.isEmpty {
                                 Text("\(player.upcoming.count) songs").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             }
-                            // Сколько трека прошло — системной полосой, а не кольцом вокруг кнопки.
+                            // Сколько прошло — системной полосой; темнее — то, что уже загружено.
+                            // Время плеера не наблюдаемое, поэтому полоса перерисовывается сама, как на экране плеера.
                             if player.duration > 0 {
-                                ProgressView(value: min(max(player.progress, 0), player.duration), total: player.duration)
-                                    .padding(.top, 6)
+                                TimelineView(.periodic(from: .now, by: player.isPlaying ? 1 : 30)) { _ in
+                                    let played = min(max(player.progress / player.duration, 0), 1)
+                                    ProgressView(value: played)
+                                        .overlay { BufferedTrack(played: played, loaded: model.bufferedFraction(for: song), thickness: 4) }
+                                }
+                                .padding(.top, 6)
                             }
                         }
-                        Spacer(minLength: 0)
+                        // Колонка во всю ширину: полоса всегда кончается в одном месте, кнопка — по центру за ней.
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Queue")
 
-                // Обычное системное стекло, как у быстрых действий главной: без заливки акцентом и самописных колец.
+                // Та же кнопка, что на экране плеера: символ без подложки, по центру между полосой и краем карточки.
                 Button { player.togglePlayPause() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title2)
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 34))
                         .contentTransition(.symbolEffect(.replace))
-                        .frame(width: 44, height: 44)
+                        .frame(width: 76)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(.rect)
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
+                .buttonStyle(.plain)
                 .accessibilityLabel(player.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
             }
-            .padding(14)
+            .padding([.leading, .vertical], 14)
+            .fixedSize(horizontal: false, vertical: true)
             .glassEffect(.regular, in: .rect(cornerRadius: 26))
             .padding(.horizontal, 20)
             .sensoryFeedback(.impact(weight: .light), trigger: player.isPlaying)
