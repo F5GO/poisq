@@ -3828,6 +3828,7 @@ async function loadSecureTransport(payload = null) {
     // Новый адрес на каждую загрузку: QR меняется вместе с адресом и ключом.
     document.getElementById("secure-qr").src = `/api/v1/secure-transport/qr.svg?t=${Date.now()}`;
     document.getElementById("secure-fingerprint").textContent = res.fingerprint || "";
+    document.getElementById("secure-emoji").textContent = res.emoji || "";
     document.getElementById("secure-epoch").textContent = res.certificateExpiresAt
       ? `Рабочий ключ: эпоха ${res.currentEpoch}, обновится автоматически до ${new Date(res.certificateExpiresAt * 1000).toLocaleString("ru-RU")}`
       : "";

@@ -172,9 +172,14 @@ struct SignInView: View {
                 Text("Checking the secure connection…")
             case .verified:
                 Image(systemName: "lock.shield.fill").foregroundStyle(.green)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Secure connection verified")
-                    Text("Key \(s.pairing.fingerprint)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                    Text(s.pairing.emojiFingerprint.joined(separator: " "))
+                        .font(.title2)
+                        .accessibilityLabel(Text("Key emoji"))
+                    Text("Compare the emoji with poisq Studio. If they differ, don't sign in.")
+                        .foregroundStyle(.secondary)
+                    Text("Key \(s.pairing.fingerprint)").font(.caption2.monospaced()).foregroundStyle(.tertiary)
                 }
             case .failed(let message):
                 Image(systemName: "lock.trianglebadge.exclamationmark.fill").foregroundStyle(.red)

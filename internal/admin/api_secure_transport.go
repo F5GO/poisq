@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/F5GO/poisq/internal/db"
@@ -28,6 +29,7 @@ type secureTransportStatus struct {
 	KeysCreated          bool   `json:"keysCreated"`
 	InstallationID       string `json:"installationId,omitempty"`
 	Fingerprint          string `json:"fingerprint,omitempty"`
+	Emoji                string `json:"emoji,omitempty"`
 	PairingCode          string `json:"pairingCode,omitempty"`
 	CurrentEpoch         uint32 `json:"currentEpoch,omitempty"`
 	CertificateExpiresAt int64  `json:"certificateExpiresAt,omitempty"`
@@ -101,6 +103,7 @@ func (s *AdminServer) secureTransportStatus() secureTransportStatus {
 	st.KeysCreated = true
 	st.InstallationID = hex.EncodeToString(id[:])
 	st.Fingerprint = securetransport.KeyFingerprint(keys.RootPublicKey())
+	st.Emoji = strings.Join(securetransport.KeyEmoji(keys.RootPublicKey()), " ")
 	if cert, err := securetransport.ParseWorkingCertificate(keys.CurrentCertificate(), keys.RootPublicKey(), id); err == nil {
 		st.CurrentEpoch = cert.Epoch
 		st.CertificateExpiresAt = cert.NotAfter.Unix()

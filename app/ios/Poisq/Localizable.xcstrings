@@ -4332,6 +4332,26 @@
           }
         }
       }
+    },
+    "Key emoji": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эмодзи ключа"
+          }
+        }
+      }
+    },
+    "Compare the emoji with poisq Studio. If they differ, don't sign in.": {
+      "localizations": {
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сверьте эмодзи с poisq Studio. Если не совпадают — не входите."
+          }
+        }
+      }
     }
   },
   "version": "1.1"
