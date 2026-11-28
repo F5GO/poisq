@@ -54,13 +54,30 @@ final class CacheManager {
         return url
     }
 
-    /// Подкачивает треки в кеш (по одному за раз; уже скачанные пропускаются).
+    /// Подкачивает треки в кеш (уже скачанные пропускаются).
+    /// Защищённый профиль качает так же, как офлайн-загрузки: билет из канала, шифротекст по нему, расшифровка в файл кеша.
     func prefetch(_ songs: [Song], client: SubsonicClient, serverID: UUID, quality: StreamQuality, isDownloaded: (Song) -> Bool) {
         for song in songs where !isDownloaded(song) {
             let dest = file(song, serverID, quality)
             let key = dest.path
-            guard !FileManager.default.fileExists(atPath: key), !inflight.contains(key),
-                  let remote = try? client.fileURL(for: song, quality: quality) else { continue }
+            guard !FileManager.default.fileExists(atPath: key), !inflight.contains(key) else { continue }
+            if let channel = client.channel {
+                inflight.insert(key)
+                Task { [session] in
+                    defer { Task { @MainActor in self.inflight.remove(key) } }
+                    guard let ticket = try? await channel.downloadTicket(songID: song.id),
+                          let (tmp, response) = try? await session.download(for: URLRequest(url: ticket.url), delegate: RefuseRedirects.shared)
+                    else { return }
+                    defer { try? FileManager.default.removeItem(at: tmp) }
+                    guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+                    let ok = await Task.detached(priority: .utility) {
+                        Self.store(dest) { try SecureBlob.decrypt(from: tmp, to: $0, key: ticket.key, size: ticket.size, chunkSize: ticket.chunkSize) }
+                    }.value
+                    if ok { self.trim() }
+                }
+                continue
+            }
+            guard let remote = try? client.fileURL(for: song, quality: quality) else { continue }
             inflight.insert(key)
             let request = client.request(for: remote)
             Task { [session] in
@@ -72,12 +89,24 @@ final class CacheManager {
                     try? FileManager.default.removeItem(at: tmp)
                     return
                 }
-                try? FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? FileManager.default.removeItem(at: dest)
-                if (try? FileManager.default.moveItem(at: tmp, to: dest)) != nil {
-                    await MainActor.run { self.trim() }
-                }
+                if Self.store(dest, { try FileManager.default.moveItem(at: tmp, to: $0) }) { self.trim() }
             }
+        }
+    }
+
+    /// Пишет файл кеша через временное имя: наполовину записанный файл никогда не выглядит готовым для `url(for:)`.
+    nonisolated private static func store(_ dest: URL, _ write: (URL) throws -> Void) -> Bool {
+        let partial = dest.appendingPathExtension("partial")
+        do {
+            try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: partial)
+            try write(partial)
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.moveItem(at: partial, to: dest)
+            return true
+        } catch {
+            try? FileManager.default.removeItem(at: partial)
+            return false
         }
     }
 
@@ -122,4 +151,11 @@ final class CacheManager {
             return Entry(url: url, size: Int64(v.fileSize ?? 0), date: v.contentModificationDate ?? .distantPast)
         }
     }
+}
+
+/// Шифротекст по билету берётся только с адреса билета: перенаправление считается ошибкой, как в загрузках.
+private final class RefuseRedirects: NSObject, URLSessionTaskDelegate {
+    static let shared = RefuseRedirects()
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest) async -> URLRequest? { nil }
 }

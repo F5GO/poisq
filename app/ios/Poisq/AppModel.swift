@@ -269,6 +269,9 @@ final class AppModel {
     }
 
     /// Изменение имени, адреса, логина и пароля. Пустой пароль — оставить прежний.
+    /// Канал отдаёт только исходный файл, поэтому кеш защищённого профиля всегда хранит оригинал.
+    private func cacheQuality(_ client: SubsonicClient) -> StreamQuality { client.channel == nil ? playbackQuality : .original }
+
     func updateServer(_ id: UUID, name: String, address: String, username: String, password: String,
                       alternates: [String] = [], headers: [String: String]? = nil) async throws {
         guard let i = servers.firstIndex(where: { $0.id == id }) else { return }
@@ -386,7 +389,7 @@ final class AppModel {
         player.replayGainMode = Player.ReplayGainMode(rawValue: replayGainMode) ?? .off
         player.cachedURLProvider = { [weak self] song in
             guard let self else { return nil }
-            return self.cache.url(for: song, serverID: sid, quality: self.playbackQuality)
+            return self.cache.url(for: song, serverID: sid, quality: self.cacheQuality(client))
         }
         player.offlineSongsProvider = { [weak self] in
             guard let self, self.offline else { return nil }
@@ -395,7 +398,7 @@ final class AppModel {
         }
         player.onTrackChange = { [weak self] current, upcoming in
             guard let self, !self.offline, self.cacheOnCellular || !self.network.isExpensive else { return }
-            self.cache.prefetch([current] + upcoming.prefix(2), client: client, serverID: sid, quality: self.playbackQuality,
+            self.cache.prefetch([current] + upcoming.prefix(2), client: client, serverID: sid, quality: self.cacheQuality(client),
                                 isDownloaded: { self.downloads.isDownloaded($0, serverID: sid) })
         }
         player.onNowPlaying = { [weak self] song in
