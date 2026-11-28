@@ -785,7 +785,7 @@ private struct SongRowsSection: View {
 }
 
 /// Текущая сессия: крупная карточка в зоне большого пальца на системном стекле (Liquid Glass).
-/// Нажатие на карточку открывает очередь, круглая кнопка — пауза и продолжение.
+/// Нажатие на карточку открывает очередь, круглая кнопка — пауза и продолжение, полоса под названием — сколько прошло.
 private struct ResumeQueueCard: View {
     let player: Player
     let openQueue: () -> Void
@@ -807,6 +807,11 @@ private struct ResumeQueueCard: View {
                             if !player.upcoming.isEmpty {
                                 Text("\(player.upcoming.count) songs").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             }
+                            // Сколько трека прошло — системной полосой, а не кольцом вокруг кнопки.
+                            if player.duration > 0 {
+                                ProgressView(value: min(max(player.progress, 0), player.duration), total: player.duration)
+                                    .padding(.top, 6)
+                            }
                         }
                         Spacer(minLength: 0)
                     }
@@ -815,29 +820,15 @@ private struct ResumeQueueCard: View {
                 .buttonStyle(.plain)
                 .accessibilityHint("Queue")
 
-                // Стекло вместо сплошной заливки — кнопка не спорит с обложкой; кольцо вокруг показывает, сколько трека прошло.
+                // Системная выделенная стеклянная кнопка, как «Воспроизвести» в Музыке: цвет акцента, без самописных колец.
                 Button { player.togglePlayPause() } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(.tint)
+                        .font(.title2)
                         .contentTransition(.symbolEffect(.replace))
-                        .frame(width: 50, height: 50)
+                        .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glassProminent)
                 .buttonBorderShape(.circle)
-                .overlay {
-                    let fraction = player.duration > 0 ? min(max(player.progress / player.duration, 0), 1) : 0
-                    ZStack {
-                        Circle().stroke(.secondary.opacity(0.25), lineWidth: 3)
-                        Circle()
-                            .trim(from: 0, to: fraction)
-                            .stroke(.tint, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                    }
-                    .padding(-6)
-                    .allowsHitTesting(false)
-                }
-                .padding(6)
                 .accessibilityLabel(player.isPlaying ? String(localized: "Pause") : String(localized: "Play"))
             }
             .padding(14)
