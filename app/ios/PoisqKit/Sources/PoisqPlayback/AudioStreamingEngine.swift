@@ -78,6 +78,13 @@ public final class AudioStreamingEngine: NSObject, PlaybackEngine {
     /// Формат вывода AudioPlayer по умолчанию; источник со своим потоком данных должен его указать.
     private static let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44100, channels: 2, interleaved: true)!
 
+    /// Kill switch: при активном защищённом профиле прямая http(s)-ссылка на его сервер не открывается никогда —
+    /// трафик к серверу идёт только через канал или не идёт вовсе. Сторонние адреса (интернет-радио) не затрагиваются.
+    private func bypassesChannel(_ url: URL) -> Bool {
+        guard let secureMedia, let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return false }
+        return url.host()?.lowercased() == secureMedia.secureOrigin.host()?.lowercased()
+    }
+
     private func secureSource(for url: URL) -> SecureAudioSource? {
         guard url.scheme == SubsonicClient.secureStreamScheme, let secureMedia else { return nil }
         return SecureAudioSource(url: url, fetcher: secureMedia, queue: player.sourceQueue)
@@ -90,7 +97,7 @@ public final class AudioStreamingEngine: NSObject, PlaybackEngine {
             player.play(source: source, entryId: url.absoluteString, format: Self.outputFormat)
             return
         }
-        guard url.scheme != SubsonicClient.secureStreamScheme else { update(.idle); return }
+        guard url.scheme != SubsonicClient.secureStreamScheme, !bypassesChannel(url) else { update(.idle); return }
         player.play(url: url, headers: headers(for: url))
     }
 
@@ -103,7 +110,7 @@ public final class AudioStreamingEngine: NSObject, PlaybackEngine {
             player.queue(source: source, entryId: url.absoluteString, format: Self.outputFormat)
             return
         }
-        guard url.scheme != SubsonicClient.secureStreamScheme else { return }
+        guard url.scheme != SubsonicClient.secureStreamScheme, !bypassesChannel(url) else { return }
         player.queue(url: url, headers: headers(for: url))
     }
     public func dequeue(_ url: URL) { player.removeFromQueue(url: url) }

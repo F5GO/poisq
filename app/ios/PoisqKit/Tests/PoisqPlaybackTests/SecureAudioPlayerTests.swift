@@ -31,6 +31,7 @@ private let flacFile: URL = {
 private final class FileFetcher: SecureMediaFetching, @unchecked Sendable {
     let file: Data
     init() throws { file = try Data(contentsOf: flacFile) }
+    var secureOrigin: URL { URL(string: "https://music.example.com")! }
     func mediaChunk(for url: URL, offset: Int, length: Int) async throws -> SecureMediaChunk {
         try? await Task.sleep(for: .milliseconds(30))
         guard offset < file.count else { return SecureMediaChunk(data: Data(), total: file.count, pastEnd: true) }
@@ -120,5 +121,17 @@ struct SecureAudioPlayerTests {
         player.resume()
         #expect(await waitFor(5) { player.progress >= 89.5 }, "seek lost after pause (progress \(player.progress))")
         #expect(await advances(player), "no audio after resume (state \(player.state) progress \(player.progress))")
+    }
+}
+
+@Suite @MainActor struct SecureKillSwitchTests {
+    @Test func engineRefusesDirectLinksToTheSecureServer() throws {
+        let engine = AudioStreamingEngine()
+        engine.secureMedia = try FileFetcher()
+        engine.play(URL(string: "https://Music.Example.com/rest/stream?id=1&u=alice&t=x&s=y")!)
+        #expect(engine.state == .idle, "a direct link to the secure server must never play")
+        engine.play(URL(string: "http://music.example.com:4534/rest/stream?id=1")!)
+        #expect(engine.state == .idle)
+        engine.stop()
     }
 }

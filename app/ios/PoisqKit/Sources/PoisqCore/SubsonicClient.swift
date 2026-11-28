@@ -27,6 +27,8 @@ public struct SecureMediaChunk: Sendable {
 /// Чтение аудио кусками через защищённый канал; реализует SubsonicClient защищённого профиля.
 public protocol SecureMediaFetching: Sendable {
     func mediaChunk(for url: URL, offset: Int, length: Int) async throws -> SecureMediaChunk
+    /// Адрес защищённого сервера: прямые http(s)-запросы к нему мимо канала запрещены (kill switch).
+    var secureOrigin: URL { get }
 }
 
 /// Клиент стандартного Subsonic/OpenSubsonic API. Работает с любым сервером.
@@ -557,6 +559,8 @@ public final class SubsonicClient: Sendable {
 }
 
 extension SubsonicClient: SecureMediaFetching {
+    public var secureOrigin: URL { baseURL }
+
     public func mediaChunk(for url: URL, offset: Int, length: Int) async throws -> SecureMediaChunk {
         guard let channel, url.scheme == Self.secureStreamScheme,
               let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "id" })?.value

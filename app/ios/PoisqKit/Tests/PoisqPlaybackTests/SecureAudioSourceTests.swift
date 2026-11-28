@@ -14,6 +14,7 @@ private final class FakeFetcher: SecureMediaFetching, @unchecked Sendable {
     var delay: Duration = .zero
     init(size: Int) { file = Data((0..<size).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ $0 >> 9) }) }
 
+    var secureOrigin: URL { URL(string: "https://music.example.com")! }
     func mediaChunk(for url: URL, offset: Int, length: Int) async throws -> SecureMediaChunk {
         let failure = lock.withLock { () -> Error? in requests.append((offset, length)); return self.failure }
         if delay != .zero { try? await Task.sleep(for: delay) }
