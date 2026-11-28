@@ -1,0 +1,18 @@
+{
+  "comment": "Общий вектор Go↔Swift для QR v1 и сертификата рабочего ключа v1. Ключи получены из seed 0x01..0x20 (корень), 0x21..0x40 (следующий корень), 0x41..0x60 (рабочий X25519).",
+  "pairing": {
+    "code": "poisq-secure:v1:00112233445566778899aabbccddeeff:ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ:aHR0cHM6Ly9tdXNpYy5leGFtcGxlLmNvbTo4NDQz",
+    "installationId": "00112233445566778899aabbccddeeff",
+    "rootPublicKey": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+    "origin": "https://music.example.com:8443",
+    "fingerprint": "65b6 0673 d6ed 884b f01c"
+  },
+  "certificate": {
+    "hex": "0100112233445566778899aabbccddeeff00000007000000006955b90000000000695ef38064b101b1d0be5a8704bd078f9895001fc03e8e9f9522f188dd128d9846d48466c945cbf2a5602002141e2fb9d17054d6ca069951df73f49d1f8aca87f9878f60a23af8cf7baacf8e41c3262776f56766975091ebbc58850151bbb449f3330ddf7453dd17a2f74b80c5542ef890ffaf9ce2ad0e2eba600ee58ebbb897b5789907",
+    "epoch": 7,
+    "notBefore": 1767225600,
+    "notAfter": 1767830400,
+    "workingKey": "64b101b1d0be5a8704bd078f9895001fc03e8e9f9522f188dd128d9846d48466",
+    "nextRootDigest": "c945cbf2a5602002141e2fb9d17054d6ca069951df73f49d1f8aca87f9878f60"
+  }
+}

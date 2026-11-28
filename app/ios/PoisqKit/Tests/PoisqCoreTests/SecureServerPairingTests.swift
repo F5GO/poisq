@@ -10,7 +10,17 @@ import Testing
         let pairing = try #require(SecureServerPairing(code: Self.vector))
         #expect(pairing.origin.absoluteString == "https://music.example.com:8443")
         #expect(pairing.installationID == "00112233445566778899aabbccddeeff")
-        #expect(pairing.publicKey == Data((1...32).map(UInt8.init)))
+        #expect(pairing.rootPublicKey == Data((1...32).map(UInt8.init)))
+    }
+
+    @Test func readsSharedGoVector() throws {
+        let vector = try SecurePairingVector.load()
+        let pairing = try #require(SecureServerPairing(code: vector.pairing.code))
+        #expect(pairing.installationID == vector.pairing.installationId)
+        #expect(pairing.installationIDBytes == Data(hex: vector.pairing.installationId))
+        #expect(pairing.rootPublicKey == Data(hex: vector.pairing.rootPublicKey))
+        #expect(pairing.origin.absoluteString == vector.pairing.origin)
+        #expect(pairing.fingerprint == vector.pairing.fingerprint)
     }
 
     @Test func rejectsInvalidPairingFields() {

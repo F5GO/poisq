@@ -9,17 +9,18 @@ import (
 	"strings"
 )
 
-// PairingCode encodes the public identity of one poisq Studio installation.
-func PairingCode(publicOrigin string, installationID [16]byte, publicKey [32]byte) (string, error) {
+// PairingCode encodes the public identity of one poisq Studio installation:
+// its ID, the Ed25519 root public key that signs working-key certificates and its public HTTPS origin.
+func PairingCode(publicOrigin string, installationID [16]byte, rootPublicKey [32]byte) (string, error) {
 	origin, err := canonicalPairingOrigin(publicOrigin)
 	if err != nil {
 		return "", err
 	}
-	if installationID == [16]byte{} || publicKey == [32]byte{} {
-		return "", errors.New("secure pairing requires an installation ID and a public key")
+	if installationID == [16]byte{} || rootPublicKey == [32]byte{} {
+		return "", errors.New("secure pairing requires an installation ID and a root public key")
 	}
 	return "poisq-secure:v1:" + hex.EncodeToString(installationID[:]) + ":" +
-		base64.RawURLEncoding.EncodeToString(publicKey[:]) + ":" +
+		base64.RawURLEncoding.EncodeToString(rootPublicKey[:]) + ":" +
 		base64.RawURLEncoding.EncodeToString([]byte(origin)), nil
 }
 

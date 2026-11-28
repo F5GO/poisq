@@ -201,6 +201,6 @@
 go test -count=1 ./internal/proxy ./internal/securetransport
 go test -count=1 ./...
 go build -o /tmp/poisq-secure-transport-check ./cmd/proxy
-swift test --package-path app/ios/PoisqKit --filter SecureServerPairingTests
+swift test --package-path app/ios/PoisqKit --filter "SecureServerPairingTests|SecureWorkingCertificateTests"
 git diff --check
 ```

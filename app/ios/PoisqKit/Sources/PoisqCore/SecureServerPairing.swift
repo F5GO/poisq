@@ -1,10 +1,29 @@
+import CryptoKit
 import Foundation
 
 /// Public enrollment data acquired from a trusted poisq Studio QR code.
 public struct SecureServerPairing: Equatable, Sendable {
     public let installationID: String
-    public let publicKey: Data
+    /// Ed25519 root key of the installation; it signs working-key certificates and is pinned by the QR code.
+    public let rootPublicKey: Data
     public let origin: URL
+
+    /// Raw 16-byte installation ID.
+    public var installationIDBytes: Data {
+        Data(stride(from: 0, to: installationID.utf8.count, by: 2).map { offset in
+            let start = installationID.index(installationID.startIndex, offsetBy: offset)
+            return UInt8(installationID[start..<installationID.index(start, offsetBy: 2)], radix: 16)!
+        })
+    }
+
+    /// Short root-key fingerprint for human comparison with poisq Studio: first 10 bytes of SHA-256 in groups of four hex digits.
+    public var fingerprint: String {
+        let hex = SHA256.hash(data: rootPublicKey).prefix(10).map { String(format: "%02x", $0) }.joined()
+        return stride(from: 0, to: hex.count, by: 4).map { offset in
+            let start = hex.index(hex.startIndex, offsetBy: offset)
+            return String(hex[start..<hex.index(start, offsetBy: 4)])
+        }.joined(separator: " ")
+    }
 
     public init?(code: String) {
         guard code.utf8.count <= 512 else { return nil }
@@ -17,12 +36,13 @@ public struct SecureServerPairing: Equatable, Sendable {
         guard id.utf8.count == 32, id.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
               id.utf8.contains(where: { $0 != 48 }),
               let key = Self.decodeBase64URL(fields[3]), key.count == 32, key.contains(where: { $0 != 0 }),
+              (try? Curve25519.Signing.PublicKey(rawRepresentation: key)) != nil,
               let address = Self.decodeBase64URL(fields[4]),
               let text = String(data: address, encoding: .utf8),
               let origin = Self.parseOrigin(text) else { return nil }
 
         installationID = String(id)
-        publicKey = key
+        rootPublicKey = key
         self.origin = origin
     }
 
