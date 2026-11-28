@@ -6,6 +6,24 @@ protocol SecureChannelTransport: Sendable {
     func send(_ request: URLRequest) async throws -> (Data, Int)
 }
 
+/// Device credential issued by Studio after sign-in. The token changes on every resume, so it must be saved before use.
+public struct SecureDeviceCredential: Codable, Equatable, Sendable {
+    public let deviceID: Data
+    public let token: Data
+
+    public init(deviceID: Data, token: Data) {
+        self.deviceID = deviceID
+        self.token = token
+    }
+}
+
+/// Per-profile storage of the device credential (Keychain in the app, memory in tests).
+public protocol SecureCredentialStore: Sendable {
+    func loadCredential() -> SecureDeviceCredential?
+    func saveCredential(_ credential: SecureDeviceCredential) throws
+    func deleteCredential()
+}
+
 /// Encrypted channel to one poisq Studio installation pinned by its QR code.
 ///
 /// One Noise NK handshake per session, then every request is encrypted with its own key and may run in parallel.
@@ -21,16 +39,27 @@ public actor SecureChannel {
         case requestTooLarge
         case malformedResponse
         case http(Int)
+        /// No device credential: the user has to sign in.
+        case notSignedIn
+        case wrongCredentials
+        /// Navidrome or sign-in is temporarily unavailable; the credential is kept.
+        case serverUnavailable
+        case tooManyDevices
+        /// The device was revoked in Studio, by a password change or as a stolen token: the credential is deleted.
+        case revoked
+        case invalidInput
+        case forbidden
     }
 
     private struct Session {
         let id: Data
         let c2s: Data
         let s2c: Data
-        let expires: Date
+        var expires: Date
         let maxRequest: Int
         let maxRecord: Int
         var counter: UInt64 = 0
+        var signedIn = false
     }
 
     public nonisolated let pairing: SecureServerPairing
@@ -44,14 +73,18 @@ public actor SecureChannel {
     private let makeEphemeral: @Sendable () -> Curve25519.KeyAgreement.PrivateKey
     private var session: Session?
     private var handshakeTask: Task<Session, Error>?
+    private var signInTask: Task<Void, Error>?
+    private let credentials: SecureCredentialStore?
 
-    public init(pairing: SecureServerPairing, certificate: Data? = nil, acceptedEpoch: UInt32? = nil) {
-        self.init(pairing: pairing, certificate: certificate, acceptedEpoch: acceptedEpoch,
+    public init(pairing: SecureServerPairing, credentials: SecureCredentialStore?, certificate: Data? = nil, acceptedEpoch: UInt32? = nil) {
+        self.init(pairing: pairing, certificate: certificate, acceptedEpoch: acceptedEpoch, credentials: credentials,
                   transport: URLSessionSecureTransport(), now: { Date() }, makeEphemeral: { .init() })
     }
 
-    init(pairing: SecureServerPairing, certificate: Data?, acceptedEpoch: UInt32?, transport: SecureChannelTransport,
+    init(pairing: SecureServerPairing, certificate: Data?, acceptedEpoch: UInt32?, credentials: SecureCredentialStore? = nil,
+         transport: SecureChannelTransport,
          now: @escaping @Sendable () -> Date, makeEphemeral: @escaping @Sendable () -> Curve25519.KeyAgreement.PrivateKey) {
+        self.credentials = credentials
         self.pairing = pairing
         self.transport = transport
         self.now = now
@@ -63,11 +96,22 @@ public actor SecureChannel {
         }
     }
 
-    /// Sends one request and returns the decrypted response.
+    /// Sends an application request as the signed-in user; resumes with the stored device credential when needed.
+    public func request(_ request: Data, responseLimit: Int = 64 << 20) async throws -> Data {
+        try await exchange(request, signedIn: true, responseLimit: responseLimit).0
+    }
+
+    /// Raw request without sign-in (control exchange and sign-in operations).
+    func call(_ request: Data, responseLimit: Int = 64 << 20) async throws -> Data {
+        try await exchange(request, signedIn: false, responseLimit: responseLimit).0
+    }
+
+    /// Sends one request and returns the decrypted response with the session it used.
     /// An unknown session (410) is always safe to retry: the server rejects it before decrypting anything.
-    public func call(_ request: Data, responseLimit: Int = 64 << 20) async throws -> Data {
+    private func exchange(_ request: Data, signedIn requireSignIn: Bool, responseLimit: Int) async throws -> (Data, Data) {
         for attempt in 0..<2 {
             try await ensureSession()
+            if requireSignIn { try await ensureSignedIn() }
             // The counter is taken synchronously from actor state: concurrent calls never share one.
             guard let (current, counter) = nextCounter() else { continue }
             guard request.count <= current.maxRequest else { throw Failure.requestTooLarge }
@@ -76,8 +120,9 @@ public actor SecureChannel {
             switch status {
             case 200:
                 do {
-                    return try SecureChannelWire.openRecords(data, s2c: current.s2c, header: body.prefix(SecureChannelWire.callHeaderSize),
-                                                             counter: counter, maxRecord: current.maxRecord, limit: responseLimit)
+                    let response = try SecureChannelWire.openRecords(data, s2c: current.s2c, header: body.prefix(SecureChannelWire.callHeaderSize),
+                                                                     counter: counter, maxRecord: current.maxRecord, limit: responseLimit)
+                    return (response, current.id)
                 } catch {
                     throw Failure.malformedResponse
                 }
@@ -97,6 +142,85 @@ public actor SecureChannel {
         let nonce = Data((0..<16).map { _ in UInt8.random(in: .min ... .max) })
         let response = try await call(Data([0x01]) + nonce)
         guard response == Data([0x00]) + nonce else { throw Failure.malformedResponse }
+    }
+
+    /// Signs in with the Navidrome account over a confirmed channel and stores the device credential.
+    /// The password travels only inside this channel and only once; later sessions resume with the device token.
+    public func signIn(username: String, password: String, deviceName: String) async throws {
+        guard let credentials else { throw Failure.notSignedIn }
+        let user = Data(username.utf8), pass = Data(password.utf8)
+        let device = Data(String(deviceName.prefix(64)).utf8.prefix(255))
+        guard !username.trimmingCharacters(in: .whitespaces).isEmpty, user.count <= 128, !pass.isEmpty, pass.count <= 1024 else {
+            throw Failure.invalidInput
+        }
+        try await ensureSession()
+        if session?.signedIn == true { session = nil } // another account needs a fresh session
+        var body = Data([0x02, UInt8(user.count)]) + user
+        body += SecureChannelWire.bigEndian(UInt16(pass.count)) + pass
+        body += Data([UInt8(device.count)]) + device
+        let (response, sessionID) = try await exchange(body, signedIn: false, responseLimit: 1024)
+        try applyCredential(response, sessionID: sessionID, store: credentials)
+    }
+
+    /// Revokes this device in Studio (best effort) and forgets the credential and session locally.
+    public func signOut() async {
+        if credentials?.loadCredential() != nil {
+            _ = try? await exchange(Data([0x04]), signedIn: true, responseLimit: 16)
+        }
+        credentials?.deleteCredential()
+        session = nil
+    }
+
+    /// Whether a device credential is stored for this profile.
+    public var isSignedIn: Bool { credentials?.loadCredential() != nil }
+
+    /// Runs at most one resume at a time for the current session.
+    private func ensureSignedIn() async throws {
+        if session?.signedIn == true { return }
+        if let signInTask {
+            try await signInTask.value
+            return
+        }
+        let task = Task { try await self.resumeWithStoredCredential() }
+        signInTask = task
+        defer { signInTask = nil }
+        try await task.value
+    }
+
+    private func resumeWithStoredCredential() async throws {
+        guard let credentials, let credential = credentials.loadCredential() else { throw Failure.notSignedIn }
+        let (response, sessionID) = try await exchange(Data([0x03]) + credential.token, signedIn: false, responseLimit: 1024)
+        try applyCredential(response, sessionID: sessionID, store: credentials)
+    }
+
+    /// Credential response: status · token [32] · device ID [16] · session TTL u32. The new token is saved before it is used.
+    private func applyCredential(_ response: Data, sessionID: Data, store: SecureCredentialStore) throws {
+        let b = [UInt8](response)
+        guard let status = b.first else { throw Failure.malformedResponse }
+        guard status == 0 else {
+            if status == 0x08 { store.deleteCredential() }
+            throw Self.signInFailure(status)
+        }
+        guard b.count == 53 else { throw Failure.malformedResponse }
+        try store.saveCredential(SecureDeviceCredential(deviceID: Data(b[33..<49]), token: Data(b[1..<33])))
+        let ttl = TimeInterval(SecureChannelWire.uint32(b[49..<53]))
+        if var current = session, current.id == sessionID {
+            current.signedIn = true
+            current.expires = now().addingTimeInterval(max(10, ttl - 30))
+            session = current
+        }
+    }
+
+    private static func signInFailure(_ status: UInt8) -> Failure {
+        switch status {
+        case 0x02: .forbidden
+        case 0x04: .wrongCredentials
+        case 0x05: .rateLimited
+        case 0x06: .serverUnavailable
+        case 0x07: .tooManyDevices
+        case 0x08: .revoked
+        default: .malformedResponse
+        }
     }
 
     /// Whether a confirmed session is available right now, without network.

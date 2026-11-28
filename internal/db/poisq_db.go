@@ -73,6 +73,21 @@ func initPoisqSchema(sqliteDB *sql.DB) error {
 		value TEXT NOT NULL
 	);
 
+	-- Устройства Secure Transport: хранится только SHA-256 токена; пароль Navidrome зашифрован KeyCipher.
+	CREATE TABLE IF NOT EXISTS secure_devices (
+		id TEXT PRIMARY KEY,
+		username TEXT NOT NULL,
+		name TEXT NOT NULL,
+		token_hash BLOB NOT NULL UNIQUE,
+		previous_token_hash BLOB,
+		rotated_at INTEGER NOT NULL,
+		password_enc TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		last_used_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_secure_devices_previous ON secure_devices(previous_token_hash);
+	CREATE INDEX IF NOT EXISTS idx_secure_devices_username ON secure_devices(username);
+
 	CREATE TABLE IF NOT EXISTS tracks (
 		id TEXT PRIMARY KEY,
 		file_path TEXT NOT NULL,

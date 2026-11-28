@@ -473,6 +473,7 @@ function activateTab(tabName) {
     loadNavidromeAccount();
     loadPublicAccess();
     loadSecureTransport();
+    loadSecureDevices();
     loadJobsData(); // состояние паузы воркера для «Обслуживания»
   }
 }
@@ -3830,6 +3831,43 @@ async function loadSecureTransport(payload = null) {
       ? `Рабочий ключ: эпоха ${res.currentEpoch}, обновится автоматически до ${new Date(res.certificateExpiresAt * 1000).toLocaleString("ru-RU")}`
       : "";
   }
+  return res;
+}
+
+async function loadSecureDevices(payload = null) {
+  const box = document.getElementById("secure-devices");
+  if (!box) return null;
+  let res;
+  try {
+    res = payload ? await fetchApi("/secure-transport/devices", "POST", payload) : await fetchApi("/secure-transport/devices");
+  } catch (err) {
+    box.textContent = `Ошибка: ${err.message}`;
+    return null;
+  }
+  const devices = res.devices || [];
+  if (!devices.length) {
+    box.textContent = "Пока ни одно устройство не входило.";
+    return res;
+  }
+  const fmt = (v) => new Date(v).toLocaleString("ru-RU");
+  box.innerHTML = devices.map(d => `
+    <div class="cast-footer">
+      <p class="cast-status-text"><strong>${escapeHtml(d.name)}</strong> · ${escapeHtml(d.username)}<br>
+        <span class="form-hint">Вход ${escapeHtml(fmt(d.createdAt))} · активность ${escapeHtml(fmt(d.lastUsedAt))}</span></p>
+      <button type="button" class="btn btn-secondary" data-revoke-device="${escapeHtml(d.id)}">Отозвать</button>
+    </div>`).join("");
+  box.querySelectorAll("[data-revoke-device]").forEach(btn => btn.addEventListener("click", async () => {
+    const device = devices.find(d => d.id === btn.dataset.revokeDevice);
+    if (!await confirmDialog({
+      title: "Отозвать устройство?",
+      message: `«${device?.name || ""}» (${device?.username || ""}) потеряет доступ, его сессии завершатся. Для повторного входа понадобится пароль.`,
+      confirmLabel: "Отозвать",
+      tone: "danger"
+    })) return;
+    btn.disabled = true;
+    if (await loadSecureDevices({ id: btn.dataset.revokeDevice })) showToast("Устройство отозвано", "success");
+    btn.disabled = false;
+  }));
   return res;
 }
 

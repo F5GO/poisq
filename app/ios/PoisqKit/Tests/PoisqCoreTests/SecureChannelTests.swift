@@ -299,6 +299,54 @@ struct SecureChannelInteropTests {
             for _ in 0..<16 { group.addTask { try await ch.verify() } }
             try await group.waitForAll()
         }
-        #expect(try await ch.call(Data([0x7f])) == Data([0x01]))
+        #expect(try await ch.call(Data([0x7f])) == Data([0x02]), "application ops need sign-in")
     }
+
+    /// Sign-in part: needs POISQ_INTEROP_USER and POISQ_INTEROP_PASSWORD of a Navidrome account.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["POISQ_INTEROP_USER"] != nil))
+    func signsInResumesAndSignsOut() async throws {
+        let env = ProcessInfo.processInfo.environment
+        let code = try #require(env["POISQ_INTEROP_CODE"])
+        let pairing = try #require(SecureServerPairing(code: code))
+        let base = try #require(URL(string: env["POISQ_INTEROP_URL"] ?? ""))
+        let store = MemoryCredentialStore()
+        func channel() -> SecureChannel {
+            SecureChannel(pairing: pairing, certificate: nil, acceptedEpoch: nil, credentials: store,
+                          transport: RewritingTransport(base: base), now: { Date() }, makeEphemeral: { .init() })
+        }
+        let user = try #require(env["POISQ_INTEROP_USER"])
+        let password = try #require(env["POISQ_INTEROP_PASSWORD"])
+
+        let first = channel()
+        await #expect(throws: SecureChannel.Failure.notSignedIn) { try await first.request(Data([0x40])) }
+        await #expect(throws: SecureChannel.Failure.wrongCredentials) {
+            try await first.signIn(username: user, password: password + "-wrong", deviceName: "interop")
+        }
+        #expect(store.loadCredential() == nil)
+        try await first.signIn(username: user, password: password, deviceName: "interop test")
+        let issued = try #require(store.loadCredential())
+        // Signed in: application ops reach the handler (unknown op answers 0x01 instead of 0x02 "forbidden").
+        #expect(try await first.request(Data([0x40])) == Data([0x01]))
+
+        // A new channel (app relaunch) resumes with the stored token, which rotates.
+        let second = channel()
+        #expect(try await second.request(Data([0x40])) == Data([0x01]))
+        let rotated = try #require(store.loadCredential())
+        #expect(rotated.deviceID == issued.deviceID && rotated.token != issued.token)
+
+        await second.signOut()
+        #expect(store.loadCredential() == nil)
+        // The old token is revoked on the server too.
+        try store.saveCredential(rotated)
+        await #expect(throws: SecureChannel.Failure.revoked) { try await channel().request(Data([0x40])) }
+        #expect(store.loadCredential() == nil, "a revoked credential is deleted")
+    }
+}
+
+final class MemoryCredentialStore: SecureCredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var credential: SecureDeviceCredential?
+    func loadCredential() -> SecureDeviceCredential? { lock.withLock { credential } }
+    func saveCredential(_ credential: SecureDeviceCredential) throws { lock.withLock { self.credential = credential } }
+    func deleteCredential() { lock.withLock { credential = nil } }
 }

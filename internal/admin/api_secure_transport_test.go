@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/F5GO/poisq/internal/db"
 	"github.com/F5GO/poisq/internal/securetransport"
+	"github.com/F5GO/poisq/internal/security"
 	"rsc.io/qr"
 )
 
@@ -123,3 +125,59 @@ func TestQRSVGDrawsEveryModule(t *testing.T) {
 }
 
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
+
+type allowVerifier struct{}
+
+func (allowVerifier) Verify(context.Context, string, string) securetransport.VerifyResult {
+	return securetransport.VerifyOK
+}
+
+func TestSecureDevicesAPI(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "poisq.db")
+	poisqDB, err := db.OpenPoisqDatabase(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer poisqDB.Close()
+	cipher, err := security.NewKeyCipher("test", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := securetransport.NewDeviceStore(poisqDB, cipher)
+	accounts := securetransport.NewAccounts(store, allowVerifier{})
+	securetransport.NewServer(securetransport.NewInstallation(tmp), securetransport.PingHandler, func(*http.Request) string { return "" }).SetAccounts(accounts)
+	srv := &AdminServer{}
+	srv.SetSecureAccounts(accounts)
+
+	call := func(method, body string) (int, []securetransport.Device) {
+		rr := httptest.NewRecorder()
+		srv.handleSecureDevices(rr, httptest.NewRequest(method, "/api/v1/secure-transport/devices", strings.NewReader(body)))
+		var out struct {
+			Devices []securetransport.Device `json:"devices"`
+		}
+		_ = json.Unmarshal(rr.Body.Bytes(), &out)
+		return rr.Code, out.Devices
+	}
+	if code, devices := call(http.MethodGet, ""); code != http.StatusOK || devices == nil || len(devices) != 0 {
+		t.Fatalf("empty list: %d %v", code, devices)
+	}
+	d, _, err := store.Create(context.Background(), "alice", "iPhone", "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, devices := call(http.MethodGet, ""); code != http.StatusOK || len(devices) != 1 || devices[0].Name != "iPhone" {
+		t.Fatalf("list: %d %+v", code, devices)
+	}
+	for _, body := range []string{`{"id":"short"}`, `nope`, `{"id":"` + strings.Repeat("a", 40) + `"}`} {
+		if code, _ := call(http.MethodPost, body); code != http.StatusBadRequest {
+			t.Fatalf("%s: %d", body, code)
+		}
+	}
+	if code, devices := call(http.MethodPost, `{"id":"`+d.ID+`"}`); code != http.StatusOK || len(devices) != 0 {
+		t.Fatalf("revoke: %d %+v", code, devices)
+	}
+	if code, _ := call(http.MethodPost, `{"id":"`+d.ID+`"}`); code != http.StatusNotFound {
+		t.Fatalf("second revoke: %d", code)
+	}
+}

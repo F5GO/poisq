@@ -13,8 +13,12 @@ import (
 const (
 	// PreAuthSessionTTL — срок сессии до входа: в ней разрешён только вход.
 	PreAuthSessionTTL = 2 * time.Minute
+	// AuthenticatedSessionTTL — срок сессии после входа.
+	AuthenticatedSessionTTL = 24 * time.Hour
 	// MaxSessions ограничивает таблицу сессий одной установки.
 	MaxSessions = 1024
+	// MaxSessionsPerDevice — при превышении вытесняется самая старая сессия этого же устройства.
+	MaxSessionsPerDevice = 8
 
 	helloRatePerMinute = 20
 	helloBurst         = 20
@@ -28,8 +32,26 @@ type Session struct {
 	s2c     [32]byte
 	expires time.Time
 
-	mu     sync.Mutex
-	window replayWindow
+	ip string
+
+	mu       sync.Mutex
+	window   replayWindow
+	user     string // пусто до входа
+	deviceID string
+	password string // пароль Navidrome для запросов от имени пользователя; только в памяти
+}
+
+// User возвращает пользователя Navidrome сессии и пароль для запросов от его имени; ok — сессия после входа.
+func (s *Session) User() (user, password string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.user, s.password, s.user != ""
+}
+
+func (s *Session) device() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deviceID
 }
 
 // Handler обрабатывает расшифрованный запрос. Ответ, записанный в w, канал шифрует и делит на записи.
@@ -43,14 +65,11 @@ type Server struct {
 	clientIP func(*http.Request) string
 	now      func() time.Time
 
+	accounts *Accounts
+	hellos   *rateLimiter
+
 	mu       sync.Mutex
 	sessions map[[16]byte]*Session
-	buckets  map[string]*bucket
-}
-
-type bucket struct {
-	tokens float64
-	last   time.Time
 }
 
 // NewServer создаёт обработчик протокола. clientIP возвращает адрес клиента для ограничения частоты handshake;
@@ -58,8 +77,14 @@ type bucket struct {
 func NewServer(inst *Installation, handler Handler, clientIP func(*http.Request) string) *Server {
 	return &Server{
 		inst: inst, handler: handler, clientIP: clientIP, now: time.Now,
-		sessions: make(map[[16]byte]*Session), buckets: make(map[string]*bucket),
+		sessions: make(map[[16]byte]*Session), hellos: newRateLimiter(helloRatePerMinute, helloBurst, maxRateEntries),
 	}
+}
+
+// SetAccounts подключает вход и устройства. Без них операции входа отвечают StatusUnavailable.
+func (s *Server) SetAccounts(a *Accounts) {
+	a.onRevoke = s.dropDeviceSessions
+	s.accounts = a
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +138,8 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request, keys *KeyStore) {
 		return
 	}
 	now := s.now()
-	if !s.allowHello(s.clientIP(r), now) {
+	ip := s.clientIP(r)
+	if !s.hellos.allow(ip, now) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		return
 	}
@@ -128,7 +154,7 @@ func (s *Server) hello(w http.ResponseWriter, r *http.Request, keys *KeyStore) {
 		writeBinary(w, http.StatusConflict, keys.CurrentCertificate())
 		return
 	}
-	sess := &Session{expires: now.Add(PreAuthSessionTTL)}
+	sess := &Session{expires: now.Add(PreAuthSessionTTL), ip: ip}
 	if _, err := rand.Read(sess.id[:]); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -192,7 +218,7 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request) {
 		flush = f.Flush
 	}
 	rw := newRecordWriter(w, flush, deriveKey(sess.s2c, responseLabel, counter), header)
-	if err := s.handler(r.Context(), sess, request, rw); err != nil {
+	if err := s.dispatch(r.Context(), sess, request, rw); err != nil {
 		return
 	}
 	_ = rw.Close()
@@ -235,30 +261,69 @@ func (s *Server) dropSessions() {
 	}
 }
 
-// allowHello — ограничение частоты handshake по адресу клиента (token bucket).
-func (s *Server) allowHello(ip string, now time.Time) bool {
+// dispatch выполняет операции канала. До входа доступны только проверочный обмен, вход и продолжение по токену.
+func (s *Server) dispatch(ctx context.Context, sess *Session, request []byte, w io.Writer) error {
+	if len(request) == 0 {
+		_, err := w.Write([]byte{StatusBadRequest})
+		return err
+	}
+	switch request[0] {
+	case OpPing:
+		return PingHandler(ctx, sess, request, w)
+	case OpLogin, OpResume, OpSignOut:
+		if s.accounts == nil {
+			_, err := w.Write([]byte{StatusUnavailable})
+			return err
+		}
+		return s.accounts.handle(ctx, s, sess, request, w)
+	}
+	if _, _, ok := sess.User(); !ok {
+		_, err := w.Write([]byte{StatusForbidden})
+		return err
+	}
+	return s.handler(ctx, sess, request, w)
+}
+
+// authenticate привязывает сессию к устройству и продлевает её; лишние сессии этого устройства вытесняются.
+func (s *Server) authenticate(sess *Session, d Device, password string, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b := s.buckets[ip]
-	if b == nil {
-		if len(s.buckets) >= maxRateEntries {
-			for k, old := range s.buckets {
-				if now.Sub(old.last) >= time.Minute*helloBurst/helloRatePerMinute {
-					delete(s.buckets, k)
-				}
-			}
-			if len(s.buckets) >= maxRateEntries {
-				return false
+	sess.mu.Lock()
+	sess.user, sess.deviceID, sess.password = d.Username, d.ID, password
+	sess.mu.Unlock()
+	sess.expires = now.Add(AuthenticatedSessionTTL)
+	var same []*Session
+	for _, other := range s.sessions {
+		if other != sess && other.device() == d.ID {
+			same = append(same, other)
+		}
+	}
+	for len(same) >= MaxSessionsPerDevice {
+		oldest := 0
+		for i := range same {
+			if same[i].expires.Before(same[oldest].expires) {
+				oldest = i
 			}
 		}
-		b = &bucket{tokens: helloBurst, last: now}
-		s.buckets[ip] = b
+		delete(s.sessions, same[oldest].id)
+		same = append(same[:oldest], same[oldest+1:]...)
 	}
-	b.tokens = min(helloBurst, b.tokens+now.Sub(b.last).Minutes()*helloRatePerMinute)
-	b.last = now
-	if b.tokens < 1 {
-		return false
+}
+
+// dropDeviceSessions завершает сессии отозванных устройств.
+func (s *Server) dropDeviceSessions(ids ...string) {
+	if len(ids) == 0 {
+		return
 	}
-	b.tokens--
-	return true
+	revoked := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		revoked[id] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, sess := range s.sessions {
+		if revoked[sess.device()] {
+			delete(s.sessions, key)
+		}
+	}
 }

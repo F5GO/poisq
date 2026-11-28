@@ -245,7 +245,14 @@ func main() {
 	if err := admin.LoadSecureTransport(poisqDB, secureTransport, time.Now()); err != nil {
 		log.Printf("[WARN] Настройки Secure Transport не применены, функция выключена: %v", err)
 	}
-	proxyServer.SetSecureTransport(securetransport.NewServer(secureTransport, securetransport.PingHandler, proxy.ExtractClientIP))
+	secureServer := securetransport.NewServer(secureTransport, securetransport.PingHandler, proxy.ExtractClientIP)
+	// Вход по каналу: пароль проверяет Navidrome, Studio хранит устройства с паролем, зашифрованным мастер-ключом.
+	secureAccounts := securetransport.NewAccounts(
+		securetransport.NewDeviceStore(poisqDB, keyCipher),
+		securetransport.NewNavidromeVerifier(cfg.NavidromeURL, nil),
+	)
+	secureServer.SetAccounts(secureAccounts)
+	proxyServer.SetSecureTransport(secureServer)
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
@@ -285,6 +292,7 @@ func main() {
 	adminHandler.SetCast(castService)
 	adminHandler.SetPublicAccess(publicAccess)
 	adminHandler.SetSecureTransport(secureTransport)
+	adminHandler.SetSecureAccounts(secureAccounts)
 	adminHandler.SetBiographyStore(bioStore)
 	adminHandler.SetBiographyCoordinator(bioCoordinator)
 	adminHandler.SetMetadataControlServices(admin.MetadataControlServices{

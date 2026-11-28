@@ -141,3 +141,48 @@ func (s *AdminServer) handleSecureTransportQR(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
 	_, _ = w.Write([]byte(svg))
 }
+
+// SetSecureAccounts подключает устройства Secure Transport для списка и отзыва в панели.
+func (s *AdminServer) SetSecureAccounts(a *securetransport.Accounts) { s.secureAccounts = a }
+
+type secureDeviceRevokeRequest struct {
+	ID string `json:"id"`
+}
+
+// handleSecureDevices: GET — устройства, POST {id} — отзыв устройства с завершением его сессий.
+func (s *AdminServer) handleSecureDevices(w http.ResponseWriter, r *http.Request) {
+	if s.secureAccounts == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "устройства Secure Transport не подключены")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+	case http.MethodPost:
+		var req secureDeviceRevokeRequest
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil || len(req.ID) != 32 {
+			writeJSONError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		ok, err := s.secureAccounts.Revoke(r.Context(), req.ID)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "не удалось отозвать устройство")
+			return
+		}
+		if !ok {
+			writeJSONError(w, http.StatusNotFound, "устройство не найдено")
+			return
+		}
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	devices, err := s.secureAccounts.Devices(r.Context())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "не удалось прочитать устройства")
+		return
+	}
+	if devices == nil {
+		devices = []securetransport.Device{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
+}

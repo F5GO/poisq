@@ -54,6 +54,7 @@ type AdminServer struct {
 	cast            *cast.Service
 	publicAccess    *security.PublicAccess
 	secureTransport *securetransport.Installation
+	secureAccounts  *securetransport.Accounts
 	biographies     *artistbio.Store
 	biographyJobs   interface {
 		Request(context.Context, string, bool) (<-chan struct{}, artistbio.JobState, error)
@@ -155,6 +156,7 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/public-access", s.handlePublicAccess)
 	mux.HandleFunc("/api/v1/secure-transport", s.handleSecureTransport)
 	mux.HandleFunc("/api/v1/secure-transport/qr.svg", s.handleSecureTransportQR)
+	mux.HandleFunc("/api/v1/secure-transport/devices", s.handleSecureDevices)
 	mux.HandleFunc("/api/v1/navidrome/account", s.handleNavidromeAccount)
 	mux.HandleFunc("/api/v1/artist-biographies", s.handleArtistBiographies)
 	mux.HandleFunc("/api/v1/artist-biographies/detail", s.handleArtistBiographyDetail)

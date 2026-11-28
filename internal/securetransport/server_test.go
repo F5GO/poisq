@@ -140,8 +140,9 @@ func TestChannelPing(t *testing.T) {
 	if status != http.StatusOK || err != nil || !bytes.Equal(resp, append([]byte{StatusOK}, "проверка"...)) {
 		t.Fatalf("ping: %d %q %v", status, resp, err)
 	}
-	if _, resp, _ := c.call([]byte{0x7f}); !bytes.Equal(resp, []byte{StatusUnknownOp}) {
-		t.Fatalf("unknown op: %q", resp)
+	// До входа любые операции, кроме проверки и входа, запрещены.
+	if _, resp, _ := c.call([]byte{0x7f}); !bytes.Equal(resp, []byte{StatusForbidden}) {
+		t.Fatalf("op before sign-in: %q", resp)
 	}
 }
 
@@ -313,14 +314,22 @@ func TestResponseRecords(t *testing.T) {
 		}
 		return nil
 	}
-	_, inst, ts := newTestServer(t, handler)
+	srv, inst, ts := newTestServer(t, handler)
 	c := newTestClient(t, inst, ts.URL)
 	c.hello()
-	if status, resp, err := c.call([]byte{OpPing}); status != http.StatusOK || err != nil || !bytes.Equal(resp, big) {
+	const appOp = 0x40
+	if _, resp, _ := c.call([]byte{appOp}); !bytes.Equal(resp, []byte{StatusForbidden}) {
+		t.Fatalf("application op before sign-in: %q", resp)
+	}
+	srv.mu.Lock()
+	sess := srv.sessions[c.session]
+	srv.mu.Unlock()
+	srv.authenticate(sess, Device{ID: "00112233445566778899aabbccddeeff", Username: "alice"}, "pw", time.Now())
+	if status, resp, err := c.call([]byte{appOp}); status != http.StatusOK || err != nil || !bytes.Equal(resp, big) {
 		t.Fatalf("large response: %d %d %v", status, len(resp), err)
 	}
 	failAfterStart.Store(true)
-	if _, _, err := c.call([]byte{OpPing}); err == nil {
+	if _, _, err := c.call([]byte{appOp}); err == nil {
 		t.Fatal("response without the final record was accepted")
 	}
 }
