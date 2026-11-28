@@ -88,3 +88,26 @@ func TestPublicEntryWithoutPolicyIsClosed(t *testing.T) {
 		t.Fatalf("status %d, want 404", rr.Code)
 	}
 }
+
+func TestSecureTransportPrefixIsServedByStudio(t *testing.T) {
+	nav := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("Navidrome reached: %s", r.URL.Path)
+	}))
+	defer nav.Close()
+	u, _ := url.Parse(nav.URL)
+	srv := NewServer(u, nil, nil, nil, false)
+	srv.SetPublicAccess(&security.PublicAccess{})
+
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/poisq-secure/v1/hello", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("without a handler: %d", rr.Code)
+	}
+	var hits int
+	srv.SetSecureTransport(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; w.WriteHeader(http.StatusTeapot) }))
+	rr = httptest.NewRecorder()
+	srv.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/poisq-secure/v1/hello", nil))
+	if rr.Code != http.StatusTeapot || hits != 1 {
+		t.Fatalf("secure handler not used: %d", rr.Code)
+	}
+}

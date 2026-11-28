@@ -20,14 +20,16 @@ struct SecurePairingVector: Decodable {
     let pairing: Pairing
     let certificate: Certificate
 
-    static func load() throws -> SecurePairingVector {
-        // Tests/PoisqCoreTests → PoisqKit → ios → app → repository root.
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-        let url = root.appending(path: "internal/securetransport/testdata/pairing-v1.json")
-        return try JSONDecoder().decode(SecurePairingVector.self, from: Data(contentsOf: url))
-    }
+    static func load() throws -> SecurePairingVector { try loadSharedVector("pairing-v1.json") }
+}
+
+/// Reads a shared Go↔Swift vector from internal/securetransport/testdata.
+func loadSharedVector<T: Decodable>(_ name: String) throws -> T {
+    // Tests/PoisqCoreTests → PoisqKit → ios → app → repository root.
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent()
+    return try JSONDecoder().decode(T.self, from: Data(contentsOf: root.appending(path: "internal/securetransport/testdata/" + name)))
 }
 
 extension Data {

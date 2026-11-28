@@ -245,6 +245,7 @@ func main() {
 	if err := admin.LoadSecureTransport(poisqDB, secureTransport, time.Now()); err != nil {
 		log.Printf("[WARN] Настройки Secure Transport не применены, функция выключена: %v", err)
 	}
+	proxyServer.SetSecureTransport(securetransport.NewServer(secureTransport, securetransport.PingHandler, proxy.ExtractClientIP))
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()

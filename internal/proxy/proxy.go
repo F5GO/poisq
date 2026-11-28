@@ -17,6 +17,7 @@ import (
 	"github.com/F5GO/poisq/internal/cache"
 	"github.com/F5GO/poisq/internal/cast"
 	"github.com/F5GO/poisq/internal/search"
+	"github.com/F5GO/poisq/internal/securetransport"
 	"github.com/F5GO/poisq/internal/security"
 )
 
@@ -29,7 +30,11 @@ type Server struct {
 	bioWait     time.Duration
 	trusted     []netip.Prefix         // обратные прокси, чьим заголовкам о клиенте верим; пусто — никому
 	access      *security.PublicAccess // nil — веб-интерфейс Navidrome закрыт
+	secure      http.Handler           // протокол Secure Transport; nil — не подключён
 }
+
+// SetSecureTransport подключает обработчик securetransport.PathPrefix. Вызывать до запуска HTTP-сервера.
+func (s *Server) SetSecureTransport(h http.Handler) { s.secure = h }
 
 // SetPublicAccess подключает политику публичного входа из Studio. Вызывать до запуска HTTP-сервера.
 func (s *Server) SetPublicAccess(a *security.PublicAccess) { s.access = a }
@@ -146,6 +151,16 @@ func NewServer(targetURL *url.URL, engine *search.Engine, dict *search.Dictionar
 				return
 			}
 			http.NotFound(w, r)
+			return
+		}
+
+		// Защищённый протокол обслуживает сам Studio: в Navidrome такие запросы не уходят.
+		if strings.HasPrefix(r.URL.Path, securetransport.PathPrefix) {
+			if srv.secure == nil {
+				http.NotFound(w, r)
+				return
+			}
+			srv.secure.ServeHTTP(w, r)
 			return
 		}
 
