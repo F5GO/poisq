@@ -467,6 +467,7 @@
         <a class="seg-btn" data-settings="keys" href="/settings/keys">Ключи API</a>
         <a class="seg-btn" data-settings="navidrome" href="/settings/navidrome">Navidrome</a>
         <a class="seg-btn" data-settings="cast" href="/settings/cast">Music Assistant</a>
+        <a class="seg-btn" data-settings="secure" href="/settings/secure">Secure Transport</a>
         <a class="seg-btn" data-settings="service" href="/settings/service">Обслуживание</a>
       </nav>
 
@@ -611,6 +612,45 @@
             <button type="submit" class="btn btn-primary" id="btn-save-navidrome-account">Проверить и сохранить</button>
           </div>
         </form>
+      </div>
+      </div>
+
+      <div class="settings-section" data-settings-section="secure" hidden>
+      <div class="cast-card">
+        <div class="cast-card-header">
+          <div>
+            <h2 class="cast-section-title cast-title-inline">Secure Transport</h2>
+            <p class="panel-desc">
+              Приложение poisq шифрует весь трафик до Studio, и CDN не видит логины, запросы и музыку. Устройство подключается сканированием QR в форме входа приложения. QR не содержит секретов, но показывайте его только своим пользователям.
+            </p>
+          </div>
+          <span id="secure-status-badge" class="badge badge-muted">Проверка...</span>
+        </div>
+        <form id="form-secure" class="cast-form" autocomplete="off">
+          <div class="cast-grid">
+            <div class="form-group">
+              <label class="form-label" for="secure-origin">Внешний адрес Studio</label>
+              <input type="url" id="secure-origin" class="form-input mono" placeholder="https://music.example.com" autocomplete="off" autocapitalize="off" spellcheck="false" />
+              <span class="form-hint">Адрес, по которому приложение доступно из интернета через CDN. Только https, без пути.</span>
+            </div>
+            <div class="form-group">
+              <label class="metadata-checkbox">
+                <input type="checkbox" id="secure-enabled" />
+                Включить Secure Transport
+              </label>
+            </div>
+          </div>
+          <div class="cast-footer">
+            <p id="secure-status" class="form-hint cast-status-text" role="status"></p>
+            <button type="submit" class="btn btn-primary" id="btn-save-secure">Сохранить</button>
+          </div>
+        </form>
+        <div id="secure-pairing" class="hidden">
+          <img id="secure-qr" alt="QR сопряжения poisq" width="240" height="240" />
+          <p class="form-hint">Отпечаток ключа: <span id="secure-fingerprint" class="mono"></span></p>
+          <p class="form-hint">Сверьте отпечаток с тем, что покажет приложение после сканирования.</p>
+          <p class="form-hint" id="secure-epoch"></p>
+        </div>
       </div>
       </div>
 

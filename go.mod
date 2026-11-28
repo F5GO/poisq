@@ -2,7 +2,10 @@ module github.com/F5GO/poisq
 
 go 1.26.11
 
-require modernc.org/sqlite v1.61.1
+require (
+	modernc.org/sqlite v1.61.1
+	rsc.io/qr v0.2.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect

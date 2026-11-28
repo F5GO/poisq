@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -33,6 +34,7 @@ import (
 	"github.com/F5GO/poisq/internal/metadata"
 	"github.com/F5GO/poisq/internal/proxy"
 	"github.com/F5GO/poisq/internal/search"
+	"github.com/F5GO/poisq/internal/securetransport"
 	"github.com/F5GO/poisq/internal/security"
 	"github.com/F5GO/poisq/internal/tagger"
 	"github.com/F5GO/poisq/internal/worker"
@@ -238,6 +240,20 @@ func main() {
 		log.Printf("[WARN] Политика публичного входа не прочитана, веб-интерфейс Navidrome закрыт: %v", err)
 	}
 	proxyServer.SetPublicAccess(publicAccess)
+	// Secure Transport выключен по умолчанию; ключи установки создаются при первом включении рядом с базой poisq.
+	secureTransport := securetransport.NewInstallation(filepath.Join(filepath.Dir(cfg.PoisqDBPath), "secure-transport"))
+	if err := admin.LoadSecureTransport(poisqDB, secureTransport, time.Now()); err != nil {
+		log.Printf("[WARN] Настройки Secure Transport не применены, функция выключена: %v", err)
+	}
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for now := range ticker.C {
+			if err := secureTransport.Rotate(now); err != nil {
+				log.Printf("[ERROR] Ротация рабочего ключа Secure Transport: %v", err)
+			}
+		}
+	}()
 	proxyServer.SetBiographyReader(bioStore)
 	proxyServer.SetBiographyCoordinator(bioCoordinator, cfg.BiographyFirstRequestWait)
 	publicHTTPServer := &http.Server{
@@ -267,6 +283,7 @@ func main() {
 	adminHandler.SetAlignerClient(alignerClient)
 	adminHandler.SetCast(castService)
 	adminHandler.SetPublicAccess(publicAccess)
+	adminHandler.SetSecureTransport(secureTransport)
 	adminHandler.SetBiographyStore(bioStore)
 	adminHandler.SetBiographyCoordinator(bioCoordinator)
 	adminHandler.SetMetadataControlServices(admin.MetadataControlServices{

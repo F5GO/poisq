@@ -12,7 +12,7 @@ import (
 // PairingCode encodes the public identity of one poisq Studio installation:
 // its ID, the Ed25519 root public key that signs working-key certificates and its public HTTPS origin.
 func PairingCode(publicOrigin string, installationID [16]byte, rootPublicKey [32]byte) (string, error) {
-	origin, err := canonicalPairingOrigin(publicOrigin)
+	origin, err := CanonicalOrigin(publicOrigin)
 	if err != nil {
 		return "", err
 	}
@@ -24,7 +24,9 @@ func PairingCode(publicOrigin string, installationID [16]byte, rootPublicKey [32
 		base64.RawURLEncoding.EncodeToString([]byte(origin)), nil
 }
 
-func canonicalPairingOrigin(raw string) (string, error) {
+// CanonicalOrigin normalizes the public HTTPS origin of an installation for the QR code:
+// lowercase ASCII host, no default port, no credentials, path, query or fragment.
+func CanonicalOrigin(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.User != nil || strings.ContainsAny(raw, "?#") ||

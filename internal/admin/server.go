@@ -24,6 +24,7 @@ import (
 	"github.com/F5GO/poisq/internal/keypool"
 	"github.com/F5GO/poisq/internal/lyrics"
 	"github.com/F5GO/poisq/internal/metadata"
+	"github.com/F5GO/poisq/internal/securetransport"
 	"github.com/F5GO/poisq/internal/security"
 	"github.com/F5GO/poisq/internal/tagger"
 	"github.com/F5GO/poisq/internal/worker"
@@ -34,26 +35,27 @@ var embeddedUI embed.FS
 
 // AdminServer объединяет все сервисы и репозитории для работы веб-интерфейса на порту :4535.
 type AdminServer struct {
-	tracksRepo    *db.TrackRepository
-	stagingRepo   *db.StagingRepository
-	jobRepo       *db.JobRepository
-	cacheRepo     *db.ProviderCacheRepository
-	keyPool       *keypool.Manager
-	scanner       *metadata.LibraryScanner
-	stagingSvc    *tagger.StagingService
-	lrcWriter     *lyrics.AtomicLRCWriter
-	worker        *worker.QueueProcessor
-	guard         *security.PathGuard
-	openNavDB     func() (*sql.DB, error)
-	poisqDB       *sql.DB
-	arbiter       *ai.MetadataArbiter
-	navidromeURL  string
-	confidence    *db.ConfidenceRepository
-	alignerCli    *aligner.Client
-	cast          *cast.Service
-	publicAccess  *security.PublicAccess
-	biographies   *artistbio.Store
-	biographyJobs interface {
+	tracksRepo      *db.TrackRepository
+	stagingRepo     *db.StagingRepository
+	jobRepo         *db.JobRepository
+	cacheRepo       *db.ProviderCacheRepository
+	keyPool         *keypool.Manager
+	scanner         *metadata.LibraryScanner
+	stagingSvc      *tagger.StagingService
+	lrcWriter       *lyrics.AtomicLRCWriter
+	worker          *worker.QueueProcessor
+	guard           *security.PathGuard
+	openNavDB       func() (*sql.DB, error)
+	poisqDB         *sql.DB
+	arbiter         *ai.MetadataArbiter
+	navidromeURL    string
+	confidence      *db.ConfidenceRepository
+	alignerCli      *aligner.Client
+	cast            *cast.Service
+	publicAccess    *security.PublicAccess
+	secureTransport *securetransport.Installation
+	biographies     *artistbio.Store
+	biographyJobs   interface {
 		Request(context.Context, string, bool) (<-chan struct{}, artistbio.JobState, error)
 	}
 	metadataRepo   *db.MetadataRepository
@@ -151,6 +153,8 @@ func NewAdminServer(
 	mux.HandleFunc("/api/v1/keys", s.handleKeysAPI)
 	mux.HandleFunc("/api/v1/cast", s.handleCast)
 	mux.HandleFunc("/api/v1/public-access", s.handlePublicAccess)
+	mux.HandleFunc("/api/v1/secure-transport", s.handleSecureTransport)
+	mux.HandleFunc("/api/v1/secure-transport/qr.svg", s.handleSecureTransportQR)
 	mux.HandleFunc("/api/v1/navidrome/account", s.handleNavidromeAccount)
 	mux.HandleFunc("/api/v1/artist-biographies", s.handleArtistBiographies)
 	mux.HandleFunc("/api/v1/artist-biographies/detail", s.handleArtistBiographyDetail)

@@ -307,6 +307,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initCastForm();
   initNavidromeAccountForm();
   initPublicAccessForm();
+  initSecureTransportForm();
   initBiographyStudio();
   initMetadataStudio();
   window.addEventListener("popstate", applyRoute);
@@ -393,7 +394,7 @@ function initNavigation() {
 const ROUTE_TABS = { library: "library", metadata: "metadata", lyrics: "karaoke", biographies: "biographies", fixes: "staging", settings: "keys" };
 const TAB_PATHS = { library: "/library", metadata: "/metadata", karaoke: "/lyrics", biographies: "/biographies", staging: "/fixes", jobs: "/lyrics/queue", keys: "/settings/keys" };
 const TAB_TITLES = { library: "Медиатека", metadata: "Метаданные", karaoke: "Тексты", biographies: "Биографии", staging: "Исправления", jobs: "Очередь задач", keys: "Настройки" };
-const SETTINGS_SECTIONS = ["keys", "navidrome", "cast", "service"];
+const SETTINGS_SECTIONS = ["keys", "navidrome", "cast", "secure", "service"];
 
 function navigate(path, replace = false) {
   if (location.pathname !== path) history[replace ? "replaceState" : "pushState"](null, "", path);
@@ -471,6 +472,7 @@ function activateTab(tabName) {
     loadCastSettings();
     loadNavidromeAccount();
     loadPublicAccess();
+    loadSecureTransport();
     loadJobsData(); // состояние паузы воркера для «Обслуживания»
   }
 }
@@ -3783,6 +3785,52 @@ function initPublicAccessForm() {
     box.disabled = false;
     if (res) showToast(res.navidromeWebOpen ? "Веб-интерфейс Navidrome открыт" : "Веб-интерфейс Navidrome закрыт", res.navidromeWebOpen ? "info" : "success");
   });
+}
+
+function initSecureTransportForm() {
+  document.getElementById("form-secure")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("btn-save-secure");
+    if (btn) btn.disabled = true;
+    const res = await loadSecureTransport({
+      enabled: !!document.getElementById("secure-enabled")?.checked,
+      publicOrigin: document.getElementById("secure-origin")?.value.trim() || ""
+    });
+    if (btn) btn.disabled = false;
+    if (res) showToast(res.enabled ? "Secure Transport включён" : "Secure Transport выключен", "success");
+  });
+}
+
+async function loadSecureTransport(payload = null) {
+  const status = document.getElementById("secure-status");
+  const badge = document.getElementById("secure-status-badge");
+  const pairing = document.getElementById("secure-pairing");
+  if (!status) return null;
+  let res;
+  try {
+    res = payload ? await fetchApi("/secure-transport", "POST", payload) : await fetchApi("/secure-transport");
+  } catch (err) {
+    status.textContent = `Ошибка: ${err.message}`;
+    return null;
+  }
+  status.textContent = "";
+  document.getElementById("secure-enabled").checked = !!res.enabled;
+  document.getElementById("secure-origin").value = res.publicOrigin || "";
+  if (badge) {
+    badge.className = res.enabled ? "badge badge-success" : "badge badge-muted";
+    badge.textContent = res.enabled ? "Включён" : "Выключен";
+  }
+  const showQR = !!(res.enabled && res.pairingCode);
+  pairing?.classList.toggle("hidden", !showQR);
+  if (showQR) {
+    // Новый адрес на каждую загрузку: QR меняется вместе с адресом и ключом.
+    document.getElementById("secure-qr").src = `/api/v1/secure-transport/qr.svg?t=${Date.now()}`;
+    document.getElementById("secure-fingerprint").textContent = res.fingerprint || "";
+    document.getElementById("secure-epoch").textContent = res.certificateExpiresAt
+      ? `Рабочий ключ: эпоха ${res.currentEpoch}, обновится автоматически до ${new Date(res.certificateExpiresAt * 1000).toLocaleString("ru-RU")}`
+      : "";
+  }
+  return res;
 }
 
 async function loadPublicAccess(payload = null) {
